@@ -42,11 +42,11 @@ item=db.execute('INSERT INTO estimate_items(estimate_id,item_type,name) VALUES(?
 job=JobDialog(reference=('contracts',rid));job.source.setCurrentIndex(job.source.findData(item));job.welder.setCurrentIndex(job.welder.findData(welder.welder_id));job.work_date.set_value('2026-09-17');job.save();assert job.job_id
 schedule=ScheduleView();schedule.load_data();assert schedule.table.columnCount()==5
 assert db.fetchone('SELECT work_date FROM welding_days WHERE job_id=?',(job.job_id,))[0]=='2026-09-17'
-from smetagaz.tasks_view import CalendarTab
-calendar=CalendarTab();calendar.load_events('2026-09-17');assert any('Сварка трубопровода' in calendar.list_events.item(i).text() for i in range(calendar.list_events.count()))
+from smetagaz.today_view import TodayView
+calendar=TodayView();calendar.show_date_str('2026-09-17');assert any('Сварка трубопровода' in t for t in calendar.day.texts())
 edit=JobDialog(job.job_id);edit.work_date.set_value('2026-09-18');edit.save()
-calendar.load_events('2026-09-17');assert not any('Сварка трубопровода' in calendar.list_events.item(i).text() for i in range(calendar.list_events.count()))
-calendar.load_events('2026-09-18');assert any('Сварка трубопровода' in calendar.list_events.item(i).text() for i in range(calendar.list_events.count()))
+calendar.show_date_str('2026-09-17');assert not any('Сварка трубопровода' in t for t in calendar.day.texts())
+calendar.show_date_str('2026-09-18');assert any('Сварка трубопровода' in t for t in calendar.day.texts())
 schedule.date_to.set_value('2026-09-17');assert schedule.table.rowCount()==0
 schedule.date_to.set_value('2026-09-18');assert schedule.table.rowCount()==1
 module=WeldersView();assert [module.tabs.tabText(i) for i in range(module.tabs.count())]==['График производства работ','Сварщики','Аттестация','Договоры и акты']

@@ -1,87 +1,103 @@
 """
-Вкладка "Задачи и Календарь": Канбан-доска с интерактивными карточками,
-перетаскиванием, сортировкой, а также сквозной календарь с отображением 
-пользовательских событий, оплат, дат договоров и актов из других модулей.
+Доска задач: карточки со сроком выполнения, перетаскивание между статусами,
+сортировка, быстрые фильтры и архив. Календарь и стартовый экран — в today_view.py.
 """
-import sqlite3
 from datetime import datetime
-from html import escape
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
                               QListWidget, QListWidgetItem, QAbstractItemView, QDialog,
-                              QLineEdit, QTextEdit, QCalendarWidget, QTabWidget, QScrollArea,
+                              QLineEdit, QTextEdit, QScrollArea, QCheckBox, QDateEdit,
                               QMessageBox, QTimeEdit, QComboBox, QFrame, QMenu)
-from PyQt6.QtCore import Qt, QDate, pyqtSignal, QTime, QSize
-from PyQt6.QtGui import QFont, QColor, QTextCharFormat, QAction
+from PyQt6.QtCore import Qt, QDate, QLocale, pyqtSignal, QTime
+from PyQt6.QtGui import QColor, QAction
 
 from .database import db
+from .agenda_domain import due_state, due_label, norm_date
+from .task_catalog import status_rows, chip_html
+
+URGENCY_COLORS = {'Критическая': '#DC2626', 'Высокая': '#D97706', 'Обычная': '#2563EB', 'Низкая': '#16A34A'}
+DUE_COLORS = {'overdue': '#DC2626', 'today': '#D97706', 'soon': '#D97706', 'later': '#65758B'}
+
+
+def is_dark():
+    return db.get_setting('is_dark', '0') == '1'
+
+
+def rgba(color, alpha):
+    c = QColor(color)
+    return f'rgba({c.red()},{c.green()},{c.blue()},{alpha})'
+
 
 # --- ВИЗУАЛЬНАЯ КАРТОЧКА ЗАДАЧИ ---
 
 class TaskCardWidget(QFrame):
-    def __init__(self, title, desc, created_at, urgency, status, tags=None):
+    def __init__(self, title, desc, created_at, urgency, status, tags=None, due='', done=False):
         super().__init__()
+        self.setObjectName('taskCard')
+        dark = is_dark()
+        stripe = '#94A3B8' if done else URGENCY_COLORS.get(urgency, '#2563EB')
+        state, _ = due_state(due, done=done)
+        bg = ('#1b2638' if dark else '#FFFFFF')
+        border = '#344155' if dark else '#CBD5E1'
+        if state == 'overdue':
+            bg, border = ('#3b1d24', '#7f1d1d') if dark else ('#FEF2F2', '#FCA5A5')
+        elif done:
+            bg = '#202d40' if dark else '#F8FAFC'
+        self.setStyleSheet(f"QFrame#taskCard {{ background-color: {bg}; border: 1px solid {border}; "
+                           f"border-left: 4px solid {stripe}; border-radius: 8px; }} QLabel {{ border: none; background: transparent; }}")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(6)
-
-        bg_col = "#F8FAFC" if status == "done" else "#FFFFFF"
-        border_col = "#E2E8F0" if status == "done" else "#CBD5E1"
-        self.setStyleSheet(f"TaskCardWidget {{ background-color: {bg_col}; border: 1px solid {border_col}; border-radius: 8px; }}")
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(5)
 
         lbl_title = QLabel(title)
-        title_color = "#94A3B8" if status == "done" else "#0F172A"
-        lbl_title.setStyleSheet(f"font-weight: bold; font-size: 13px; color: {title_color}; border: none;")
+        title_color = '#94A3B8' if done else ('#E5EDF8' if dark else '#0F172A')
+        lbl_title.setStyleSheet(f"font-weight: bold; font-size: 13px; color: {title_color};" + (' text-decoration: line-through;' if done else ''))
         lbl_title.setWordWrap(True)
         layout.addWidget(lbl_title)
 
         if desc:
-            short_desc = desc.replace("\n", " ")
-            if len(short_desc) > 65:
-                short_desc = short_desc[:62] + "..."
-            lbl_desc = QLabel(short_desc)
-            lbl_desc.setStyleSheet("color: #64748B; font-size: 11px; border: none;")
+            short_desc = desc.replace('\n', ' ')
+            lbl_desc = QLabel(short_desc if len(short_desc) <= 65 else short_desc[:62] + '...')
+            lbl_desc.setStyleSheet('color: #64748B; font-size: 11px;')
             lbl_desc.setWordWrap(True)
             layout.addWidget(lbl_desc)
 
+        label = due_label(due, done=done)
+        if label:
+            badge = QLabel(('⚠ ' if state == 'overdue' else '📅 ') + label)
+            color = DUE_COLORS.get(state, '#65758B')
+            if state == 'overdue':
+                badge.setStyleSheet('color: #FFFFFF; background-color: #DC2626; border-radius: 6px; padding: 2px 8px; font-weight: bold; font-size: 11px;')
+            else:
+                badge.setStyleSheet(f'color: {color}; font-weight: 600; font-size: 11px;')
+            badge.setAlignment(Qt.AlignmentFlag.AlignLeft)
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.addWidget(badge)
+            row.addStretch()
+            layout.addLayout(row)
+
         footer = QHBoxLayout()
-        footer.setContentsMargins(0, 4, 0, 0)
+        footer.setContentsMargins(0, 2, 0, 0)
         try:
-            dt = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S")
-            date_str = dt.strftime("%d.%m.%Y")
+            date_str = datetime.strptime(created_at, '%Y-%m-%d %H:%M:%S').strftime('%d.%m.%Y')
         except (ValueError, TypeError):
-            date_str = created_at
-
-        lbl_date = QLabel(f"🕒 {date_str}")
-        lbl_date.setStyleSheet("color: #94A3B8; font-size: 10px; border: none;")
-
+            date_str = created_at or ''
+        lbl_date = QLabel(f'🕒 {date_str}')
+        lbl_date.setStyleSheet('color: #94A3B8; font-size: 10px;')
         lbl_urgency = QLabel(urgency)
-        if status == "done":
-            u_col = "#94A3B8"
-        else:
-            if urgency == "Критическая": u_col = "#EF4444"
-            elif urgency == "Высокая": u_col = "#F59E0B"
-            elif urgency == "Низкая": u_col = "#10B981"
-            else: u_col = "#3B82F6"
-
-        lbl_urgency.setStyleSheet(f"color: {u_col}; font-weight: bold; font-size: 10px; border: none;")
-
+        lbl_urgency.setStyleSheet(f"color: {'#94A3B8' if done else URGENCY_COLORS.get(urgency, '#2563EB')}; font-weight: bold; font-size: 10px;")
         footer.addWidget(lbl_date)
         footer.addStretch()
         footer.addWidget(lbl_urgency)
         layout.addLayout(footer)
 
         if tags:
-            chips = " ".join(
-                f'<span style="background-color:{color or "#64748B"};color:#fff;border-radius:6px;'
-                f'padding:1px 6px;margin-right:3px;font-size:9px;">{escape(name)}</span>'
-                for name, color in tags
-            )
-            lbl_tags = QLabel(chips)
+            lbl_tags = QLabel('&nbsp;'.join(chip_html(name, color, 10) for name, color in tags))
             lbl_tags.setTextFormat(Qt.TextFormat.RichText)
             lbl_tags.setWordWrap(True)
-            lbl_tags.setStyleSheet("border: none;")
             layout.addWidget(lbl_tags)
+
 
 # --- КАНБАН-ДОСКА ---
 
@@ -97,7 +113,9 @@ class KanbanListWidget(QListWidget):
         self.setAcceptDrops(True)
         self.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
         self.setDefaultDropAction(Qt.DropAction.MoveAction)
-        self.setStyleSheet("QListWidget { background-color: transparent; border: none; } QListWidget::item { margin-bottom: 8px; }")
+        self.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.setStyleSheet("QListWidget { background-color: transparent; border: none; } QListWidget::item { margin-bottom: 8px; } "
+                           "QListWidget::item:selected { background: transparent; }")
 
     def dropEvent(self, event):
         super().dropEvent(event)
@@ -124,12 +142,13 @@ class KanbanListWidget(QListWidget):
 
             menu.exec(event.globalPos())
 
+
 class TaskEditDialog(QDialog):
-    def __init__(self, task_id=None, parent=None):
+    def __init__(self, task_id=None, parent=None, due=None):
         super().__init__(parent)
         self.task_id = task_id
         self.setWindowTitle("Новая задача" if not task_id else "Редактирование задачи")
-        self.resize(450, 380)
+        self.resize(520, 520)
 
         layout = QVBoxLayout(self)
 
@@ -150,11 +169,31 @@ class TaskEditDialog(QDialog):
         row_top.addLayout(v_urgency, stretch=1)
         layout.addLayout(row_top)
 
+        # Срок выполнения
+        row_due = QHBoxLayout()
+        self.chk_due = QCheckBox("Срок выполнения:")
+        self.dt_due = QDateEdit(QDate.currentDate())
+        self.dt_due.setCalendarPopup(True)
+        self.dt_due.setLocale(QLocale(QLocale.Language.Russian))
+        self.dt_due.setDisplayFormat("dd.MM.yyyy")
+        self.lbl_due = QLabel()
+        row_due.addWidget(self.chk_due)
+        row_due.addWidget(self.dt_due)
+        for title, days in (("Сегодня", 0), ("Завтра", 1), ("+ неделя", 7)):
+            b = QPushButton(title)
+            b.clicked.connect(lambda _, d=days: self.set_due(QDate.currentDate().addDays(d)))
+            row_due.addWidget(b)
+        row_due.addWidget(self.lbl_due, 1)
+        layout.addLayout(row_due)
+        self.chk_due.toggled.connect(self.refresh_due)
+        self.dt_due.dateChanged.connect(self.refresh_due)
+
         layout.addWidget(QLabel("Описание:"))
         self.inp_desc = QTextEdit()
         layout.addWidget(self.inp_desc)
         from .task_catalog import TaskFields
-        self.task_fields=TaskFields(self.task_id);layout.addWidget(self.task_fields)
+        self.task_fields = TaskFields(self.task_id)
+        layout.addWidget(self.task_fields)
 
         btn_layout = QHBoxLayout()
         self.btn_save = QPushButton("Сохранить")
@@ -181,13 +220,33 @@ class TaskEditDialog(QDialog):
 
         if self.task_id:
             self.load_task()
+        elif due:
+            self.set_due(QDate.fromString(due, "yyyy-MM-dd"))
+        self.refresh_due()
+
+    def set_due(self, qdate):
+        self.dt_due.setDate(qdate)
+        self.chk_due.setChecked(True)
+
+    def due_value(self):
+        return self.dt_due.date().toString("yyyy-MM-dd") if self.chk_due.isChecked() else ''
+
+    def refresh_due(self, *_):
+        self.dt_due.setEnabled(self.chk_due.isChecked())
+        label = due_label(self.due_value())
+        state, _ = due_state(self.due_value())
+        self.lbl_due.setText(label)
+        self.lbl_due.setStyleSheet(f"color: {DUE_COLORS.get(state, '#65758B')}; font-weight: bold;")
 
     def load_task(self):
-        row = db.fetchone("SELECT title, description, is_archived, urgency FROM kanban_tasks WHERE id=?", (self.task_id,))
+        row = db.fetchone("SELECT title, description, is_archived, urgency, due_date FROM kanban_tasks WHERE id=?", (self.task_id,))
         if row:
             self.inp_title.setText(row[0] or "")
             self.inp_desc.setPlainText(row[1] or "")
             self.cmb_urgency.setCurrentText(row[3] or "Обычная")
+            due = norm_date(row[4])
+            if due:
+                self.set_due(QDate.fromString(due, "yyyy-MM-dd"))
             if row[2] == 1:
                 self.btn_archive.setText("Вернуть из архива")
                 self.btn_archive.clicked.disconnect()
@@ -198,10 +257,14 @@ class TaskEditDialog(QDialog):
         if not title: return
         desc = self.inp_desc.toPlainText().strip()
         urgency = self.cmb_urgency.currentText()
+        due = self.due_value()
 
         with db.transaction():
-            if self.task_id:db.execute("UPDATE kanban_tasks SET title=?, description=?, urgency=? WHERE id=?",(title,desc,urgency,self.task_id))
-            else:self.task_id=db.execute("INSERT INTO kanban_tasks(title,description,status,is_archived,created_at,urgency) VALUES(?,?,?,0,?,?)",(title,desc,self.task_fields.status.currentData(),datetime.now().strftime('%Y-%m-%d %H:%M:%S'),urgency)).lastrowid
+            if self.task_id:
+                db.execute("UPDATE kanban_tasks SET title=?, description=?, urgency=?, due_date=? WHERE id=?", (title, desc, urgency, due, self.task_id))
+            else:
+                self.task_id = db.execute("INSERT INTO kanban_tasks(title,description,status,is_archived,created_at,urgency,due_date) VALUES(?,?,?,0,?,?,?)",
+                                          (title, desc, self.task_fields.status.currentData(), datetime.now().strftime('%Y-%m-%d %H:%M:%S'), urgency, due)).lastrowid
             self.task_fields.save(self.task_id)
         self.accept()
 
@@ -217,6 +280,7 @@ class TaskEditDialog(QDialog):
         if QMessageBox.question(self, "Удаление", "Точно удалить задачу безвозвратно?") == QMessageBox.StandardButton.Yes:
             db.execute("DELETE FROM kanban_tasks WHERE id=?", (self.task_id,))
             self.accept()
+
 
 class ArchiveDialog(QDialog):
     def __init__(self, parent=None):
@@ -247,44 +311,51 @@ class ArchiveDialog(QDialog):
                 if self.parent() and hasattr(self.parent(), 'load_boards'):
                     self.parent().load_boards()
 
-COLUMN_PALETTE = [
-    ("#DC2626", "#FEF2F2"), ("#D97706", "#FFFBEB"), ("#16A34A", "#F0FDF4"),
-    ("#2563EB", "#EFF6FF"), ("#7C3AED", "#F5F3FF"), ("#DB2777", "#FDF2F8"),
-    ("#0891B2", "#ECFEFF"),
-]
 
 class KanbanTab(QWidget):
+    changed = pyqtSignal()
+
     def __init__(self):
         super().__init__()
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
 
         top_bar = QHBoxLayout()
         btn_add = QPushButton("➕ Добавить задачу")
         btn_add.setProperty("type", "primary")
         btn_add.clicked.connect(self.new_task)
-
         top_bar.addWidget(btn_add)
-        top_bar.addSpacing(20)
 
-        top_bar.addWidget(QLabel("Сортировка:"))
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Поиск по задачам и тегам…")
+        self.search.setClearButtonEnabled(True)
+        self.search.setMinimumWidth(180)
+        self.search.textChanged.connect(self.load_boards)
+        top_bar.addWidget(self.search, 1)
+
         self.cmb_sort = QComboBox()
-        self.cmb_sort.addItems(["Сначала новые (по дате)", "Сначала старые (по дате)", "По срочности (сначала критические)"])
+        self.cmb_sort.addItems(["Сначала новые (по дате)", "Сначала старые (по дате)", "По срочности (сначала критические)", "По сроку выполнения"])
         self.cmb_sort.currentIndexChanged.connect(self.load_boards)
         top_bar.addWidget(self.cmb_sort)
-
-        top_bar.addStretch()
-
-        btn_columns = QPushButton("⚙️ Колонки и теги")
-        btn_columns.clicked.connect(self.manage_columns)
-        top_bar.addWidget(btn_columns)
-
-        btn_archive = QPushButton("🗃️ Архив задач")
-        btn_archive.clicked.connect(self.open_archive)
-        top_bar.addWidget(btn_archive)
-
         layout.addLayout(top_bar)
+
+        second = QHBoxLayout()
+        self.chk_overdue = QCheckBox("Только просроченные")
+        self.chk_overdue.toggled.connect(self.load_boards)
+        second.addWidget(self.chk_overdue)
         from .filters import SqlFilters
-        self.filters=SqlFilters(self);self.filters.set_columns(['id','title','description','status','created_at','urgency']);self.filters.changed.connect(self.load_boards);layout.addWidget(self.filters)
+        self.filters = SqlFilters(self)
+        self.filters.set_columns(['id', 'title', 'description', 'status', 'created_at', 'urgency', 'due_date'])
+        self.filters.changed.connect(self.load_boards)
+        second.addWidget(self.filters)
+        second.addStretch()
+        btn_columns = QPushButton("⚙️ Теги и статусы")
+        btn_columns.clicked.connect(self.manage_columns)
+        second.addWidget(btn_columns)
+        btn_archive = QPushButton("🗃️ Архив")
+        btn_archive.clicked.connect(self.open_archive)
+        second.addWidget(btn_archive)
+        layout.addLayout(second)
 
         self.boards_container = QWidget()
         self.boards_layout = QHBoxLayout(self.boards_container)
@@ -295,56 +366,72 @@ class KanbanTab(QWidget):
         layout.addWidget(scroll, 1)
 
         self.columns = {}
+        self.titles = {}
         self.rebuild_columns()
 
-    def make_col(self, title, widget, color, bg_color):
+    def make_col(self, title, widget, color):
         w = QFrame()
-        w.setMinimumWidth(260)
-        w.setStyleSheet(f"QFrame {{ background-color: {bg_color}; border-radius: 8px; }}")
+        w.setObjectName('kanbanColumn')
+        w.setMinimumWidth(235)
+        w.setStyleSheet(f"QFrame#kanbanColumn {{ background-color: {rgba(color, 0.12)}; border-radius: 10px; }}")
         l = QVBoxLayout(w)
         l.setContentsMargins(8, 8, 8, 8)
-        lbl = QLabel(title.upper())
-        lbl.setStyleSheet(f"font-weight: bold; color: {color}; padding: 5px; font-size: 13px;")
+        lbl = QLabel()
+        lbl.setStyleSheet(f"font-weight: bold; color: {color}; padding: 5px; font-size: 13px; background: transparent;")
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         l.addWidget(lbl)
         l.addWidget(widget)
-        return w
+        return w, lbl
 
     def rebuild_columns(self):
         while self.boards_layout.count():
             item = self.boards_layout.takeAt(0)
             if item.widget(): item.widget().deleteLater()
         self.columns = {}
+        self.titles = {}
+        self.status_info = {}
 
-        for i, (code, name) in enumerate(db.fetchall("SELECT code, name FROM task_statuses ORDER BY id")):
-            accent, bg = COLUMN_PALETTE[i % len(COLUMN_PALETTE)]
+        for code, name, color, done in status_rows():
             col = KanbanListWidget(code)
-            col.status_changed.connect(self.load_boards)
+            col.status_changed.connect(self.on_moved)
             col.doubleClicked.connect(self.edit_task)
             col.delete_requested.connect(self.delete_task_from_menu)
             self.columns[code] = col
-            self.boards_layout.addWidget(self.make_col(name, col, accent, bg))
+            self.status_info[code] = (name, color, bool(done))
+            frame, lbl = self.make_col(name, col, color)
+            self.titles[code] = lbl
+            self.boards_layout.addWidget(frame)
+
+    def on_moved(self):
+        self.load_boards()
+        self.changed.emit()
 
     def manage_columns(self):
         from .task_catalog import CatalogDialog
         CatalogDialog(self).exec()
         self.rebuild_columns()
         self.load_boards()
+        self.changed.emit()
 
-    def load_boards(self):
+    def load_boards(self, *_):
         for col in self.columns.values():
             col.clear()
 
-        sort_idx = self.cmb_sort.currentIndex()
-        if sort_idx == 0:
-            order_by = "ORDER BY id DESC"
-        elif sort_idx == 1:
-            order_by = "ORDER BY id ASC"
-        else:
-            order_by = "ORDER BY CASE urgency WHEN 'Критическая' THEN 1 WHEN 'Высокая' THEN 2 WHEN 'Обычная' THEN 3 WHEN 'Низкая' THEN 4 ELSE 5 END, id DESC"
+        order_by = {
+            0: "ORDER BY id DESC",
+            1: "ORDER BY id ASC",
+            2: "ORDER BY CASE urgency WHEN 'Критическая' THEN 1 WHEN 'Высокая' THEN 2 WHEN 'Обычная' THEN 3 WHEN 'Низкая' THEN 4 ELSE 5 END, id DESC",
+            3: "ORDER BY CASE WHEN coalesce(due_date,'')='' THEN 1 ELSE 0 END, due_date, id DESC",
+        }[self.cmb_sort.currentIndex()]
 
-        query,params=self.filters.apply(f'SELECT id, title, description, status, created_at, urgency FROM kanban_tasks WHERE is_archived=0 {order_by}',())
-        rows=db.fetchall(query,params)
+        base = ("SELECT id, title, description, status, created_at, urgency, coalesce(due_date,'') AS due_date FROM kanban_tasks WHERE is_archived=0")
+        params = []
+        needle = self.search.text().strip().casefold()
+        if needle:
+            base += (" AND LOWER(title||' '||coalesce(description,'')||' '||coalesce(tags,'')) LIKE ?")
+            params.append('%' + needle + '%')
+        query, params = self.filters.apply(base, params)
+        rows = db.fetchall(f"{query} {order_by}", params)
 
         tags_by_task = {}
         if rows:
@@ -358,22 +445,35 @@ class KanbanTab(QWidget):
 
         # Tasks whose status has no matching column (e.g. a status deleted from the catalog)
         # fall back to the first column instead of silently disappearing from the board.
-        fallback = next(iter(self.columns.values()), None)
-        for t_id, title, desc, status, created, urgency in rows:
+        fallback_code = next(iter(self.columns), None)
+        counts = {code: 0 for code in self.columns}
+        only_overdue = self.chk_overdue.isChecked()
+        for t_id, title, desc, status, created, urgency, due in rows:
+            col_code = status if status in self.columns else fallback_code
+            done = self.status_info.get(col_code, ('', '', False))[2]
+            if only_overdue and due_state(due, done=done)[0] != 'overdue':
+                continue
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, t_id)
 
-            card = TaskCardWidget(title, desc, created, urgency or "Обычная", status, tags_by_task.get(t_id))
+            card = TaskCardWidget(title, desc, created, urgency or "Обычная", status, tags_by_task.get(t_id), due, done)
             item.setSizeHint(card.sizeHint())
 
-            col = self.columns.get(status, fallback)
-            if col is not None:
+            if col_code is not None:
+                col = self.columns[col_code]
                 col.addItem(item)
                 col.setItemWidget(item, card)
+                counts[col_code] += 1
+        for code, lbl in self.titles.items():
+            lbl.setText(f"{self.status_info[code][0].upper()}  ·  {counts[code]}")
+
+    def refresh_ui(self):
+        self.load_boards()
 
     def new_task(self):
         if TaskEditDialog(parent=self).exec():
             self.load_boards()
+            self.changed.emit()
 
     def edit_task(self, index):
         widget = self.sender()
@@ -381,14 +481,18 @@ class KanbanTab(QWidget):
             t_id = widget.itemFromIndex(index).data(Qt.ItemDataRole.UserRole)
             if TaskEditDialog(t_id, self).exec():
                 self.load_boards()
+                self.changed.emit()
 
     def delete_task_from_menu(self, task_id):
         if QMessageBox.question(self, "Удаление", "Точно удалить задачу безвозвратно?") == QMessageBox.StandardButton.Yes:
             db.execute("DELETE FROM kanban_tasks WHERE id=?", (task_id,))
             self.load_boards()
+            self.changed.emit()
 
     def open_archive(self):
         ArchiveDialog(self).exec()
+        self.changed.emit()
+
 
 # --- КАЛЕНДАРЬ СОБЫТИЙ ---
 
@@ -462,203 +566,3 @@ class EventEditDialog(QDialog):
             db.execute("DELETE FROM calendar_events WHERE id=?", (self.event_id,))
             self.accept()
 
-class CalendarTab(QWidget):
-    def __init__(self):
-        super().__init__()
-        layout = QHBoxLayout(self)
-
-        left_panel = QVBoxLayout()
-        self.calendar = QCalendarWidget()
-        self.calendar.setGridVisible(True)
-        self.calendar.clicked.connect(self.on_date_clicked)
-        left_panel.addWidget(self.calendar)
-        left_panel.addStretch()
-
-        right_panel = QVBoxLayout()
-        self.lbl_date = QLabel("События")
-        self.lbl_date.setStyleSheet("font-size: 14pt; font-weight: bold; color: #0284C7;")
-        right_panel.addWidget(self.lbl_date)
-
-        filterbar=QHBoxLayout();self.event_search=QLineEdit();self.event_search.setPlaceholderText('Поиск событий выбранного дня…');filterbar.addWidget(self.event_search);self.event_kind=QComboBox();self.event_kind.addItem('Все события','');self.event_kind.addItem('Сварочные работы','welding');self.event_kind.addItem('События вручную','event');self.event_kind.addItem('Договоры / оплаты / акты','readonly');filterbar.addWidget(self.event_kind);right_panel.addLayout(filterbar)
-        self.event_search.textChanged.connect(self.filter_events);self.event_kind.currentIndexChanged.connect(self.filter_events)
-        self.list_events = QListWidget()
-        self.list_events.doubleClicked.connect(self.edit_event)
-        self.list_events.setStyleSheet("QListWidget::item { padding: 8px; border-bottom: 1px solid #E2E8F0; }")
-        right_panel.addWidget(self.list_events)
-
-        self.btn_add = QPushButton("➕ Добавить событие")
-        self.btn_add.setProperty("type", "primary")
-        self.btn_add.clicked.connect(self.add_event)
-        right_panel.addWidget(self.btn_add)
-
-        layout.addLayout(left_panel, stretch=1)
-        layout.addLayout(right_panel, stretch=1)
-
-        self.refresh_highlights()
-        self.on_date_clicked(self.calendar.selectedDate())
-
-    def refresh_highlights(self):
-        """Подсвечивает все даты, где есть хотя бы одно событие (пользовательское или системное)"""
-        self.calendar.setDateTextFormat(QDate(), QTextCharFormat())
-
-        dates = set()
-
-        for row in db.fetchall("SELECT DISTINCT work_date FROM welding_days"):
-            dates.add(row[0])
-
-        # Пользовательские события
-        for row in db.fetchall("SELECT DISTINCT event_date FROM calendar_events WHERE event_date IS NOT NULL AND event_date != ''"):
-            dates.add(row[0])
-
-        # Оплаты из смет
-        for row in db.fetchall("SELECT DISTINCT date FROM payments WHERE date IS NOT NULL AND date != ''"):
-            dates.add(row[0])
-
-        # Даты договоров (модуль смет и модуль ГСВ)
-        for row in db.fetchall("SELECT DISTINCT contract_date FROM contracts WHERE contract_date IS NOT NULL AND contract_date != ''"):
-            dates.add(row[0])
-        for row in db.fetchall("SELECT DISTINCT contract_date FROM gsv_projects WHERE contract_date IS NOT NULL AND contract_date != ''"):
-            dates.add(row[0])
-
-        # Даты актов (модуль смет и модуль ГСВ)
-        for row in db.fetchall("SELECT DISTINCT acceptance_act_date FROM contracts WHERE acceptance_act_date IS NOT NULL AND acceptance_act_date != ''"):
-            dates.add(row[0])
-        for row in db.fetchall("SELECT DISTINCT act_date FROM gsv_projects WHERE act_date IS NOT NULL AND act_date != ''"):
-            dates.add(row[0])
-
-        fmt = QTextCharFormat()
-        fmt.setBackground(QColor("#BAE6FD"))
-        fmt.setForeground(QColor("#0369A1"))
-        fmt.setFontWeight(QFont.Weight.Bold)
-
-        for d_str in dates:
-            qdate = QDate.fromString(d_str, "yyyy-MM-dd")
-            if qdate.isValid():
-                self.calendar.setDateTextFormat(qdate, fmt)
-
-    def on_date_clicked(self, date):
-        date_str = date.toString("yyyy-MM-dd")
-        self.lbl_date.setText(f"События на {date.toString('dd.MM.yyyy')}")
-        self.load_events(date_str)
-
-    def load_events(self, date_str):
-        self.list_events.clear()
-
-        # 1. Сквозная логика: Загружаем оплаты
-        from .payments_domain import report
-        pays=[(r['amount'],r['section']+' · '+r['object_name']) for r in report(db,date_str,date_str)]
-        for amt, title in pays:
-            val = float(amt) if amt else 0.0
-            item = QListWidgetItem(f"💰 Оплата: {val:,.2f} руб. (Объект: {title})")
-            item.setForeground(QColor("#16A34A"))
-            item.setData(Qt.ItemDataRole.UserRole + 1, "readonly")
-            item.setSizeHint(item.sizeHint() + QSize(0, 5))
-            self.list_events.addItem(item)
-
-        # 2. Сквозная логика: Заключенные договора
-        conts = db.fetchall("SELECT contract_number, object_name FROM contracts WHERE contract_date=?", (date_str,))
-        for num, obj in conts:
-            item = QListWidgetItem(f"✍️ Заключен договор №{num} ({obj})")
-            item.setForeground(QColor("#0284C7"))
-            item.setData(Qt.ItemDataRole.UserRole + 1, "readonly")
-            item.setSizeHint(item.sizeHint() + QSize(0, 5))
-            self.list_events.addItem(item)
-
-        gsv_conts = db.fetchall("SELECT pd_number, contract_number, object_name FROM gsv_projects WHERE contract_date=?", (date_str,))
-        for pd_num, num, obj in gsv_conts:
-            item = QListWidgetItem(f"✍️ Заключен договор ГСВ №{num} ({pd_num} / {obj})")
-            item.setForeground(QColor("#0284C7"))
-            item.setData(Qt.ItemDataRole.UserRole + 1, "readonly")
-            item.setSizeHint(item.sizeHint() + QSize(0, 5))
-            self.list_events.addItem(item)
-
-        # 3. Сквозная логика: Подписанные акты
-        acts = db.fetchall("SELECT contract_number, object_name FROM contracts WHERE acceptance_act_date=?", (date_str,))
-        for num, obj in acts:
-            item = QListWidgetItem(f"✅ Подписан акт: договор №{num} ({obj})")
-            item.setForeground(QColor("#D97706"))
-            item.setData(Qt.ItemDataRole.UserRole + 1, "readonly")
-            item.setSizeHint(item.sizeHint() + QSize(0, 5))
-            self.list_events.addItem(item)
-
-        gsv_acts = db.fetchall("SELECT pd_number, contract_number, object_name FROM gsv_projects WHERE act_date=?", (date_str,))
-        for pd_num, num, obj in gsv_acts:
-            item = QListWidgetItem(f"✅ Подписан акт ГСВ: договор №{num} ({pd_num} / {obj})")
-            item.setForeground(QColor("#D97706"))
-            item.setData(Qt.ItemDataRole.UserRole + 1, "readonly")
-            item.setSizeHint(item.sizeHint() + QSize(0, 5))
-            self.list_events.addItem(item)
-
-        # Welding work marks are the single source of truth for the calendar.
-        from .gsv_domain import owner_label
-        jobs=db.fetchall("SELECT j.id,j.title,j.owner_type,j.owner_id,coalesce(nullif(j.welder_text,''),w.name),j.object_text FROM welding_days d JOIN welding_jobs j ON j.id=d.job_id LEFT JOIN welders w ON w.id=j.welder_id WHERE d.work_date=? ORDER BY j.title",(date_str,))
-        for job_id,title,owner,rid,welder,place in jobs:
-            item=QListWidgetItem(f'Работы: {title} · {welder or "Сварщик не назначен"} · {place or owner_label(db,owner,rid)}')
-            item.setData(Qt.ItemDataRole.UserRole,job_id);item.setData(Qt.ItemDataRole.UserRole+1,'welding');self.list_events.addItem(item)
-
-        # 4. События, добавленные пользователем вручную в этот день
-        rows = db.fetchall("SELECT id, event_time, title FROM calendar_events WHERE event_date=? ORDER BY event_time ASC", (date_str,))
-        for e_id, e_time, title in rows:
-            item = QListWidgetItem(f"🕒 {e_time} — {title}")
-            font = item.font()
-            font.setBold(True)
-            item.setFont(font)
-            item.setData(Qt.ItemDataRole.UserRole, e_id)
-            item.setData(Qt.ItemDataRole.UserRole + 1, "event") # Указываем, что это редактируемое событие
-            item.setSizeHint(item.sizeHint() + QSize(0, 5))
-            self.list_events.addItem(item)
-
-        self.filter_events()
-
-    def filter_events(self,*_):
-        if not hasattr(self,'list_events'):return
-        for i in range(self.list_events.count()):
-            item=self.list_events.item(i);kind=self.event_kind.currentData();item.setHidden(self.event_search.text().casefold() not in item.text().casefold() or bool(kind and item.data(Qt.ItemDataRole.UserRole+1)!=kind))
-
-    def add_event(self):
-        date_str = self.calendar.selectedDate().toString("yyyy-MM-dd")
-        if EventEditDialog(date_str, parent=self).exec():
-            self.refresh_highlights()
-            self.load_events(date_str)
-
-    def edit_event(self):
-        curr = self.list_events.currentRow()
-        if curr >= 0:
-            item = self.list_events.item(curr)
-            if item.data(Qt.ItemDataRole.UserRole+1)=='welding':
-                from .welding_view import JobDialog
-                JobDialog(item.data(Qt.ItemDataRole.UserRole),parent=self).exec()
-                self.refresh_highlights();self.load_events(self.calendar.selectedDate().toString('yyyy-MM-dd'));return
-            # Системные события (оплаты, акты) изменять из календаря нельзя
-            if item.data(Qt.ItemDataRole.UserRole + 1) == "readonly":
-                return
-
-            e_id = item.data(Qt.ItemDataRole.UserRole)
-            date_str = self.calendar.selectedDate().toString("yyyy-MM-dd")
-            if EventEditDialog(date_str, e_id, self).exec():
-                self.refresh_highlights()
-                self.load_events(date_str)
-
-# --- ГЛАВНЫЙ ВИДЖЕТ ВЛАДКИ ---
-
-class TasksView(QWidget):
-    def __init__(self):
-        super().__init__()
-        try:
-            db.execute("ALTER TABLE kanban_tasks ADD COLUMN urgency TEXT DEFAULT 'Обычная'")
-        except sqlite3.OperationalError:
-            pass  # колонка уже добавлена при предыдущем запуске
-
-        layout = QVBoxLayout(self)
-
-        self.tabs = QTabWidget()
-        self.tabs.addTab(KanbanTab(), "📋 Задачи")
-        self.tabs.addTab(CalendarTab(), "📅 Календарь")
-        self.tabs.currentChanged.connect(lambda _:self.load_data())
-
-        layout.addWidget(self.tabs)
-
-    def load_data(self):
-        self.tabs.widget(0).load_boards()
-        self.tabs.widget(1).refresh_highlights()
-        self.tabs.widget(1).load_events(self.tabs.widget(1).calendar.selectedDate().toString('yyyy-MM-dd'))

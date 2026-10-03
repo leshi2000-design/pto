@@ -61,6 +61,8 @@ def initialize(db):
         payment_migrate(db)
         from .task_catalog import migrate as task_migrate
         task_migrate(db)
+        from .agenda_domain import migrate as agenda_migrate
+        agenda_migrate(db)
         from .dossier_domain import migrate as dossier_migrate
         dossier_migrate(db)
         from .legal_entities_domain import migrate as legal_entities_migrate

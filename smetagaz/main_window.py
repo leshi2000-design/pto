@@ -29,7 +29,7 @@ from .materials_view import MaterialsView
 from .statistics_view import StatisticsView
 from .settings_view import SettingsView
 from .gsv_view import GsvProjectsView
-from .tasks_view import TasksView
+from .today_view import TodayView
 from .executive_view import ExecutiveDocsView
 
 from .gsv_catalog import GsvCatalogView
@@ -115,7 +115,7 @@ class MainWindow(QMainWindow):
         self.view_classes = {
             "workspace": WorkspaceView,
             "clients": lambda: WorkspaceView("crm.clients"),
-            "tasks": TasksView,
+            "tasks": TodayView,
             "estimates": EstimatesView,
             "contracts": ContractsRegistryView,
             "gsv": GsvProjectsView,
@@ -153,7 +153,7 @@ class MainWindow(QMainWindow):
         known_tabs = [
             ("workspace", "Все реестры · быстрый обзор"),
             ("clients", "Клиенты"),
-            ("tasks", "Задачи и Календарь"),
+            ("tasks", "Сегодня"),
             ("estimates", "Реестр смет"),
             ("contracts", "ГСВ"),
             ("gsv", "Проекты ГСВ"),

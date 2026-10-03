@@ -10,7 +10,7 @@ def warning(*a,**k):raise AssertionError(str(a[1:]))
 QMessageBox.warning=warning
 from smetagaz.database import db
 db.init_db()
-from smetagaz.tasks_view import TaskEditDialog,TasksView
+from smetagaz.tasks_view import TaskEditDialog
 from smetagaz.task_catalog import TasksTable
 sid=db.execute("INSERT INTO task_statuses(code,name) VALUES('review','На согласовании')").lastrowid;tag=db.execute("INSERT INTO task_tags(name) VALUES('Срочный выезд')").lastrowid
 task=TaskEditDialog();task.inp_title.setText('Проверить объект');task.task_fields.status.setCurrentIndex(task.task_fields.status.findData('review'));task.task_fields.tags.item(0).setCheckState(Qt.CheckState.Checked);task.save_task();view=TasksTable();view.search.setText('согласовании');assert view.table.rowCount()==1;view.search.setText('выезд');assert view.table.rowCount()==1;view.tag.setCurrentIndex(view.tag.findData(tag));assert view.table.rowCount()==1

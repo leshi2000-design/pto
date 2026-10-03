@@ -184,7 +184,7 @@ class DatabaseManager:
             c.execute("CREATE INDEX IF NOT EXISTS idx_gsv_statuses ON gsv_projects(work_status, client_status)")
 
             default_tabs = [
-                {"id": "tasks", "name": "Задачи и Календарь", "visible": 1},
+                {"id": "tasks", "name": "Сегодня", "visible": 1},
                 {"id": "estimates", "name": "Реестр смет", "visible": 1},
                 {"id": "contracts", "name": "ГСВ", "visible": 1},
                 {"id": "gsv", "name": "Проекты ГСВ", "visible": 1},
@@ -240,6 +240,15 @@ class DatabaseManager:
         for tab in tabs_data:
             if tab.get("id")=="contracts" and tab.get("name")=="Реестр договоров":
                 tab["name"]="ГСВ";renamed=True
+        # 2.5: «Задачи и Календарь» стали стартовым экраном «Сегодня» (один раз переносится на первое место).
+        for tab in tabs_data:
+            if tab.get("id")=="tasks" and tab.get("name")=="Задачи и Календарь":
+                tab["name"]="Сегодня";renamed=True
+        if self.get_setting("today_tab_first","0")!="1":
+            tab=next((t for t in tabs_data if t.get("id")=="tasks"),None)
+            if tab:
+                tabs_data.remove(tab);tabs_data.insert(0,tab);tab["visible"]=1;renamed=True
+            self.set_setting("today_tab_first","1")
         if renamed:self.set_setting("tabs_config",json.dumps(tabs_data))
         self.set_setting("schema_version","8")
         if self.get_setting("app_name") in ("СМЕТА-ГАЗ 2.0","СМЕТА-ГАЗ 2.1","СМЕТА-ГАЗ 2.2","СМЕТА-ГАЗ 2.3"):self.set_setting("app_name","СМЕТА-ГАЗ 2.4")
