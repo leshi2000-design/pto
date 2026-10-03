@@ -6,9 +6,6 @@ import os
 import logging
 from datetime import datetime, date
 
-import docx
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-
 import openpyxl
 
 from PyQt6.QtWidgets import (
@@ -16,13 +13,16 @@ from PyQt6.QtWidgets import (
     QTableView, QPushButton, QLabel, QLineEdit, QTextEdit, QComboBox,
     QDateEdit, QFileDialog, QDialog, QHeaderView, QMessageBox,
     QScrollArea, QFrame, QGridLayout, QGroupBox, QDoubleSpinBox, QSplitter, QCheckBox, QTableWidget, QTableWidgetItem,
-    QMenu, QApplication, QAbstractItemView
+    QMenu, QApplication, QAbstractItemView, QListWidget, QListWidgetItem, QToolButton
 )
 from PyQt6.QtCore import Qt, QDate, QAbstractTableModel, QModelIndex, pyqtSignal, QTimer
-from PyQt6.QtGui import QColor, QFont, QKeySequence, QShortcut
+from PyQt6.QtGui import QColor, QFont, QKeySequence, QShortcut, QPixmap, QIcon
 
 from .database import db
-from .domain_widgets import ClientForm
+from .domain_widgets import ClientForm, OptionalDate
+from . import gsv_project_domain as gsvdom
+from .agenda_domain import PALETTE
+from .task_catalog import chip_html
 from .gsv_domain import save_client, get_client
 from PyQt6.QtWidgets import QTabWidget
 from .pagination import RegistryPager
@@ -40,116 +40,7 @@ os.makedirs(BASE_PROJECTS_DIR, exist_ok=True)
 os.makedirs(TEMPLATES_DIR, exist_ok=True)
 os.makedirs(BACKUP_EXCEL_DIR, exist_ok=True)
 
-MONTHS_GENITIVE = [
-    "", "января", "февраля", "марта", "апреля", "мая", "июня",
-    "июля", "августа", "сентября", "октября", "ноября", "декабря"
-]
-
-def format_date_word(qdate_or_str) -> str:
-    if not qdate_or_str: return "—"
-    if isinstance(qdate_or_str, QDate):
-        if not qdate_or_str.isValid(): return "—"
-        d, m, y = qdate_or_str.day(), qdate_or_str.month(), qdate_or_str.year()
-    else:
-        try:
-            dt = datetime.strptime(str(qdate_or_str)[:10], "%Y-%m-%d")
-            d, m, y = dt.day, dt.month, dt.year
-        except Exception: return str(qdate_or_str)
-
-    if 1 <= m <= 12: return f"{d:02d} {MONTHS_GENITIVE[m]} {y} г."
-    return str(qdate_or_str)
-
-def get_initials_first(full_name: str) -> str:
-    parts = full_name.strip().split()
-    if not parts: return "—"
-    if len(parts) == 1: return parts[0]
-    if len(parts) == 2: return f"{parts[1][0].upper()}. {parts[0]}"
-    return f"{parts[1][0].upper()}.{parts[2][0].upper()}. {parts[0]}"
-
-def format_cost_rubles(amount: float) -> str:
-    int_part = int(amount)
-    cents_part = int(round((amount - int_part) * 100))
-    formatted_int = f"{int_part:,}".replace(",", " ")
-
-    last_two = int_part % 100
-    last_digit = int_part % 10
-    if 11 <= last_two <= 19: rub_word = "рублей"
-    elif last_digit == 1: rub_word = "рубль"
-    elif 2 <= last_digit <= 4: rub_word = "рубля"
-    else: rub_word = "рублей"
-
-    return f"{formatted_int},{cents_part:02d} {rub_word}"
-
-def num_to_words_byn(amount: float) -> str:
-    units_m = ["", "один", "два", "три", "четыре", "пять", "шесть", "семь", "восемь", "девять"]
-    units_f = ["", "одна", "две", "три", "четыре", "пять", "шесть", "семь", "восемь", "девять"]
-    teens = ["десять", "одиннадцать", "двенадцать", "тринадцать", "четырнадцать", "пятнадцать",
-             "шестнадцать", "семнадцать", "восемнадцать", "девятнадцать"]
-    tens = ["", "", "двадцать", "тридцать", "сорок", "пятьдесят", "шестьдесят", "семьдесят", "восемьдесят", "девяносто"]
-    hundreds = ["", "сто", "двести", "триста", "четыреста", "пятьсот", "шестьсот", "семьсот", "восемьсот", "девятьсот"]
-
-    int_part = int(amount)
-    cents_part = int(round((amount - int_part) * 100))
-
-    if int_part == 0: words = "ноль"
-    else:
-        words_list = []
-        millions = (int_part // 1_000_000) % 1_000
-        if millions > 0:
-            h, t = hundreds[millions // 100], millions % 100
-            if h: words_list.append(h)
-            if 10 <= t <= 19:
-                words_list.append(teens[t - 10])
-                m_word = "миллионов"
-            else:
-                if t // 10 > 1: words_list.append(tens[t // 10])
-                u = t % 10
-                if u > 0: words_list.append(units_m[u])
-                if u == 1: m_word = "миллион"
-                elif 2 <= u <= 4: m_word = "миллиона"
-                else: m_word = "миллионов"
-            words_list.append(m_word)
-
-        thousands = (int_part // 1_000) % 1_000
-        if thousands > 0:
-            h, t = hundreds[thousands // 100], thousands % 100
-            if h: words_list.append(h)
-            if 10 <= t <= 19:
-                words_list.append(teens[t - 10])
-                th_word = "тысяч"
-            else:
-                if t // 10 > 1: words_list.append(tens[t // 10])
-                u = t % 10
-                if u > 0: words_list.append(units_f[u])
-                if u == 1: th_word = "тысяча"
-                elif 2 <= u <= 4: th_word = "тысячи"
-                else: th_word = "тысяч"
-            words_list.append(th_word)
-
-        rem = int_part % 1_000
-        if rem > 0:
-            h, t = hundreds[rem // 100], rem % 100
-            if h: words_list.append(h)
-            if 10 <= t <= 19: words_list.append(teens[t - 10])
-            else:
-                if t // 10 > 1: words_list.append(tens[t // 10])
-                u = t % 10
-                if u > 0: words_list.append(units_m[u])
-        words = " ".join(words_list).capitalize()
-
-    last_two_int, last_digit = int_part % 100, int_part % 10
-    if 11 <= last_two_int <= 19: rub_word = "белорусских рублей"
-    elif last_digit == 1: rub_word = "белорусский рубль"
-    elif 2 <= last_digit <= 4: rub_word = "белорусских рубля"
-    else: rub_word = "белорусских рублей"
-
-    last_two_cents, last_cent_digit = cents_part % 100, cents_part % 10
-    if 11 <= last_two_cents <= 19: cent_word = "копеек"
-    elif last_cent_digit == 1: cent_word = "копейка"
-    elif 2 <= last_cent_digit <= 4: cent_word = "копейки"
-    else: cent_word = "копеек"
-
-    return f"{words} {rub_word} {cents_part:02d} {cent_word}"
+from .gsv_project_domain import MONTHS_GENITIVE, format_date_word, get_initials_first, format_cost_rubles, num_to_words_byn
 
 def open_file_or_dir(path):
     if path and os.path.exists(path): open_local(os.path.abspath(path))
@@ -161,167 +52,88 @@ def print_document_file(path):
         except Exception as e: QMessageBox.critical(None, "Ошибка печати", f"Не удалось отправить файл на печать:\n{e}")
     else: QMessageBox.warning(None, "Файл не найден", f"Файл для печати не существует:\n{path}")
 
-def ensure_default_contract_template():
-    if not os.path.exists(DEFAULT_TEMPLATE_PATH):
-        doc = docx.Document()
-        title = doc.add_heading("ДОГОВОР № {НОМЕР_ДОГОВОРА}", 0)
-        title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        doc.add_paragraph("на разработку проектной документации: {НОМЕР_ПД}")
-        doc.add_paragraph("Дата заключения: {ДАТА_ЗАКЛЮЧЕНИЯ}")
-        doc.add_paragraph("Срок исполнения: {СРОК_ИСПОЛНЕНИЯ}")
-        doc.add_paragraph("Стоимость работ: {СТОИМОСТЬ} ({СУММА_ПРОПИСЬЮ})")
-        doc.add_heading("1. Сведения о сторонах и объекте", level=1)
-        doc.add_paragraph("Заказчик: {ЗАКАЗЧИК} ({ЗАКАЗЧИК_СОКР})")
-        doc.add_paragraph("Телефон: {ТЕЛЕФОН}")
-        doc.add_paragraph("Паспортные данные: {ПАСПОРТ}")
-        doc.add_paragraph("Объект строительства: {ОБЪЕКТ}")
-        doc.add_paragraph("Адрес объекта: {АДРЕС}")
-        doc.save(DEFAULT_TEMPLATE_PATH)
-
-def replace_text_preserve_formatting(paragraph, replacements):
-    p_text = "".join(run.text for run in paragraph.runs)
-    if not any(key in p_text for key in replacements): return
-
-    if paragraph.runs:
-        first_run = paragraph.runs[0]
-        font_name, font_size = first_run.font.name, first_run.font.size
-        bold, italic, underline = first_run.bold, first_run.italic, first_run.underline
-        color = first_run.font.color.rgb if first_run.font.color else None
-
-        new_text = p_text
-        for key, val in replacements.items(): new_text = new_text.replace(key, str(val))
-        for run in paragraph.runs: run.text = ""
-
-        first_run.text = new_text
-        first_run.font.name, first_run.font.size = font_name, font_size
-        first_run.bold, first_run.italic, first_run.underline = bold, italic, underline
-        if color: first_run.font.color.rgb = color
-
-def generate_contract_from_template(project_dir, pd_num, contract_num, c_date_str, d_date_str, act_date_str, cost_val, client, phone, passport, obj, address, notes_val=""):
-    os.makedirs(project_dir, exist_ok=True)
-    custom_template = db.get_setting("custom_template_path", "")
-    template_to_use = custom_template if (custom_template and os.path.exists(custom_template)) else DEFAULT_TEMPLATE_PATH
-    ensure_default_contract_template()
-    doc = docx.Document(template_to_use)
-
-    amount_in_words = num_to_words_byn(cost_val)
-    client_short = get_initials_first(client or "")
-    cost_in_rubles = format_cost_rubles(cost_val)
-
-    replacements = {
-        "{НОМЕР_ДОГОВОРА}": contract_num, "{НОМЕР_ПД}": pd_num, "{ДАТА_ЗАКЛЮЧЕНИЯ}": c_date_str,
-        "{СРОК_ИСПОЛНЕНИЯ}": d_date_str, "{ДАТА_АКТА}": act_date_str, "{СТОИМОСТЬ}": cost_in_rubles,
-        "{СУММА_ПРОПИСЬЮ}": amount_in_words, "{СТОИМОСТЬ_ПРОПИСЬЮ}": amount_in_words,
-        "{ЗАКАЗЧИК}": client or "—", "{ЗАКАЗЧИК_СОКР}": client_short, "{ЗАКАЗЧИК_ИНИЦИАЛЫ}": client_short,
-        "{ТЕЛЕФОН}": phone or "—", "{ПАСПОРТ}": passport or "—", "{ОБЪЕКТ}": obj or "—",
-        "{АДРЕС}": address or "—", "{ПРИМЕЧАНИЯ}": notes_val or ""
-    }
-
-    for p in doc.paragraphs: replace_text_preserve_formatting(p, replacements)
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                for p in cell.paragraphs: replace_text_preserve_formatting(p, replacements)
-    for section in doc.sections:
-        for p in section.header.paragraphs: replace_text_preserve_formatting(p, replacements)
-        for p in section.footer.paragraphs: replace_text_preserve_formatting(p, replacements)
-
-    file_path = os.path.join(project_dir, f"Договор_{contract_num.replace('/', '_')}.docx")
-    doc.save(file_path)
-    return file_path
-
 class TemplateSettingsPanel(QWidget):
-    """Global contract-template (.docx) settings; usable standalone or embedded as a tab."""
-    TAGS = [
-        ("{НОМЕР_ДОГОВОРА}", "Номер договора"), ("{НОМЕР_ПД}", "Номер ПД"),
-        ("{ДАТА_ЗАКЛЮЧЕНИЯ}", "Дата заключения"), ("{СРОК_ИСПОЛНЕНИЯ}", "Срок исполнения"),
-        ("{ДАТА_АКТА}", "Дата акта"), ("{СТОИМОСТЬ}", "Стоимость цифрами"),
-        ("{СУММА_ПРОПИСЬЮ}", "Сумма прописью"), ("{ЗАКАЗЧИК}", "Полное наименование заказчика"),
-        ("{ЗАКАЗЧИК_СОКР}", "Инициалы и фамилия"), ("{ТЕЛЕФОН}", "Телефон"),
-        ("{ПАСПОРТ}", "Паспортные данные"), ("{ОБЪЕКТ}", "Объект строительства"),
-        ("{АДРЕС}", "Адрес объекта"), ("{ПРИМЕЧАНИЯ}", "Примечания")
-    ]
+    """Шаблоны документов раздела «Проекты ГСВ». Настройки относятся только к этому разделу."""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setup_ui()
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Шаблон общий для всех проектов ГСВ; действует сразу после сохранения."))
-        grp_path = QGroupBox("Файл шаблона Word (.docx)")
-        l_path = QGridLayout(grp_path)
-        self.txt_path = QLineEdit()
-        self.txt_path.setText(db.get_setting("custom_template_path", DEFAULT_TEMPLATE_PATH))
-        self.txt_path.setReadOnly(True)
-        self.btn_browse = QPushButton("Выбрать свой шаблон...")
-        self.btn_browse.clicked.connect(self.browse_template)
-        self.btn_open_tpl = QPushButton("Открыть в Word")
-        self.btn_open_tpl.clicked.connect(self.open_current_template)
-        self.btn_reset = QPushButton("Сброс (По умолчанию)")
-        self.btn_reset.clicked.connect(self.reset_to_default)
+        note = QLabel("Шаблоны и теги этого раздела не смешиваются с монтажом ГСВ, монтажом ГСН и другими модулями. "
+                      "Если шаблон не выбран, используется стандартный. Теги пишутся в фигурных скобках, например {НОМЕР_ДОГОВОРА}.")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        self.edits = {}
+        grp = QGroupBox("Файлы шаблонов")
+        grid = QGridLayout(grp)
+        for r, (kind, (title, key, _default, _prefix)) in enumerate(gsvdom.DOC_KINDS.items()):
+            grid.addWidget(QLabel(title + ":"), r, 0)
+            edit = QLineEdit(db.get_setting(key, ""))
+            edit.setReadOnly(True)
+            edit.setPlaceholderText("Стандартный шаблон")
+            self.edits[kind] = edit
+            grid.addWidget(edit, r, 1)
+            for c, (text, fn) in enumerate((("Выбрать…", lambda _=False, k=kind: self.browse(k)),
+                                             ("Открыть", lambda _=False, k=kind: self.open_template(k)),
+                                             ("Стандартный", lambda _=False, k=kind: self.reset(k))), 2):
+                b = QPushButton(text)
+                b.clicked.connect(fn)
+                grid.addWidget(b, r, c)
+        layout.addWidget(grp)
 
-        l_path.addWidget(self.txt_path, 0, 0, 1, 3)
-        l_path.addWidget(self.btn_browse, 1, 0)
-        l_path.addWidget(self.btn_open_tpl, 1, 1)
-        l_path.addWidget(self.btn_reset, 1, 2)
-        layout.addWidget(grp_path)
-
-        grp_tags = QGroupBox("Доступные метки")
+        grp_tags = QGroupBox("Теги раздела «Проекты ГСВ»")
         l_tags = QVBoxLayout(grp_tags)
-        self.table_tags = QTableWidget(len(self.TAGS), 3)
-        self.table_tags.setHorizontalHeaderLabels(["Метка", "Описание", "Действие"])
+        self.table_tags = QTableWidget(len(gsvdom.TAGS), 3)
+        self.table_tags.setHorizontalHeaderLabels(["Тег", "Что подставится", "Действие"])
         self.table_tags.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.table_tags.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.table_tags.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.table_tags.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table_tags.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-
-        for r, (tag, desc) in enumerate(self.TAGS):
-            item_tag = QTableWidgetItem(tag)
+        for r, (tag, desc) in enumerate(gsvdom.TAGS):
+            item_tag = QTableWidgetItem("{" + tag + "}")
             item_tag.setFont(QFont("Consolas", 10, QFont.Weight.Bold))
             self.table_tags.setItem(r, 0, item_tag)
             self.table_tags.setItem(r, 1, QTableWidgetItem(desc))
             btn_copy = QPushButton("Копировать")
-            btn_copy.clicked.connect(lambda ch=False, t=tag, b=btn_copy: self.copy_tag(t, b))
+            btn_copy.clicked.connect(lambda ch=False, t="{" + tag + "}", b=btn_copy: self.copy_tag(t, b))
             self.table_tags.setCellWidget(r, 2, btn_copy)
         l_tags.addWidget(self.table_tags)
-        layout.addWidget(grp_tags)
-
-        btn_box = QHBoxLayout()
+        layout.addWidget(grp_tags, 1)
         self.lbl_status = QLabel("")
-        btn_box.addWidget(self.lbl_status, 1)
-        btn_save = QPushButton("Сохранить настройки")
-        btn_save.setProperty("type", "primary")
-        btn_save.clicked.connect(self.save_settings)
-        btn_box.addWidget(btn_save)
-        layout.addLayout(btn_box)
+        layout.addWidget(self.lbl_status)
 
     def copy_tag(self, tag_text, btn):
         QApplication.clipboard().setText(tag_text)
         btn.setText("Скопировано!")
         QTimer.singleShot(1500, lambda: btn.setText("Копировать"))
 
-    def browse_template(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Выберите шаблон Word", "", "Word (*.docx)")
-        if path: self.txt_path.setText(path)
+    def browse(self, kind):
+        flt = "Excel (*.xlsx)" if kind == "card" else "Word (*.docx)"
+        path, _ = QFileDialog.getOpenFileName(self, "Выберите шаблон", "", flt)
+        if path:
+            self.set_template(kind, path)
 
-    def open_current_template(self):
-        path = self.txt_path.text().strip()
-        open_file_or_dir(path if os.path.exists(path) else DEFAULT_TEMPLATE_PATH)
+    def set_template(self, kind, path):
+        db.set_setting(gsvdom.DOC_KINDS[kind][1], path)
+        self.edits[kind].setText(path)
+        self.lbl_status.setText("Шаблон сохранён. Уже созданные документы пометятся для переформирования при изменении данных договора.")
 
-    def reset_to_default(self):
-        ensure_default_contract_template()
-        self.txt_path.setText(DEFAULT_TEMPLATE_PATH)
+    def open_template(self, kind):
+        open_file_or_dir(gsvdom.template_path(db, kind))
 
-    def save_settings(self):
-        db.set_setting("custom_template_path", self.txt_path.text().strip())
-        self.lbl_status.setText("Настройки сохранены.")
+    def reset(self, kind):
+        db.set_setting(gsvdom.DOC_KINDS[kind][1], "")
+        self.edits[kind].setText("")
+        self.lbl_status.setText("Используется стандартный шаблон.")
+
 
 class TemplateSettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Настройка шаблона договора (.docx)")
-        self.resize(760, 600)
+        self.setWindowTitle("Шаблоны документов · Проекты ГСВ")
+        self.resize(900, 650)
         layout = QVBoxLayout(self)
         layout.addWidget(TemplateSettingsPanel(self))
         btn_close = QPushButton("Закрыть")
@@ -331,74 +143,210 @@ class TemplateSettingsDialog(QDialog):
         bar.addWidget(btn_close)
         layout.addLayout(bar)
 
-def perform_daily_excel_backup():
-    try:
-        os.makedirs(BACKUP_EXCEL_DIR, exist_ok=True)
-        daily_file = os.path.join(BACKUP_EXCEL_DIR, "Ежедневный_бэкап_ГСВ.xlsx")
-        archive_date_file = os.path.join(BACKUP_EXCEL_DIR, f"backup_ГСВ_{datetime.now().strftime('%Y-%m-%d')}.xlsx")
 
-        rows = db.fetchall("""SELECT id, pd_number, object_name, address, client_name, phone, passport, contract_number, 
-                                     contract_date, due_date, act_date, cost, work_status, client_status, tu_path, 
-                                     project_folder, attachments, notes FROM gsv_projects ORDER BY id DESC""")
+class StatusPage(QWidget):
+    """Редактор одного справочника статусов (работы или клиента)."""
+    def __init__(self, kind):
+        super().__init__()
+        self.kind = kind
+        self.current_id = None
+        self.color = PALETTE[0]
+        root = QHBoxLayout(self)
+        left = QVBoxLayout()
+        self.list = QListWidget()
+        left.addWidget(self.list, 1)
+        bar = QHBoxLayout()
+        self.btn_new = QPushButton("＋ Новый")
+        self.btn_new.setProperty("type", "primary")
+        self.btn_up = QPushButton("▲")
+        self.btn_down = QPushButton("▼")
+        for b in (self.btn_up, self.btn_down):
+            b.setFixedWidth(36)
+        for b in (self.btn_new, self.btn_up, self.btn_down):
+            bar.addWidget(b)
+        bar.addStretch()
+        left.addLayout(bar)
+        root.addLayout(left, 5)
+        form = QFrame()
+        form.setObjectName("metricCard")
+        fl = QVBoxLayout(form)
+        self.heading = QLabel()
+        self.heading.setStyleSheet("font-weight: 700; font-size: 14px;")
+        fl.addWidget(self.heading)
+        fl.addWidget(QLabel("Название"))
+        self.name = QLineEdit()
+        fl.addWidget(self.name)
+        fl.addWidget(QLabel("Цвет"))
+        row = QHBoxLayout()
+        self.swatches = []
+        for color in PALETTE:
+            b = QToolButton()
+            b.setFixedSize(24, 24)
+            b.clicked.connect(lambda _, c=color: self.set_color(c))
+            self.swatches.append((color, b))
+            row.addWidget(b)
+        row.addStretch()
+        fl.addLayout(row)
+        self.preview = QLabel()
+        self.preview.setTextFormat(Qt.TextFormat.RichText)
+        fl.addWidget(self.preview)
+        self.usage = QLabel()
+        self.usage.setStyleSheet("color: #65758b;")
+        fl.addWidget(self.usage)
+        fl.addStretch()
+        row = QHBoxLayout()
+        self.btn_delete = QPushButton("Удалить")
+        self.btn_delete.setProperty("type", "danger")
+        self.btn_save = QPushButton("Сохранить")
+        self.btn_save.setProperty("type", "primary")
+        row.addWidget(self.btn_delete)
+        row.addStretch()
+        row.addWidget(self.btn_save)
+        fl.addLayout(row)
+        root.addWidget(form, 4)
+        self.list.currentItemChanged.connect(lambda cur, _: self.select(cur))
+        self.btn_new.clicked.connect(self.start_new)
+        self.btn_save.clicked.connect(self.save)
+        self.btn_delete.clicked.connect(self.remove)
+        self.btn_up.clicked.connect(lambda: self.move(-1))
+        self.btn_down.clicked.connect(lambda: self.move(1))
+        self.name.textChanged.connect(self.update_preview)
+        self.load()
+        if self.list.count():
+            self.list.setCurrentRow(0)
+        else:
+            self.start_new()
 
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "Резервная копия ГСВ"
-        headers = ["ID", "Номер ПД", "Объект", "Адрес", "Заказчик", "Телефон", "Паспорт", "Договор", "Дата закл.",
-                   "Срок исп.", "Дата акта", "Стоимость", "Статус работы", "Статус клиента", "ТУ", "Папка", "Вложения", "Примечания"]
-        ws.append(headers)
+    def load(self, select=None):
+        wanted = select or self.current_id
+        self.list.blockSignals(True)
+        self.list.clear()
+        for sid, name, color in gsvdom.catalog(db, self.kind):
+            pix = QPixmap(14, 14)
+            pix.fill(QColor(color))
+            item = QListWidgetItem(QIcon(pix), f"{name}   ·   {gsvdom.status_usage(db, sid)}")
+            item.setData(Qt.ItemDataRole.UserRole, sid)
+            self.list.addItem(item)
+            if sid == wanted:
+                self.list.setCurrentItem(item)
+        self.list.blockSignals(False)
 
-        for r_idx, row in enumerate(rows, start=2):
-            row_data = list(row)
-            row_data[8] = format_date_word(row_data[8])
-            row_data[9] = format_date_word(row_data[9])
-            row_data[10] = format_date_word(row_data[10]) if row_data[10] else "Не подписан"
-            row_data[11] = format_cost_rubles(row_data[11]) if row_data[11] is not None else "0,00 рублей"
-            ws.append(row_data)
+    def set_color(self, color):
+        self.color = color
+        self.update_preview()
 
-        for sheet in wb.worksheets:
+    def update_preview(self, *_):
+        for color, b in self.swatches:
+            b.setStyleSheet(f'QToolButton {{ background: {color}; border-radius: 12px; border: {"3px solid #0f172a" if color == self.color else "1px solid #94a3b8"}; }}')
+        self.preview.setText(chip_html(self.name.text().strip() or "Статус", self.color, 13))
 
-            for row_cells in sheet:
+    def start_new(self):
+        self.current_id = None
+        self.list.blockSignals(True)
+        self.list.setCurrentItem(None)
+        self.list.blockSignals(False)
+        self.heading.setText("Новый статус")
+        self.name.clear()
+        self.color = PALETTE[self.list.count() % len(PALETTE)]
+        self.usage.setText("")
+        self.btn_delete.setEnabled(False)
+        self.update_preview()
+        self.name.setFocus()
 
-                for cell in row_cells:
+    def select(self, item):
+        if not item:
+            return
+        sid = item.data(Qt.ItemDataRole.UserRole)
+        self.current_id = sid
+        name, color = db.fetchone("SELECT name,coalesce(color,'#2563EB') FROM gsv_status_catalog WHERE id=?", (sid,))
+        self.heading.setText(f"Статус «{name}»")
+        self.name.setText(name)
+        self.color = color
+        self.usage.setText(f"Используется в проектах: {gsvdom.status_usage(db, sid)}")
+        self.btn_delete.setEnabled(True)
+        self.update_preview()
 
-                    if isinstance(cell.value, str): cell.data_type = "s"
+    def save(self):
+        name = self.name.text().strip()
+        if not name:
+            QMessageBox.warning(self, "Статусы", "Введите название")
+            return
+        try:
+            with db.transaction():
+                if self.current_id:
+                    db.execute("UPDATE gsv_status_catalog SET name=?,color=? WHERE id=?", (name, self.color, self.current_id))
+                else:
+                    order = (db.fetchone("SELECT max(sort_order) FROM gsv_status_catalog WHERE kind=?", (self.kind,))[0] or 0) + 1
+                    self.current_id = db.execute("INSERT INTO gsv_status_catalog(kind,name,color,sort_order) VALUES(?,?,?,?)", (self.kind, name, self.color, order)).lastrowid
+                db.execute("UPDATE gsv_projects SET work_status=(SELECT coalesce(group_concat(name,', '),'') FROM (SELECT c.name FROM gsv_project_statuses p JOIN gsv_status_catalog c ON c.id=p.status_id WHERE p.project_id=gsv_projects.id AND c.kind='work' ORDER BY c.sort_order,c.id)),"
+                           "client_status=(SELECT coalesce(group_concat(name,', '),'') FROM (SELECT c.name FROM gsv_project_statuses p JOIN gsv_status_catalog c ON c.id=p.status_id WHERE p.project_id=gsv_projects.id AND c.kind='client' ORDER BY c.sort_order,c.id))")
+        except Exception as e:
+            QMessageBox.warning(self, "Статусы", "Такой статус уже есть" if "UNIQUE" in str(e) else str(e))
+            return
+        self.load(select=self.current_id)
+        self.select(self.list.currentItem())
 
-        wb.save(daily_file)
-        for sheet in wb.worksheets:
-            for row_cells in sheet:
-                for cell in row_cells:
-                    if isinstance(cell.value, str): cell.data_type = "s"
-        wb.save(archive_date_file)
-    except Exception as e: logging.exception(f"Ошибка бэкапа Excel: {e}")
+    def move(self, direction):
+        sid = self.current_id
+        if not sid:
+            return
+        ids = [r[0] for r in gsvdom.catalog(db, self.kind)]
+        i = ids.index(sid)
+        j = i + direction
+        if not 0 <= j < len(ids):
+            return
+        ids[i], ids[j] = ids[j], ids[i]
+        with db.transaction():
+            for order, rid in enumerate(ids, 1):
+                db.execute("UPDATE gsv_status_catalog SET sort_order=? WHERE id=?", (order, rid))
+        self.load(select=sid)
+
+    def remove(self):
+        sid = self.current_id
+        if not sid:
+            return
+        if gsvdom.status_usage(db, sid):
+            QMessageBox.warning(self, "Используется", "Сначала снимите этот статус с проектов, где он выбран.")
+            return
+        if QMessageBox.question(self, "Удаление", "Удалить статус из справочника?") == QMessageBox.StandardButton.Yes:
+            db.execute("DELETE FROM gsv_status_catalog WHERE id=?", (sid,))
+            self.current_id = None
+            self.load()
+            if self.list.count():
+                self.list.setCurrentRow(0)
+            else:
+                self.start_new()
+
+
+class StatusEditorDialog(QDialog):
+    """Редактор статусов работы и клиента для проектов ГСВ."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Статусы проектов ГСВ")
+        self.resize(780, 480)
+        layout = QVBoxLayout(self)
+        hint = QLabel("На одном проекте можно выбрать несколько статусов работы и несколько статусов клиента. Здесь они добавляются, переименовываются и перекрашиваются.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #65758b;")
+        layout.addWidget(hint)
+        self.tabs = QTabWidget()
+        self.tabs.addTab(StatusPage("work"), "Статусы работы")
+        self.tabs.addTab(StatusPage("client"), "Статусы клиента")
+        layout.addWidget(self.tabs, 1)
+        close = QPushButton("Закрыть")
+        close.clicked.connect(self.accept)
+        row = QHBoxLayout()
+        row.addStretch()
+        row.addWidget(close)
+        layout.addLayout(row)
+
 
 def export_all_to_excel(parent_window):
-    save_path, _ = QFileDialog.getSaveFileName(parent_window, "Сохранить базу в Excel", f"База_ГСВ_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", "Excel (*.xlsx)")
+    save_path, _ = QFileDialog.getSaveFileName(parent_window, "Сохранить карточки договоров в Excel", f"Проекты_ГСВ_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", "Excel (*.xlsx)")
     if not save_path: return
     try:
-        rows = db.fetchall("""SELECT id, pd_number, object_name, address, client_name, phone, passport, contract_number, 
-                                     contract_date, due_date, act_date, cost, work_status, client_status, tu_path, 
-                                     project_folder, attachments, notes FROM gsv_projects ORDER BY id DESC""")
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "Проектирование ГСВ"
-        headers = ["ID", "Номер ПД", "Объект", "Адрес", "Заказчик", "Телефон", "Паспорт", "Договор", "Дата закл.",
-                   "Срок исп.", "Дата акта", "Стоимость", "Статус работы", "Статус клиента", "ТУ", "Папка", "Вложения", "Примечания"]
-        ws.append(headers)
-
-        for r_idx, row in enumerate(rows, start=2):
-            row_data = list(row)
-            row_data[8] = format_date_word(row_data[8])
-            row_data[9] = format_date_word(row_data[9])
-            row_data[10] = format_date_word(row_data[10]) if row_data[10] else "Не подписан"
-            row_data[11] = format_cost_rubles(row_data[11]) if row_data[11] is not None else "0,00 рублей"
-            ws.append(row_data)
-        for sheet in wb.worksheets:
-            for row_cells in sheet:
-                for cell in row_cells:
-                    if isinstance(cell.value, str): cell.data_type = "s"
-        wb.save(save_path)
-        QMessageBox.information(parent_window, "Экспорт", "База выгружена успешно.")
+        count = gsvdom.export_cards(db, save_path)
+        QMessageBox.information(parent_window, "Экспорт", f"Выгружено карточек: {count}.")
         open_file_or_dir(save_path)
     except Exception as e: QMessageBox.critical(parent_window, "Ошибка", str(e))
 
@@ -417,7 +365,7 @@ class ReportsDialog(QDialog):
         f_layout = QGridLayout(filter_card)
         f_layout.addWidget(QLabel("Тип аналитики:"), 0, 0)
         self.cmb_report_type = QComboBox()
-        self.cmb_report_type.addItems(["Сделано", "Оплачено", "Подписано/Оплачено", "Сводный отчет"])
+        self.cmb_report_type.addItems(["Сдано (акт подписан)", "Оплачено", "Договор и акт подписаны", "Сводный отчет"])
         f_layout.addWidget(self.cmb_report_type, 0, 1, 1, 3)
         self.cmb_period_preset = QComboBox()
         self.cmb_period_preset.addItems(["Сегодня", "Текущая неделя", "Текущий месяц", "Текущий год"])
@@ -471,9 +419,10 @@ class ReportsDialog(QDialog):
         rep_type = self.cmb_report_type.currentIndex()
         sql = "SELECT pd_number, object_name, client_name, contract_number, contract_date, due_date, act_date, cost, work_status, client_status FROM gsv_projects WHERE 1=1"
         params = []
-        if rep_type == 0: sql += " AND work_status = 'Сделано' AND contract_date BETWEEN ? AND ?"; params.extend([d_from, d_to])
-        elif rep_type == 1: sql += " AND client_status = 'Оплачен' AND act_date IS NOT NULL AND act_date BETWEEN ? AND ?"; params.extend([d_from, d_to])
-        elif rep_type == 2: sql += " AND client_status IN ('Подписан', 'Оплачен') AND act_date IS NOT NULL AND act_date BETWEEN ? AND ?"; params.extend([d_from, d_to])
+        # «Сдано» — только с подписанным актом; «Оплачено» — выбран статус клиента «Оплачено»
+        if rep_type == 0: sql += " AND act_signed = 1 AND act_date BETWEEN ? AND ?"; params.extend([d_from, d_to])
+        elif rep_type == 1: sql += " AND EXISTS(SELECT 1 FROM gsv_project_statuses s JOIN gsv_status_catalog c ON c.id=s.status_id WHERE s.project_id=gsv_projects.id AND c.kind='client' AND c.name='Оплачено') AND act_date IS NOT NULL AND act_date BETWEEN ? AND ?"; params.extend([d_from, d_to])
+        elif rep_type == 2: sql += " AND contract_signed = 1 AND act_signed = 1 AND act_date BETWEEN ? AND ?"; params.extend([d_from, d_to])
         else: sql += " AND contract_date BETWEEN ? AND ?"; params.extend([d_from, d_to])
 
         sql += " ORDER BY contract_date DESC"
@@ -535,10 +484,13 @@ class FastCompactTableModel(QAbstractTableModel):
         if not index.isValid(): return None
         row = self._data[index.row()]
         col = index.column()
-        work_status, client_status, due_date_str = row[6], row[5], row[8] if len(row) > 8 else None
+        # столбцы: 0 id, 1 № ПД, 2 объект, 3 клиент, 4 стоимость, 5 статусы клиента, 6 статусы работы, 7 папка, 8 срок, 9 акт подписан, 10 дата акта
+        client_status, due_date_str = row[5], row[8]
+        delivered = bool(row[9])
         days_left, is_overdue, is_urgent = None, False, False
 
-        if due_date_str and work_status != "Сделано":
+        # Работа считается сданной только после подписания акта.
+        if due_date_str and not delivered:
             try:
                 due_dt = datetime.strptime(due_date_str[:10], "%Y-%m-%d").date()
                 delta_days = (due_dt - date.today()).days
@@ -552,33 +504,33 @@ class FastCompactTableModel(QAbstractTableModel):
             if col == 1: return row[2] or "—"
             if col == 2: return row[3] or "—"
             if col == 3:
-                if work_status == "Сделано": return f"✅ Сдан ({format_date_word(due_date_str)})"
+                if delivered: return f"✅ Сдан ({format_date_word(row[10] or due_date_str)})"
                 if is_overdue: return f"⚠️ Просрочен на {abs(days_left)} дн."
                 if is_urgent: return f"⏳ Осталось {days_left} дн."
                 return format_date_word(due_date_str)
             if col == 4: return format_cost_rubles(row[4] if row[4] is not None else 250.0)
-            if col == 5:
-                if client_status == "Подписан": return "✍️ Подписан"
-                if client_status == "Оплачен": return "💰 Оплачен"
-                return "❌ Не подписан"
+            if col == 5: return client_status or "—"
+
+        if role == Qt.ItemDataRole.ToolTipRole and col == 5:
+            return f"Статус работы: {row[6] or '—'}\nСтатус клиента: {client_status or '—'}"
 
         if role == Qt.ItemDataRole.BackgroundRole:
-            if work_status == "Сделано": return QColor(16, 185, 129, 35) if self.dark_mode else QColor(220, 252, 231)
+            if delivered: return QColor(16, 185, 129, 35) if self.dark_mode else QColor(220, 252, 231)
             if is_overdue: return QColor(239, 68, 68, 45) if self.dark_mode else QColor(254, 205, 205)
-            if is_urgent or work_status == "🔥 Приоритет": return QColor(245, 158, 11, 40) if self.dark_mode else QColor(254, 243, 199)
+            if is_urgent: return QColor(245, 158, 11, 40) if self.dark_mode else QColor(254, 243, 199)
             return QColor(239, 68, 68, 20) if self.dark_mode else QColor(254, 242, 242)
 
         if role == Qt.ItemDataRole.ForegroundRole:
             if col == 0: return QColor(96, 165, 250) if self.dark_mode else QColor(37, 99, 235)
             if self.dark_mode:
-                if work_status == "Сделано": return QColor(167, 243, 208)
+                if delivered: return QColor(167, 243, 208)
                 if is_overdue: return QColor(254, 202, 202)
-                if is_urgent or work_status == "🔥 Приоритет": return QColor(253, 230, 138)
+                if is_urgent: return QColor(253, 230, 138)
                 return QColor(248, 250, 252)
             else:
-                if work_status == "Сделано": return QColor(22, 101, 52)
+                if delivered: return QColor(22, 101, 52)
                 if is_overdue: return QColor(153, 27, 27)
-                if is_urgent or work_status == "🔥 Приоритет": return QColor(146, 64, 14)
+                if is_urgent: return QColor(146, 64, 14)
                 return QColor(15, 23, 42)
 
         if role == Qt.ItemDataRole.FontRole and col in (0, 3):
@@ -596,23 +548,24 @@ class FastCompactTableModel(QAbstractTableModel):
         return self._data[row_idx] if 0 <= row_idx < len(self._data) else None
 
 class ProjectEditDialog(QDialog):
+    """Договор на проект ГСВ: первичный документ раздела. После первого сохранения поля закрыты до нажатия «Изменить»."""
     def __init__(self, project_id=None, parent=None):
         super().__init__(parent)
         self.project_id = project_id
         self.is_new = project_id is None
         self.is_editing_enabled = self.is_new
-        self.attachments_list = []
         self.resize(1200, 890)
         self.setup_ui()
+        self.reload_status_lists()
         if not self.is_new:
             self.load_data()
             self.set_fields_enabled(False)
-            self.btn_contract_action.setText("Просмотр договора")
-            self.btn_regenerate_doc.setVisible(False)
         else:
-            self.setWindowTitle("Новый проект ГСВ")
+            self.setWindowTitle("Новый договор · проект ГСВ")
             self.setup_new_record()
+            self.refresh_docs()
 
+    # --- интерфейс ---
     def setup_ui(self):
         main_layout = QVBoxLayout(self)
         scroll = QScrollArea()
@@ -634,186 +587,308 @@ class ProjectEditDialog(QDialog):
         self.spn_cost = QDoubleSpinBox()
         self.spn_cost.setRange(0.0, 1000000.0)
         self.spn_cost.setDecimals(2)
+        self.spn_cost.setSuffix(" BYN")
         self.spn_cost.setValue(250.0)
         l_sys.addWidget(self.spn_cost, 1, 1)
+        l_sys.addWidget(QLabel("Номера присваиваются автоматически при первом сохранении."), 1, 2, 1, 2)
         layout.addWidget(grp_sys)
 
-        grp_info=QGroupBox('Объект проектирования');l_info=QGridLayout(grp_info)
-        self.txt_object=QLineEdit();self.txt_address=QLineEdit()
-        l_info.addWidget(QLabel('Объект:'),0,0);l_info.addWidget(self.txt_object,0,1)
-        l_info.addWidget(QLabel('Адрес объекта:'),1,0);l_info.addWidget(self.txt_address,1,1)
+        grp_info = QGroupBox("Объект проектирования")
+        l_info = QGridLayout(grp_info)
+        self.txt_object = QLineEdit()
+        self.txt_object.setPlaceholderText("Наименование объекта согласно техническим условиям")
+        self.txt_address = QLineEdit()
+        l_info.addWidget(QLabel("Объект:"), 0, 0)
+        l_info.addWidget(self.txt_object, 0, 1)
+        l_info.addWidget(QLabel("Адрес объекта:"), 1, 0)
+        l_info.addWidget(self.txt_address, 1, 1)
         layout.addWidget(grp_info)
-        self.client_form=ClientForm();layout.addWidget(self.client_form)
-        self.txt_client=self.client_form.name;self.txt_phone=self.client_form.phone;self.txt_passport=self.client_form.passport
-        self.txt_notes=QTextEdit();self.txt_notes.setMaximumHeight(65);self.txt_notes.setPlaceholderText('Примечания к объекту');layout.addWidget(self.txt_notes)
+
+        self.client_form = ClientForm()
+        layout.addWidget(self.client_form)
+        self.txt_client = self.client_form.name
+        self.txt_phone = self.client_form.phone
+        self.txt_passport = self.client_form.passport
+        self.txt_notes = QTextEdit()
+        self.txt_notes.setMaximumHeight(65)
+        self.txt_notes.setPlaceholderText("Примечания по объекту")
+        layout.addWidget(self.txt_notes)
 
         grp_dates = QGroupBox("Сроки")
         l_dates = QGridLayout(grp_dates)
         l_dates.addWidget(QLabel("Дата заключения:"), 0, 0)
         self.dt_contract = QDateEdit(calendarPopup=True)
+        self.dt_contract.setDisplayFormat("dd.MM.yyyy")
         self.dt_contract.setDate(QDate.currentDate())
-        self.dt_contract.dateChanged.connect(lambda: self.dt_due.setDate(self.dt_contract.date().addMonths(1)))
+        self.prev_contract = QDate.currentDate()
+        self.dt_contract.dateChanged.connect(self.on_contract_date)
         l_dates.addWidget(self.dt_contract, 0, 1)
-        l_dates.addWidget(QLabel("Срок исполнения:"), 0, 2)
+        self.chk_contract_signed = QCheckBox("Договор подписан")
+        l_dates.addWidget(self.chk_contract_signed, 0, 2)
+        l_dates.addWidget(QLabel("Срок исполнения:"), 1, 0)
         self.dt_due = QDateEdit(calendarPopup=True)
-        self.dt_due.setDate(QDate.currentDate().addMonths(1))
-        l_dates.addWidget(self.dt_due, 0, 3)
-        self.chk_act = QCheckBox("Акт подписан (Дата):")
-        self.chk_act.toggled.connect(lambda c: self.dt_act.setEnabled(c and self.is_editing_enabled))
-        l_dates.addWidget(self.chk_act, 1, 0)
-        self.dt_act = QDateEdit(calendarPopup=True)
-        self.dt_act.setDate(QDate.currentDate())
-        self.dt_act.setEnabled(False)
-        l_dates.addWidget(self.dt_act, 1, 1)
+        self.dt_due.setDisplayFormat("dd.MM.yyyy")
+        self.dt_due.setDate(QDate.currentDate().addDays(30))
+        l_dates.addWidget(self.dt_due, 1, 1)
+        self.lbl_due_hint = QLabel("по умолчанию 30 дней с даты заключения, можно изменить вручную")
+        self.lbl_due_hint.setStyleSheet("color: #65758b;")
+        l_dates.addWidget(self.lbl_due_hint, 1, 2)
+        l_dates.addWidget(QLabel("Дата акта:"), 2, 0)
+        self.dt_act = OptionalDate()
+        l_dates.addWidget(self.dt_act, 2, 1)
+        self.chk_act = QCheckBox("Акт подписан")
+        self.chk_act.setToolTip("Пока акт не подписан, работа считается не сданной")
+        l_dates.addWidget(self.chk_act, 2, 2)
         layout.addWidget(grp_dates)
 
-        grp_status = QGroupBox("Статусы")
+        grp_status = QGroupBox("Статусы (можно выбрать несколько)")
         l_status = QGridLayout(grp_status)
-        l_status.addWidget(QLabel("Статус работы:"), 0, 0); self.cmb_work_status = QComboBox(); self.cmb_work_status.addItems(["Не сделано", "🔥 Приоритет", "Сделано"]); l_status.addWidget(self.cmb_work_status, 0, 1)
-        l_status.addWidget(QLabel("Статус клиента:"), 0, 2); self.cmb_client_status = QComboBox(); self.cmb_client_status.addItems(["Не подписан", "Подписан", "Оплачен"]); l_status.addWidget(self.cmb_client_status, 0, 3)
+        l_status.addWidget(QLabel("Статус работы:"), 0, 0)
+        l_status.addWidget(QLabel("Статус клиента:"), 0, 1)
+        self.lst_work = QListWidget()
+        self.lst_client = QListWidget()
+        for lst in (self.lst_work, self.lst_client):
+            lst.setMaximumHeight(150)
+        l_status.addWidget(self.lst_work, 1, 0)
+        l_status.addWidget(self.lst_client, 1, 1)
+        self.btn_status_editor = QPushButton("Редактор статусов…")
+        self.btn_status_editor.clicked.connect(self.edit_statuses)
+        l_status.addWidget(self.btn_status_editor, 2, 0)
         layout.addWidget(grp_status)
 
+        grp_docs = QGroupBox("Документы по тегам")
+        l_docs = QGridLayout(grp_docs)
+        self.doc_state = {}
+        self.doc_make = {}
+        self.doc_open = {}
+        for r, (kind, (title, *_rest)) in enumerate(gsvdom.DOC_KINDS.items()):
+            l_docs.addWidget(QLabel(title), r, 0)
+            state = QLabel()
+            self.doc_state[kind] = state
+            l_docs.addWidget(state, r, 1)
+            make = QPushButton()
+            make.clicked.connect(lambda _=False, k=kind: self.make_document(k))
+            self.doc_make[kind] = make
+            l_docs.addWidget(make, r, 2)
+            opn = QPushButton("Открыть")
+            opn.clicked.connect(lambda _=False, k=kind: self.open_document(k))
+            self.doc_open[kind] = opn
+            l_docs.addWidget(opn, r, 3)
+        l_docs.setColumnStretch(1, 1)
+        layout.addWidget(grp_docs)
+        layout.addStretch()
+
         scroll.setWidget(container)
-        self.record_tabs=QTabWidget();main_layout.addWidget(self.record_tabs,1)
-        self.record_tabs.addTab(scroll,'Договор и клиенты')
-        self.record_tabs.addTab(TemplateSettingsPanel(self),'Настройка шаблона')
+        self.record_tabs = QTabWidget()
+        main_layout.addWidget(self.record_tabs, 1)
+        self.record_tabs.addTab(scroll, "Договор и клиент")
+        self.record_tabs.addTab(TemplateSettingsPanel(self), "Шаблоны и теги")
 
         btn_layout = QHBoxLayout()
-        self.save_status=QLabel('');btn_layout.addWidget(self.save_status,1)
+        self.save_status = QLabel("")
+        btn_layout.addWidget(self.save_status, 1)
+        self.btn_payments = QPushButton("Оплаты")
+        self.btn_payments.clicked.connect(self.open_payments)
+        btn_layout.addWidget(self.btn_payments)
+        self.btn_folder = QPushButton("Папка договора")
+        self.btn_folder.clicked.connect(self.open_folder)
+        btn_layout.addWidget(self.btn_folder)
         self.btn_edit_toggle = QPushButton("Изменить")
         self.btn_edit_toggle.clicked.connect(self.toggle_edit)
-        if self.is_new: self.btn_edit_toggle.setVisible(False)
-
-        self.btn_contract_action = QPushButton("Просмотр договора")
-        self.btn_contract_action.setProperty("type", "primary")
-        self.btn_contract_action.clicked.connect(self.handle_contract_action)
-
-        self.btn_regenerate_doc = QPushButton("Пересоздать договор")
-        self.btn_regenerate_doc.clicked.connect(self.force_regenerate_contract)
-
-        payments=QPushButton('Оплаты');payments.clicked.connect(self.open_payments);btn_layout.addWidget(payments)
+        if self.is_new:
+            self.btn_edit_toggle.setVisible(False)
+        btn_layout.addWidget(self.btn_edit_toggle)
         self.btn_save = QPushButton("Сохранить")
         self.btn_save.setProperty("type", "primary")
-        self.btn_save.clicked.connect(self.save_data)
-
+        self.btn_save.clicked.connect(self.save_clicked)
+        btn_layout.addWidget(self.btn_save)
         self.btn_cancel = QPushButton("Закрыть")
         self.btn_cancel.clicked.connect(self.accept)
-
-        btn_layout.addWidget(self.btn_edit_toggle)
-        template_button=QPushButton('Договор по шаблону');template_button.setProperty('type','primary');template_button.clicked.connect(self.export_template);btn_layout.addWidget(template_button)
-        btn_layout.addWidget(self.btn_contract_action)
-        btn_layout.addWidget(self.btn_regenerate_doc)
-        btn_layout.addStretch()
-        btn_layout.addWidget(self.btn_save)
         btn_layout.addWidget(self.btn_cancel)
         main_layout.addLayout(btn_layout)
 
-    def get_effective_project_folder(self):
+    # --- справочники и сроки ---
+    def reload_status_lists(self):
+        selected = self.checked_status_ids() if hasattr(self, "lst_work") else set()
         if self.project_id:
-            row=db.fetchone('SELECT project_folder FROM gsv_projects WHERE id=?',(self.project_id,))
-            if row and row[0]:return row[0]
-        import re
-        return os.path.join(BASE_PROJECTS_DIR, re.sub(r'[\\/:*?"<>|]', '_', self.txt_pd.text()))
+            selected |= gsvdom.project_status_ids(db, self.project_id)
+        for lst, kind in ((self.lst_work, "work"), (self.lst_client, "client")):
+            lst.clear()
+            for sid, name, color in gsvdom.catalog(db, kind):
+                pix = QPixmap(12, 12)
+                pix.fill(QColor(color))
+                item = QListWidgetItem(QIcon(pix), name)
+                item.setData(Qt.ItemDataRole.UserRole, sid)
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(Qt.CheckState.Checked if sid in selected else Qt.CheckState.Unchecked)
+                lst.addItem(item)
 
-    def handle_contract_action(self):
-        if self.is_new and not self.save_data():return
-        project_dir = self.get_effective_project_folder()
-        c_num = self.txt_contract_num.text().replace('/', '_')
-        c_path = os.path.join(project_dir, f"Договор_{c_num}.docx")
-        if os.path.exists(c_path): open_file_or_dir(c_path)
-        else: self.force_regenerate_contract()
+    def checked_status_ids(self):
+        ids = set()
+        for lst in (self.lst_work, self.lst_client):
+            for i in range(lst.count()):
+                if lst.item(i).checkState() == Qt.CheckState.Checked:
+                    ids.add(lst.item(i).data(Qt.ItemDataRole.UserRole))
+        return ids
 
-    def force_regenerate_contract(self):
-        if not self.save_data():return
-        c_path = generate_contract_from_template(
-            self.get_effective_project_folder(), self.txt_pd.text(), self.txt_contract_num.text(),
-            format_date_word(self.dt_contract.date()), format_date_word(self.dt_due.date()),
-            format_date_word(self.dt_act.date()) if self.chk_act.isChecked() else "Не подписан",
-            self.spn_cost.value(), self.txt_client.text(), self.txt_phone.text(),
-            self.txt_passport.toPlainText(), self.txt_object.text(), self.txt_address.text(), self.txt_notes.toPlainText()
-        )
-        db.execute("UPDATE gsv_projects SET project_folder=?, custom_contract_path=? WHERE id=?",(self.get_effective_project_folder(),c_path,self.project_id))
-        QMessageBox.information(self, "Успех", "Договор сгенерирован!")
-        open_file_or_dir(c_path)
+    def edit_statuses(self):
+        keep = self.checked_status_ids()
+        StatusEditorDialog(self).exec()
+        self.reload_status_lists()
+        for lst in (self.lst_work, self.lst_client):
+            for i in range(lst.count()):
+                if lst.item(i).data(Qt.ItemDataRole.UserRole) in keep:
+                    lst.item(i).setCheckState(Qt.CheckState.Checked)
 
+    def on_contract_date(self, qdate):
+        """Срок следует за датой заключения (+30 дней), пока его не изменили вручную."""
+        if self.dt_due.date() == self.prev_contract.addDays(30):
+            self.dt_due.setDate(qdate.addDays(30))
+        self.prev_contract = qdate
+
+    # --- блокировка карточки ---
     def setup_new_record(self):
         curr_year = datetime.now().year % 100
         self.txt_pd.setText(f"XX-{curr_year:02d} ГСВ (авто)")
         self.txt_contract_num.setText(f"XX-03/{curr_year:02d} (авто)")
 
+    def editable_widgets(self):
+        return [self.txt_object, self.txt_address, self.txt_notes, self.dt_contract, self.chk_contract_signed, self.dt_due,
+                self.dt_act, self.chk_act, self.spn_cost, self.lst_work, self.lst_client, self.client_form]
+
     def set_fields_enabled(self, enabled):
-        for w in [self.txt_object, self.txt_address, self.txt_client, self.txt_phone, self.txt_passport,
-                  self.txt_notes, self.dt_contract, self.dt_due, self.chk_act, self.cmb_work_status,
-                  self.cmb_client_status, self.spn_cost]: w.setEnabled(enabled)
-        self.client_form.setEnabled(enabled)
-        self.dt_act.setEnabled(enabled and self.chk_act.isChecked())
+        for w in self.editable_widgets():
+            w.setEnabled(enabled)
         self.btn_save.setEnabled(enabled)
-        self.btn_regenerate_doc.setVisible(enabled and not self.is_new)
 
     def toggle_edit(self):
+        if self.is_editing_enabled and not self.save_data():
+            return
         self.is_editing_enabled = not self.is_editing_enabled
         self.set_fields_enabled(self.is_editing_enabled)
         self.btn_edit_toggle.setText("Заблокировать" if self.is_editing_enabled else "Изменить")
 
+    # --- загрузка и сохранение ---
     def load_data(self):
-        row = db.fetchone("SELECT * FROM gsv_projects WHERE id = ?", (self.project_id,))
-        if not row: return
-        self.txt_pd.setText(row[1])
-        self.txt_object.setText(row[4] or "")
-        self.txt_address.setText(row[5] or "")
-        self.txt_client.setText(row[6] or "")
-        self.txt_phone.setText(row[7] or "")
-        self.txt_passport.setText(row[8] or "")
-        self.txt_contract_num.setText(row[9] or "")
-        if row[10]: self.dt_contract.setDate(QDate.fromString(row[10], "yyyy-MM-dd"))
-        if row[11]: self.dt_due.setDate(QDate.fromString(row[11], "yyyy-MM-dd"))
-        if row[12]:
-            self.chk_act.setChecked(True)
-            self.dt_act.setDate(QDate.fromString(row[12], "yyyy-MM-dd"))
-        self.cmb_work_status.setCurrentText(row[14] or "Не сделано")
-        self.cmb_client_status.setCurrentText(row[15] or "Не подписан")
-        self.spn_cost.setValue(row[17] if len(row) > 17 and row[17] is not None else 250.0)
-        self.txt_notes.setPlainText(row[20] if len(row) > 20 and row[20] else "")
-        cid=db.fetchone('SELECT client_id FROM gsv_projects WHERE id=?',(self.project_id,))[0]
-        client=get_client(db,cid) or dict(name=row[6],phone=row[7],passport=row[8])
-        self.client_form.fill(client,cid)
-        self.setWindowTitle(f"{row[4] or 'Без объекта'} | {row[6] or 'Без заказчика'}")
+        cur = db.execute("SELECT * FROM gsv_projects WHERE id = ?", (self.project_id,))
+        found = cur.fetchone()
+        if not found:
+            return
+        row = dict(zip([c[0] for c in cur.description], found))
+        self.txt_pd.setText(row["pd_number"] or "")
+        self.txt_contract_num.setText(row["contract_number"] or "")
+        self.txt_object.setText(row["object_name"] or "")
+        self.txt_address.setText(row["address"] or "")
+        self.txt_notes.setPlainText(row["notes"] or "")
+        if row["contract_date"]:
+            self.dt_contract.blockSignals(True)
+            self.dt_contract.setDate(QDate.fromString(row["contract_date"], "yyyy-MM-dd"))
+            self.prev_contract = self.dt_contract.date()
+            self.dt_contract.blockSignals(False)
+        if row["due_date"]:
+            self.dt_due.setDate(QDate.fromString(row["due_date"], "yyyy-MM-dd"))
+        self.dt_act.set_value(row["act_date"] or "")
+        self.chk_contract_signed.setChecked(bool(row["contract_signed"]))
+        self.chk_act.setChecked(bool(row["act_signed"]))
+        self.spn_cost.setValue(row["cost"] if row["cost"] is not None else 250.0)
+        cid = row["client_id"]
+        client = get_client(db, cid) or dict(name=row["client_name"], phone=row["phone"], passport=row["passport"])
+        self.client_form.fill(client, cid)
+        self.reload_status_lists()
+        self.setWindowTitle(f"{row['pd_number']} | {row['object_name'] or 'Без объекта'} | {row['client_name'] or 'Без заказчика'}")
+        self.refresh_docs()
 
-    def export_template(self):
-        if self.save_data():
-            from .report_dialog import ReportTemplateDialog
-            ReportTemplateDialog('gsv_projects',self.project_id,self).exec()
+    def save_clicked(self):
+        if self.is_new and not self.client_form.confirm_duplicate():
+            return
+        self.save_data()
 
-    def open_payments(self):
-        if self.save_data():
-            from .payments_view import PaymentsDialog
-            PaymentsDialog('gsv_projects',self.project_id,self).exec()
     def save_data(self):
         try:
-            client=self.client_form.values()
+            client = self.client_form.values()
             with db.transaction():
-                cid=save_client(db,client,self.client_form.client_id)
-                fields=['object_name','address','client_name','phone','passport','contract_date','due_date','act_date','work_status','client_status','cost','notes','client_id','client_address']
-                values=[self.txt_object.text(),self.txt_address.text(),client['name'],client['phone'],client['passport'],self.dt_contract.date().toString('yyyy-MM-dd'),self.dt_due.date().toString('yyyy-MM-dd'),self.dt_act.date().toString('yyyy-MM-dd') if self.chk_act.isChecked() else None,self.cmb_work_status.currentText(),self.cmb_client_status.currentText(),self.spn_cost.value(),self.txt_notes.toPlainText(),cid,client['address']]
-                rid=self.project_id
-                if rid:db.execute('UPDATE gsv_projects SET '+','.join(f'{f}=?' for f in fields)+' WHERE id=?',(*values,rid))
+                cid = save_client(db, client, self.client_form.client_id)
+                fields = ['object_name', 'address', 'client_name', 'phone', 'passport', 'contract_date', 'due_date', 'act_date', 'cost', 'notes',
+                          'client_id', 'client_address', 'contract_signed', 'act_signed']
+                values = [self.txt_object.text().strip(), self.txt_address.text().strip(), client['name'], client['phone'], client['passport'],
+                          self.dt_contract.date().toString('yyyy-MM-dd'), self.dt_due.date().toString('yyyy-MM-dd'), self.dt_act.value() or None,
+                          self.spn_cost.value(), self.txt_notes.toPlainText(), cid, client['address'],
+                          int(self.chk_contract_signed.isChecked()), int(self.chk_act.isChecked())]
+                rid = self.project_id
+                if rid:
+                    db.execute('UPDATE gsv_projects SET ' + ','.join(f'{f}=?' for f in fields) + ' WHERE id=?', (*values, rid))
                 else:
-                    year=datetime.now().year%100;seq=db.fetchone('SELECT coalesce(max(seq_num),0)+1 FROM gsv_projects WHERE year_num=?',(year,))[0]
-                    pd_num=f'{seq:02}-{year:02} ГСВ';number=f'{seq:02}-03/{year:02}'
-                    fields+=['pd_number','seq_num','year_num','contract_number'];values += [pd_num,seq,year,number]
-                    rid=db.execute('INSERT INTO gsv_projects('+','.join(fields)+') VALUES('+','.join('?' for _ in fields)+')',values).lastrowid
-            self.project_id=rid;self.is_new=False;self.client_form.client_id=cid;self.client_form.info.setText(f'Клиент №{cid}. Данные сохранены.')
-            row=db.fetchone('SELECT pd_number,contract_number FROM gsv_projects WHERE id=?',(rid,));self.txt_pd.setText(row[0]);self.txt_contract_num.setText(row[1])
-            self.btn_edit_toggle.setVisible(True);self.btn_regenerate_doc.setVisible(True);self.btn_contract_action.setText('Просмотр договора')
-            self.save_status.setText(f'Сохранено · клиент №{cid}')
+                    year = datetime.now().year % 100
+                    seq = db.fetchone('SELECT coalesce(max(seq_num),0)+1 FROM gsv_projects WHERE year_num=?', (year,))[0]
+                    fields += ['pd_number', 'seq_num', 'year_num', 'contract_number']
+                    values += [f'{seq:02}-{year:02} ГСВ', seq, year, f'{seq:02}-03/{year:02}']
+                    rid = db.execute('INSERT INTO gsv_projects(' + ','.join(fields) + ') VALUES(' + ','.join('?' for _ in fields) + ')', values).lastrowid
+                gsvdom.set_project_statuses(db, rid, self.checked_status_ids())
+                gsvdom.project_folder(db, rid)
+            self.project_id = rid
+            self.is_new = False
+            self.client_form.client_id = cid
+            self.client_form.info.setText(f'Клиент №{cid}. Данные сохранены.')
+            row = db.fetchone('SELECT pd_number,contract_number FROM gsv_projects WHERE id=?', (rid,))
+            self.txt_pd.setText(row[0])
+            self.txt_contract_num.setText(row[1])
+            self.btn_edit_toggle.setVisible(True)
+            self.save_status.setText(f'Сохранено · {row[0]} · клиент №{cid}')
+            self.refresh_docs()
             return True
-        except Exception as e:QMessageBox.warning(self,'Договор не сохранён',str(e));return False
+        except Exception as e:
+            QMessageBox.warning(self, 'Договор не сохранён', str(e))
+            return False
+
+    # --- документы ---
+    def refresh_docs(self):
+        labels = {'none': ('не создан', '#65758b', 'Сформировать'), 'fresh': ('актуален', '#16A34A', 'Переформировать'),
+                  'stale': ('данные изменились — переформируйте', '#D97706', '⟳ Переформировать'),
+                  'missing': ('файл не найден — сформируйте заново', '#DC2626', 'Сформировать')}
+        for kind in gsvdom.DOC_KINDS:
+            state = gsvdom.doc_state(db, self.project_id, kind) if self.project_id else 'none'
+            text, color, button = labels[state]
+            self.doc_state[kind].setText(text)
+            self.doc_state[kind].setStyleSheet(f'color: {color}; font-weight: 600;')
+            self.doc_make[kind].setText(button)
+            self.doc_make[kind].setProperty('type', 'primary' if state in ('stale', 'none', 'missing') else '')
+            self.doc_make[kind].style().unpolish(self.doc_make[kind])
+            self.doc_make[kind].style().polish(self.doc_make[kind])
+            self.doc_open[kind].setEnabled(state in ('fresh', 'stale'))
+
+    def make_document(self, kind):
+        if (self.is_new or self.is_editing_enabled) and not self.save_data():
+            return
+        try:
+            path = gsvdom.generate(db, self.project_id, kind)
+        except Exception as e:
+            QMessageBox.warning(self, 'Документ не создан', str(e))
+            return
+        self.refresh_docs()
+        self.save_status.setText(f'Создан файл: {path}')
+        open_file_or_dir(path)
+
+    def open_document(self, kind):
+        open_file_or_dir(gsvdom.doc_path(db, self.project_id, kind))
+
+    def open_folder(self):
+        if (self.is_new or self.is_editing_enabled) and not self.save_data():
+            return
+        open_file_or_dir(gsvdom.project_folder(db, self.project_id))
+
+    def open_payments(self):
+        if (self.is_new or self.is_editing_enabled) and not self.save_data():
+            return
+        from .payments_view import PaymentsDialog
+        PaymentsDialog('gsv_projects', self.project_id, self).exec()
+        self.refresh_docs()
+
 
 class SideStatusBoard(QWidget):
     project_selected = pyqtSignal(int)
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedWidth(280)
+        self.setFixedWidth(290)
         layout = QVBoxLayout(self)
         self.txt_search = QLineEdit()
         self.txt_search.setPlaceholderText("Поиск по статусам...")
@@ -835,43 +910,34 @@ class SideStatusBoard(QWidget):
         while self.box_layout.count():
             item = self.box_layout.takeAt(0)
             if item.widget(): item.widget().deleteLater()
-
-        grp_work = QGroupBox("СТАТУС ВЫПОЛНЕНИЯ")
-        l_work = QVBoxLayout(grp_work)
-        l_work.addWidget(self.build_section("В работе", "work_status", "Не сделано"))
-        l_work.addWidget(self.build_section("Приоритет", "work_status", "🔥 Приоритет"))
-        l_work.addWidget(self.build_section("Выполнено", "work_status", "Сделано"))
-        self.box_layout.addWidget(grp_work)
-
-        grp_client = QGroupBox("СТАТУС ДОГОВОРА")
-        l_client = QVBoxLayout(grp_client)
-        l_client.addWidget(self.build_section("Не подписан", "client_status", "Не подписан"))
-        l_client.addWidget(self.build_section("Подписан", "client_status", "Подписан"))
-        l_client.addWidget(self.build_section("Оплачен", "client_status", "Оплачен"))
-        self.box_layout.addWidget(grp_client)
+        for kind, title in (("work", "СТАТУС РАБОТЫ"), ("client", "СТАТУС КЛИЕНТА")):
+            grp = QGroupBox(title)
+            lay = QVBoxLayout(grp)
+            for sid, name, color in gsvdom.catalog(db, kind):
+                lay.addWidget(self.build_section(name, color, sid))
+            self.box_layout.addWidget(grp)
         self.box_layout.addStretch()
 
-    def build_section(self, title, field, value):
+    def build_section(self, title, color, status_id):
         frame = QFrame()
         l = QVBoxLayout(frame)
-        l.addWidget(QLabel(f"<b>{title}</b>"))
-
-        query = f"SELECT id, pd_number, client_name FROM gsv_projects WHERE {field} = ?"
-        params = [value]
+        l.setContentsMargins(0, 2, 0, 2)
         search = self.txt_search.text().strip().lower()
+        query = ("SELECT p.id, p.pd_number, p.client_name FROM gsv_projects p JOIN gsv_project_statuses s ON s.project_id=p.id WHERE s.status_id = ?")
+        params = [status_id]
         if search:
-            query += " AND (LOWER(pd_number) LIKE ? OR LOWER(client_name) LIKE ?)"
+            query += " AND (LOWER(p.pd_number) LIKE ? OR LOWER(p.client_name) LIKE ?)"
             params.extend([f"%{search}%", f"%{search}%"])
-        query += " ORDER BY id DESC"
-
-        rows = db.fetchall(query + " LIMIT 51", tuple(params))
-        if len(rows)>50: l.addWidget(QLabel("Первые 50 · все записи в реестре"))
-        rows=rows[:50]
-        for r in rows:
+        rows = db.fetchall(query + " ORDER BY p.id DESC LIMIT 31", tuple(params))
+        head = QLabel(f'<span style="color:{color}">●</span> <b>{title}</b> · {min(len(rows), 30)}{"+" if len(rows) > 30 else ""}')
+        head.setTextFormat(Qt.TextFormat.RichText)
+        l.addWidget(head)
+        for r in rows[:30]:
             btn = QPushButton(f"{r[1]}\n{r[2] or 'Без имени'}")
             btn.clicked.connect(lambda ch=False, pid=r[0]: self.project_selected.emit(pid))
             l.addWidget(btn)
         return frame
+
 
 class GsvProjectsView(QWidget):
     def __init__(self):
@@ -897,15 +963,18 @@ class GsvProjectsView(QWidget):
         self.txt_search.setPlaceholderText("Поиск...")
         self.txt_search.textChanged.connect(self.load_data)
 
-        btn_tpl = QPushButton("Шаблон Word")
+        btn_tpl = QPushButton("Шаблоны документов")
         btn_tpl.clicked.connect(lambda: TemplateSettingsDialog(self).exec())
         btn_excel = QPushButton("Выгрузка Excel")
         btn_excel.clicked.connect(lambda: export_all_to_excel(self))
-        btn_tags = QPushButton("Теги для шаблонов")
+        btn_tags = QPushButton("Теги")
         btn_tags.clicked.connect(self.show_tag_reference)
+        btn_statuses = QPushButton("Статусы…")
+        btn_statuses.clicked.connect(self.edit_statuses)
 
         for w in [btn_add, btn_reports, self.btn_urgent, self.txt_search]: top_bar.addWidget(w)
         top_bar.addStretch()
+        top_bar.addWidget(btn_statuses)
         top_bar.addWidget(btn_tpl)
         top_bar.addWidget(btn_tags)
         top_bar.addWidget(btn_excel)
@@ -950,8 +1019,12 @@ class GsvProjectsView(QWidget):
             from .payments_view import PaymentsDialog
             PaymentsDialog('gsv_projects',self.model.get_row_record(row)[0],self).exec();self.load_data()
     def show_tag_reference(self):
-        from .executive_workspace import TagReferenceDialog
-        TagReferenceDialog('gsv_projects',self).exec()
+        TemplateSettingsDialog(self).exec()
+
+    def edit_statuses(self):
+        StatusEditorDialog(self).exec()
+        self.side_board.reload_data()
+        self.load_data()
     def open_new_dialog(self):
         ProjectEditDialog(parent=self).exec();self.load_data()
 
@@ -971,16 +1044,19 @@ class GsvProjectsView(QWidget):
         if not sel: return
         r = self.model.get_row_record(sel[0].row())
         if QMessageBox.question(self, "Удаление", f"Удалить проект {r[1]}?") == QMessageBox.StandardButton.Yes:
-            db.execute("DELETE FROM gsv_projects WHERE id=?", (r[0],))
+            try:
+                db.execute("DELETE FROM gsv_projects WHERE id=?", (r[0],))
+            except Exception as e:
+                QMessageBox.warning(self, "Удаление невозможно", str(e))
             self.load_data()
 
     def load_data(self):
         q=self.txt_search.text().strip().casefold()
-        sql="SELECT id,pd_number,object_name,client_name,cost,client_status,work_status,project_folder,due_date FROM gsv_projects"
+        sql="SELECT id,pd_number,object_name,client_name,cost,client_status,work_status,project_folder,due_date,coalesce(act_signed,0),act_date FROM gsv_projects"
         conditions=[];params=[]
         if q:
             conditions.append('(LOWER(pd_number) LIKE ? OR LOWER(object_name) LIKE ? OR LOWER(client_name) LIKE ?)');params.extend(['%'+q+'%']*3)
-        if self.urgent_filter_active:conditions.append("work_status <> 'Сделано' AND date(due_date) <= date('now','+5 days')")
+        if self.urgent_filter_active:conditions.append("coalesce(act_signed,0)=0 AND date(due_date) <= date('now','+5 days')")
         if conditions:sql+=' WHERE '+' AND '.join(conditions)
         rows=self.pager.fetch(sql+' ORDER BY id DESC',params)
         self.model.update_data(rows);self.side_board.reload_data()

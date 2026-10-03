@@ -60,11 +60,17 @@ class ClientPicker(QDialog):
 class RecordDialog(QDialog):
     def __init__(self,table,rid=None,parent=None):
         super().__init__(parent);self.table=table;self.rid=rid;self.setWindowTitle('Карточка');self.resize(650,500)
-        layout=QVBoxLayout(self);form=QFormLayout();layout.addLayout(form);self.inputs={}
+        layout=QVBoxLayout(self);form=QFormLayout();self.inputs={}
         fields={'crm.clients':['name','phone','address','passport','passport_issuer','passport_date','notes'],'gsn_projects':['title','address','notes'],'welders':['name','certificate','notes'],'writeoffs':['title','notes']}[table]
         row=db.fetchone(f'SELECT {",".join(fields)} FROM {table} WHERE id=?',(rid,)) if rid else None
         for i,k in enumerate(fields):
-            inp=QLineEdit(str(row[i] or '') if row else '');self.inputs[k]=inp;form.addRow(LABELS.get(k,k),inp)
+            inp=QLineEdit(str(row[i] or '') if row else '');self.inputs[k]=inp;form.addRow(LABELS.get(k) or {'passport_issuer':'Кем выдан','passport_date':'Дата выдачи (ГГГГ-ММ-ДД)'}.get(k,k),inp)
+        if table=='crm.clients' and rid:
+            # карточка клиента: его данные и файлы папок всех его договоров
+            from PyQt6.QtWidgets import QTabWidget
+            from .client_files import ClientFilesWidget
+            data=QWidget();data.setLayout(form);tabs=QTabWidget();self.tabs=tabs;tabs.addTab(data,'Данные клиента');tabs.addTab(ClientFilesWidget(rid),'Файлы договоров');layout.addWidget(tabs);self.resize(780,560)
+        else:layout.addLayout(form)
         buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Save|QDialogButtonBox.StandardButton.Cancel);buttons.accepted.connect(self.save);buttons.rejected.connect(self.reject);layout.addWidget(buttons)
     def save(self):
         fields=list(self.inputs);values=[self.inputs[k].text().strip() for k in fields]

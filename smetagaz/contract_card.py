@@ -9,7 +9,7 @@ from .welding_documents import ObjectDossierWidget
 class ContractCardDialog(QDialog):
     def __init__(self,estimate_id=None,title='',parent=None,contract_id=None):
         super().__init__(parent);self.estimate_id=estimate_id;self.contract_id=contract_id;self.title=title
-        self.setWindowTitle('Договор на работы ГСВ');self.resize(1050,780)
+        self.setWindowTitle('Договор · монтаж ГСВ');self.resize(1050,780)
         layout=QVBoxLayout(self);self.tabs=QTabWidget();layout.addWidget(self.tabs,1)
         page=QWidget();body=QVBoxLayout(page);scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setWidget(page);self.tabs.addTab(scroll,'Договор и клиент')
         group=QGroupBox('Договор / объект');form=QFormLayout(group);self.inp_number=QLineEdit();self.inp_object=QLineEdit(title)
@@ -23,7 +23,7 @@ class ContractCardDialog(QDialog):
         for date_field in [self.date_start,self.date_end,self.date_act]:date_field.setCalendarPopup(True)
         self.inp_amount=QDoubleSpinBox();self.inp_amount.setRange(0,1e9);self.inp_amount.setDecimals(2)
         for r,(label,field) in enumerate([('Начало работ',self.date_start),('Окончание работ',self.date_end),('Дата акта',self.date_act),('Сумма',self.inp_amount)]):grid.addWidget(QLabel(label),r//2,(r%2)*2);grid.addWidget(field,r//2,(r%2)*2+1)
-        body.addWidget(terms)
+        body.addWidget(terms);self.lock_widgets=[group,self.client_form,terms]
         box=QGroupBox('Связанная смета');bar=QHBoxLayout(box);self.lbl_est_status=QLabel();bar.addWidget(self.lbl_est_status,1)
         self.btn_open_est=QPushButton('Открыть смету');self.btn_open_est.clicked.connect(self.open_estimate_editor);bar.addWidget(self.btn_open_est)
         self.btn_create_est=QPushButton('Создать смету');self.btn_create_est.clicked.connect(self.create_linked_estimate);bar.addWidget(self.btn_create_est)
@@ -38,9 +38,26 @@ class ContractCardDialog(QDialog):
         payments=QPushButton('Оплаты');payments.clicked.connect(self.open_payments);bottom.addWidget(payments)
         export=QPushButton('Word / Excel / PDF…');export.clicked.connect(self.export_pdf);bottom.addWidget(export)
         schedule=QPushButton('График работ…');schedule.clicked.connect(self.open_schedule);bottom.addWidget(schedule)
-        save=QPushButton('Сохранить');save.setDefault(True);save.clicked.connect(self.save_data);bottom.addWidget(save)
+        self.edit_button=QPushButton('Изменить');self.edit_button.clicked.connect(self.toggle_edit);bottom.addWidget(self.edit_button)
+        folder=QPushButton('Папка договора');folder.clicked.connect(self.open_folder);bottom.addWidget(folder)
+        self.save_button=QPushButton('Сохранить');self.save_button.setDefault(True);self.save_button.clicked.connect(self.save_clicked);bottom.addWidget(self.save_button)
         close=QPushButton('Закрыть');close.clicked.connect(self.accept);bottom.addWidget(close);layout.addLayout(bottom)
-        self.load_data()
+        self.load_data();self.set_locked(bool(self.contract_id))
+    def set_locked(self,locked):
+        """Сохранённый договор открывается только для просмотра; поля разблокирует кнопка «Изменить»."""
+        self.locked=locked
+        for w in self.lock_widgets:w.setEnabled(not locked)
+        self.edit_button.setVisible(bool(self.contract_id));self.edit_button.setText('Изменить' if locked else 'Заблокировать')
+    def toggle_edit(self):
+        if not self.locked and not self.save_data():return
+        self.set_locked(not self.locked)
+    def save_clicked(self):
+        if not self.contract_id and not self.client_form.confirm_duplicate():return
+        if self.save_data() and self.contract_id:self.set_locked(True)
+    def open_folder(self):
+        if not self.contract_id and not self.save_data():return
+        from .platform_utils import open_local
+        if self.executive.folder.text():open_local(self.executive.folder.text())
     def load_data(self):
         if not self.contract_id and self.estimate_id:
             found=db.fetchone('SELECT id FROM contracts WHERE estimate_id=?',(self.estimate_id,))
@@ -74,7 +91,11 @@ class ContractCardDialog(QDialog):
                 rid=self.contract_id
                 if rid:db.execute('UPDATE contracts SET '+','.join(f'{f}=?' for f in fields)+' WHERE id=?',(*data,rid))
                 else:rid=db.execute('INSERT INTO contracts('+','.join(fields)+') VALUES('+','.join('?' for _ in fields)+')',data).lastrowid
-                self.equipment.save(rid);self.pipelines.save(rid);self.executive.save(rid)
+                self.equipment.save(rid);self.pipelines.save(rid)
+                if not self.executive.folder.text().strip():
+                    from .gsv_project_domain import ensure_folder
+                    self.executive.folder.setText(ensure_folder('contracts',self.inp_number.text().strip() or f'договор_{rid}',values['name']))
+                self.executive.save(rid)
                 if self.estimate_id:
                     from .data_services import link_client
                     link_client(db,'estimates',self.estimate_id,cid)

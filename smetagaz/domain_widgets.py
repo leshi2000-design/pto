@@ -1,5 +1,5 @@
 """Shared editors for clients, object references and GSV specifications."""
-from PyQt6.QtWidgets import (QWidget,QDialog,QVBoxLayout,QHBoxLayout,QGridLayout,QLineEdit,QTextEdit,QDateEdit,QLabel,QPushButton,QGroupBox,QComboBox,QTableWidget,QTableWidgetItem,QAbstractItemView,QDoubleSpinBox,QFileDialog)
+from PyQt6.QtWidgets import (QWidget,QDialog,QVBoxLayout,QHBoxLayout,QGridLayout,QLineEdit,QTextEdit,QDateEdit,QLabel,QPushButton,QGroupBox,QComboBox,QTableWidget,QTableWidgetItem,QAbstractItemView,QDoubleSpinBox,QFileDialog,QMessageBox)
 from PyQt6.QtCore import QDate,Qt,pyqtSignal
 from .database import db
 from .gsv_domain import EQUIPMENT_KINDS,get_client,owner_label,save_equipment,save_pipelines
@@ -11,33 +11,75 @@ class OptionalDate(QDateEdit):
     def set_value(self,value):
         d=QDate.fromString(value or '','yyyy-MM-dd');self.setDate(d if d.isValid() else self.minimumDate())
 
+class PhonesEditor(QWidget):
+    """Несколько телефонов с пояснениями; хранится одной строкой «номер (пояснение); номер (пояснение)»."""
+    def __init__(self,parent=None):
+        super().__init__(parent);self.rows_layout=QVBoxLayout(self);self.rows_layout.setContentsMargins(0,0,0,0);self.rows_layout.setSpacing(3);self.rows=[]
+        self.add_button=QPushButton('＋ Ещё телефон');self.add_button.setFlat(True);self.add_button.clicked.connect(lambda:self.add_row());self.rows_layout.addWidget(self.add_button,0,Qt.AlignmentFlag.AlignLeft);self.add_row()
+    def add_row(self,phone='',note=''):
+        box=QWidget();bar=QHBoxLayout(box);bar.setContentsMargins(0,0,0,0)
+        number=QLineEdit(phone);number.setPlaceholderText('Телефон');note_edit=QLineEdit(note);note_edit.setPlaceholderText('Пояснение: основной, жена, прораб…')
+        remove=QPushButton('✕');remove.setFixedWidth(30);remove.setToolTip('Убрать телефон');bar.addWidget(number,2);bar.addWidget(note_edit,3);bar.addWidget(remove)
+        row=(box,number,note_edit,remove);self.rows.append(row);self.rows_layout.insertWidget(len(self.rows)-1,box);remove.clicked.connect(lambda:self.remove_row(row))
+    def remove_row(self,row):
+        if len(self.rows)<=1:row[1].clear();row[2].clear();return
+        self.rows.remove(row);row[0].deleteLater()
+    def text(self):
+        from .gsv_project_domain import join_phones
+        return join_phones([(r[1].text(),r[2].text()) for r in self.rows])
+    def setText(self,value):
+        from .gsv_project_domain import parse_phones
+        for row in list(self.rows):
+            self.rows.remove(row);row[0].deleteLater()
+        for phone,note in parse_phones(value) or [('','')]:self.add_row(phone,note)
+    def clear(self):self.setText('')
+    def setEnabled(self,enabled):
+        super().setEnabled(enabled)
+
 class ClientForm(QGroupBox):
     def __init__(self,parent=None):
         super().__init__('Клиент — введите данные при оформлении договора',parent)
-        self.client_id=None;layout=QGridLayout(self)
+        self.client_id=None;self.declined_duplicate='';layout=QGridLayout(self)
         self.name=QLineEdit();self.name.setPlaceholderText('ФИО / наименование заказчика *')
-        self.phone=QLineEdit();self.address=QLineEdit();self.passport=QTextEdit();self.passport.setMaximumHeight(55)
+        self.phone=PhonesEditor();self.address=QLineEdit();self.passport=QTextEdit();self.passport.setMaximumHeight(55)
         self.passport_issuer=QLineEdit();self.passport_date=OptionalDate()
         self.fields={'name':self.name,'phone':self.phone,'address':self.address,'passport':self.passport,'passport_issuer':self.passport_issuer,'passport_date':self.passport_date}
         layout.addWidget(QLabel('ФИО / организация *'),0,0);layout.addWidget(self.name,0,1,1,3)
-        layout.addWidget(QLabel('Телефон'),1,0);layout.addWidget(self.phone,1,1)
-        layout.addWidget(QLabel('Адрес клиента'),1,2);layout.addWidget(self.address,1,3)
-        layout.addWidget(QLabel('Паспорт: серия, номер'),2,0);layout.addWidget(self.passport,2,1,1,3)
-        layout.addWidget(QLabel('Кем выдан'),3,0);layout.addWidget(self.passport_issuer,3,1)
-        layout.addWidget(QLabel('Дата выдачи'),3,2);layout.addWidget(self.passport_date,3,3)
+        layout.addWidget(QLabel('Телефоны'),1,0,Qt.AlignmentFlag.AlignTop);layout.addWidget(self.phone,1,1,1,3)
+        layout.addWidget(QLabel('Адрес клиента'),2,0);layout.addWidget(self.address,2,1,1,3)
+        layout.addWidget(QLabel('Паспорт: серия, номер'),3,0);layout.addWidget(self.passport,3,1,1,3)
+        layout.addWidget(QLabel('Кем выдан'),4,0);layout.addWidget(self.passport_issuer,4,1)
+        layout.addWidget(QLabel('Дата выдачи'),4,2);layout.addWidget(self.passport_date,4,3)
         bar=QHBoxLayout();self.info=QLabel('Запись в «Клиенты» появится после сохранения договора.');self.info.setWordWrap(True);bar.addWidget(self.info,1)
-        self.select_button=QPushButton('Заполнить из «Клиенты»…');self.select_button.clicked.connect(self.choose);bar.addWidget(self.select_button)
-        clear=QPushButton('Новый клиент');clear.clicked.connect(lambda:self.fill({},None));bar.addWidget(clear);layout.addLayout(bar,4,0,1,4)
+        self.select_button=QPushButton('Выбрать из «Клиенты»…');self.select_button.clicked.connect(self.choose);bar.addWidget(self.select_button)
+        self.clear_button=QPushButton('Новый клиент');self.clear_button.clicked.connect(lambda:self.fill({},None));bar.addWidget(self.clear_button);layout.addLayout(bar,5,0,1,4)
+        self.name.editingFinished.connect(self.confirm_duplicate)
     def values(self):
         return dict(name=self.name.text(),phone=self.phone.text(),address=self.address.text(),passport=self.passport.toPlainText(),passport_issuer=self.passport_issuer.text(),passport_date=self.passport_date.value())
     def fill(self,values,cid=None):
-        self.client_id=cid
+        self.client_id=cid;self.declined_duplicate=''
         for key,field in self.fields.items():
             value=values.get(key) or ''
             if isinstance(field,OptionalDate):field.set_value(value)
             elif isinstance(field,QTextEdit):field.setPlainText(value)
             else:field.setText(value)
         self.info.setText(f'Клиент №{cid}. Изменения будут сохранены вместе с договором.' if cid else 'Новый клиент будет создан вместе с договором.')
+    def setEnabled(self,enabled):
+        super().setEnabled(enabled)
+    def duplicates(self):
+        name=' '.join(self.name.text().split()).casefold()
+        if not name or self.client_id:return []
+        return [r for r in db.fetchall('SELECT id,name,phone FROM crm.clients ORDER BY id') if ' '.join((r[1] or '').split()).casefold()==name]
+    def confirm_duplicate(self):
+        """Клиент с таким ФИО уже есть в «Клиенты»: предлагает подставить его данные. False — пользователь отменил сохранение."""
+        found=self.duplicates()
+        if not found or self.declined_duplicate==self.name.text():return True
+        first=found[0];box=QMessageBox(self);box.setWindowTitle('Клиент уже есть');box.setIcon(QMessageBox.Icon.Question)
+        box.setText(f'В разделе «Клиенты» уже есть «{first[1]}»'+(f' (тел.: {first[2]})' if first[2] else '')+'.\nПодставить уже существующие данные клиента?')
+        use=box.addButton('Подставить данные',QMessageBox.ButtonRole.AcceptRole);new=box.addButton('Это другой человек',QMessageBox.ButtonRole.DestructiveRole);cancel=box.addButton('Отмена',QMessageBox.ButtonRole.RejectRole);box.exec()
+        if box.clickedButton() is use:self.fill(get_client(db,first[0]) or {},first[0]);return True
+        if box.clickedButton() is new:self.declined_duplicate=self.name.text();return True
+        return False
     def choose(self):
         from .workspace_view import ClientPicker
         d=ClientPicker(self)

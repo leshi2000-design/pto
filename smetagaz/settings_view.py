@@ -146,10 +146,14 @@ class SettingsView(QWidget):
         # 5. Excel-снимок реестров договоров, отдельно от обычных бэкапов.
         box_excel = QFrame()
         box_excel_layout = QVBoxLayout(box_excel)
-        box_excel_layout.addWidget(QLabel("Реестры договоров (ГСВ и ГСН) в Excel — обновляется автоматически ~3 раза в день, файл перезаписывается:"))
+        box_excel_layout.addWidget(QLabel("Реестры договоров (ГСВ и ГСН) в Excel — обновляется автоматически каждый час, файл перезаписывается:"))
         self.contracts_excel_status = QLabel(db.get_setting('contracts_excel_status', 'Ещё не обновлялся'))
         self.contracts_excel_status.setWordWrap(True)
         box_excel_layout.addWidget(self.contracts_excel_status)
+        box_excel_layout.addWidget(QLabel("Карточки договоров «Проекты ГСВ» (все поля, статусы, оплаты) — тоже каждый час, файл перезаписывается."))
+        self.projects_excel_status = QLabel(db.get_setting('projects_excel_status', 'Ещё не обновлялся'))
+        self.projects_excel_status.setWordWrap(True)
+        box_excel_layout.addWidget(self.projects_excel_status)
         excel_bar = QHBoxLayout()
         btn_excel_now = QPushButton("Обновить сейчас")
         btn_excel_now.clicked.connect(self.export_contracts_excel_now)
@@ -292,6 +296,16 @@ class SettingsView(QWidget):
             message = f'{now:%d.%m.%Y %H:%M}: ошибка экспорта — {e}'
         db.set_setting('contracts_excel_status', message)
         self.contracts_excel_status.setText(message)
+        try:
+            from .gsv_project_domain import export_cards, EXPORT_FILENAME as PROJECTS_FILE
+            ppath = path.parent / PROJECTS_FILE
+            count = export_cards(db, ppath)
+            pmessage = f'{now:%d.%m.%Y %H:%M}: проекты ГСВ, карточек {count} — {ppath}'
+            db.set_setting('last_projects_excel', now.isoformat())
+        except Exception as e:
+            pmessage = f'{now:%d.%m.%Y %H:%M}: ошибка экспорта — {e}'
+        db.set_setting('projects_excel_status', pmessage)
+        self.projects_excel_status.setText(pmessage)
 
     def open_contracts_excel_folder(self):
         from .platform_utils import open_local

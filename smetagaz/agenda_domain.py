@@ -160,6 +160,14 @@ def _event(day, kind, title, detail='', ref=None, color=None, time=''):
             'color': color or kind_color, 'icon': icon, 'time': time, 'kind_label': label}
 
 
+def _short_name(full):
+    """«Иванов Иван Иванович» -> «Иванов И.И.»."""
+    parts = str(full or '').split()
+    if len(parts) < 2:
+        return parts[0] if parts else ''
+    return f'{parts[0]} ' + ''.join(f'{p[0].upper()}.' for p in parts[1:3])
+
+
 def _money(value):
     return f'{float(value or 0):,.2f}'.replace(',', ' ').replace('.', ',') + ' ₽'
 
@@ -181,28 +189,36 @@ def events_between(db, start, end, today=None):
         if start <= day <= end:
             out.append(_event(day, 'overdue' if state == 'overdue' else 'task', title,
                               (due_label(due, today, bool(done)) + (f' · {urgency}' if urgency else '')), ('kanban_tasks', tid)))
-    # --- договоры, акты, сроки ---
+    # --- договоры, акты, сроки: первичный документ каждого раздела отмечается в календаре ---
+    # (SQL, вид, раздел, таблица, столбец клиента, условие «подписан»)
     contracts = (
-        ("SELECT id,contract_date,contract_number,object_name FROM contracts WHERE coalesce(contract_date,'')<>''", 'contract', 'ГСВ', 'contracts'),
-        ("SELECT id,contract_date,contract_number,object_name FROM gsv_projects WHERE coalesce(contract_date,'')<>''", 'contract', 'Проектирование ГСВ', 'gsv_projects'),
-        ("SELECT id,contract_date,contract_number,title FROM gsn_projects WHERE coalesce(contract_date,'')<>''", 'contract', 'ГСН', 'gsn_projects'),
-        ("SELECT id,acceptance_act_date,contract_number,object_name FROM contracts WHERE coalesce(acceptance_act_date,'')<>''", 'act', 'ГСВ', 'contracts'),
-        ("SELECT id,act_date,contract_number,object_name FROM gsv_projects WHERE coalesce(act_date,'')<>''", 'act', 'Проектирование ГСВ', 'gsv_projects'),
-        ("SELECT id,work_start_date,contract_number,object_name FROM contracts WHERE coalesce(work_start_date,'')<>''", 'work', 'ГСВ · начало работ', 'contracts'),
-        ("SELECT id,work_end_date,contract_number,object_name FROM contracts WHERE coalesce(work_end_date,'')<>''", 'work', 'ГСВ · окончание работ', 'contracts'),
-        ("SELECT id,due_date,contract_number,object_name FROM gsv_projects WHERE coalesce(due_date,'')<>''", 'project', 'Срок проекта ГСВ', 'gsv_projects'),
+        ("SELECT id,contract_date,contract_number,object_name,client_name,1 FROM contracts WHERE coalesce(contract_date,'')<>''", 'contract', 'Монтаж ГСВ', 'contracts'),
+        ("SELECT id,contract_date,contract_number,object_name,client_name,coalesce(contract_signed,1) FROM gsv_projects WHERE coalesce(contract_date,'')<>''", 'contract', 'Проект ГСВ', 'gsv_projects'),
+        ("SELECT id,contract_date,contract_number,title,client_name,1 FROM gsn_projects WHERE coalesce(contract_date,'')<>''", 'contract', 'Монтаж ГСН', 'gsn_projects'),
+        ("SELECT id,acceptance_act_date,contract_number,object_name,client_name,1 FROM contracts WHERE coalesce(acceptance_act_date,'')<>''", 'act', 'Монтаж ГСВ', 'contracts'),
+        ("SELECT id,act_date,contract_number,object_name,client_name,coalesce(act_signed,1) FROM gsv_projects WHERE coalesce(act_date,'')<>''", 'act', 'Проект ГСВ', 'gsv_projects'),
+        ("SELECT id,work_start_date,contract_number,object_name,client_name,1 FROM contracts WHERE coalesce(work_start_date,'')<>''", 'work', 'Монтаж ГСВ · начало работ', 'contracts'),
+        ("SELECT id,work_end_date,contract_number,object_name,client_name,1 FROM contracts WHERE coalesce(work_end_date,'')<>''", 'work', 'Монтаж ГСВ · окончание работ', 'contracts'),
+        ("SELECT id,due_date,contract_number,object_name,client_name,1 FROM gsv_projects WHERE coalesce(due_date,'')<>''", 'project', 'Срок проекта ГСВ', 'gsv_projects'),
     )
     for sql, kind, section, table in contracts:
         # даты могли быть записаны как ГГГГ-ММ-ДД или ДД.ММ.ГГГГ, поэтому диапазон проверяется после нормализации
-        for rid, day, number, name in db.fetchall(sql):
+        for rid, day, number, name, client, signed in db.fetchall(sql):
             day = norm_date(day)
             if not day or not s <= day <= e:
                 continue
+            short = _short_name(client)
             number = f'№{number}' if number else 'без номера'
-            word = {'contract': 'Заключён договор', 'act': 'Подписан акт'}.get(kind, section)
-            detail = f'{section} · {name or "без названия"}' if kind in ('contract', 'act') else (name or '')
-            out.append(_event(datetime.strptime(day, ISO).date(), kind,
-                              f'{word} {number}' if kind in ('contract', 'act') else f'{section} {number}', detail, (table, rid)))
+            if kind == 'contract':
+                title = f'Заключение договора {short}'.strip() + ('' if signed else ' (не подписан)')
+                detail = f'{section} · {number} · {name or "без названия"}'
+            elif kind == 'act':
+                title = ('Подписан акт ' if signed else 'Акт (не подписан) ') + short
+                detail = f'{section} · {number} · {name or "без названия"}'
+            else:
+                title = f'{section} {number}'
+                detail = ' · '.join(x for x in (name, short) if x)
+            out.append(_event(datetime.strptime(day, ISO).date(), kind, title.strip(), detail, (table, rid)))
     # --- оплаты (единая книга платежей) ---
     from .payments_domain import report
     try:

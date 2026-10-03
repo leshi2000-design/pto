@@ -8,3 +8,4 @@ backups/
 app.log*
 *.egg-info/
 .ruff_cache/
+*.zip

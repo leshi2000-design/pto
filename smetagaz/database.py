@@ -186,9 +186,9 @@ class DatabaseManager:
             default_tabs = [
                 {"id": "tasks", "name": "Сегодня", "visible": 1},
                 {"id": "estimates", "name": "Реестр смет", "visible": 1},
-                {"id": "contracts", "name": "ГСВ", "visible": 1},
+                {"id": "contracts", "name": "Монтаж ГСВ", "visible": 1},
                 {"id": "gsv", "name": "Проекты ГСВ", "visible": 1},
-                {"id": "gsn", "name": "Проекты ГСН", "visible": 1},
+                {"id": "gsn", "name": "Монтаж ГСН", "visible": 1},
                 {"id": "legal_entities", "name": "Юрлица", "visible": 1},
                 {"id": "exec", "name": "Исполнительная док.", "visible": 1},
                 {"id": "materials", "name": "Справочник", "visible": 1},
@@ -207,7 +207,7 @@ class DatabaseManager:
                 ('export_font', 'Segoe UI'), ('export_font_size', '13'),
                 ('export_company_name', 'ООО "ГазМонтаж"'),
                 ('export_excel_template', ''), ('export_word_template', ''),
-                ('app_name', 'СМЕТА-ГАЗ 2.4'), ('tabs_config', json.dumps(default_tabs))
+                ('app_name', 'СМЕТА-ГАЗ 2.5'), ('tabs_config', json.dumps(default_tabs))
             ]
             c.executemany("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", defaults)
 
@@ -238,8 +238,10 @@ class DatabaseManager:
             tabs_data=[]
         renamed=False
         for tab in tabs_data:
-            if tab.get("id")=="contracts" and tab.get("name")=="Реестр договоров":
-                tab["name"]="ГСВ";renamed=True
+            # 2.5: три раздела называются «Монтаж ГСВ», «Монтаж ГСН» и «Проекты ГСВ»; пользовательские названия не трогаем
+            new_names={"contracts":("Монтаж ГСВ",("Реестр договоров","ГСВ")),"gsn":("Монтаж ГСН",("Проекты ГСН",))}
+            if tab.get("id") in new_names and tab.get("name") in new_names[tab["id"]][1]:
+                tab["name"]=new_names[tab["id"]][0];renamed=True
         # 2.5: «Задачи и Календарь» стали стартовым экраном «Сегодня» (один раз переносится на первое место).
         for tab in tabs_data:
             if tab.get("id")=="tasks" and tab.get("name")=="Задачи и Календарь":
@@ -251,7 +253,7 @@ class DatabaseManager:
             self.set_setting("today_tab_first","1")
         if renamed:self.set_setting("tabs_config",json.dumps(tabs_data))
         self.set_setting("schema_version","8")
-        if self.get_setting("app_name") in ("СМЕТА-ГАЗ 2.0","СМЕТА-ГАЗ 2.1","СМЕТА-ГАЗ 2.2","СМЕТА-ГАЗ 2.3"):self.set_setting("app_name","СМЕТА-ГАЗ 2.4")
+        if self.get_setting("app_name") in ("СМЕТА-ГАЗ 2.0","СМЕТА-ГАЗ 2.1","СМЕТА-ГАЗ 2.2","СМЕТА-ГАЗ 2.3","СМЕТА-ГАЗ 2.4"):self.set_setting("app_name","СМЕТА-ГАЗ 2.5")
 
     def close(self):
         with self._lock:

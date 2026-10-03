@@ -9,17 +9,31 @@ from .pagination import RegistryPager
 
 class GsnContractDialog(QDialog):
     def __init__(self,rid=None,parent=None):
-        super().__init__(parent);self.rid=rid;self.setWindowTitle('Договор ГСН');self.resize(1200,850);layout=QVBoxLayout(self);tabs=QTabWidget();layout.addWidget(tabs,1)
+        super().__init__(parent);self.rid=rid;self.setWindowTitle('Договор · монтаж ГСН');self.resize(1200,850);layout=QVBoxLayout(self);tabs=QTabWidget();layout.addWidget(tabs,1)
         page=QWidget();body=QVBoxLayout(page);form=QFormLayout();body.addLayout(form);self.number=QLineEdit();self.date=OptionalDate();self.date.setDate(QDate.currentDate());self.title=QLineEdit();self.address=QLineEdit();self.notes=QLineEdit();self.amount=QDoubleSpinBox();self.amount.setRange(0,1e9);self.amount.setDecimals(2);form.addRow("Сумма договора",self.amount)
         for label,field in [('Номер договора',self.number),('Дата договора',self.date),('Название объекта строительства',self.title),('Адрес объекта',self.address),('Примечание',self.notes)]:form.addRow(label,field)
-        self.client_form=ClientForm();body.addWidget(self.client_form);body.addStretch();scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setWidget(page);tabs.addTab(scroll,'Договор и клиент')
-        self.executive=ExecutiveWorkspace('gsn_projects',self.save_data,self);tabs.addTab(self.executive,'Исполнительная документация');bar=QHBoxLayout();self.status=QLabel();bar.addWidget(self.status,1);save=QPushButton('Сохранить');save.clicked.connect(self.save_data);bar.addWidget(save);payments=QPushButton('Оплаты');payments.clicked.connect(self.open_payments);bar.addWidget(payments);report=QPushButton('Договор по шаблону');report.clicked.connect(self.export_template);bar.addWidget(report);close=QPushButton('Закрыть');close.clicked.connect(self.close);bar.addWidget(close);layout.addLayout(bar)
+        self.client_form=ClientForm();body.addWidget(self.client_form);body.addStretch();scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setWidget(page);tabs.addTab(scroll,'Договор и клиент');self.page=page
+        self.executive=ExecutiveWorkspace('gsn_projects',self.save_data,self);tabs.addTab(self.executive,'Исполнительная документация');bar=QHBoxLayout();self.status=QLabel();bar.addWidget(self.status,1);self.edit_button=QPushButton('Изменить');self.edit_button.clicked.connect(self.toggle_edit);bar.addWidget(self.edit_button);folder=QPushButton('Папка договора');folder.clicked.connect(self.open_folder);bar.addWidget(folder);self.save_button=QPushButton('Сохранить');self.save_button.clicked.connect(self.save_clicked);bar.addWidget(self.save_button);payments=QPushButton('Оплаты');payments.clicked.connect(self.open_payments);bar.addWidget(payments);report=QPushButton('Договор по шаблону');report.clicked.connect(self.export_template);bar.addWidget(report);close=QPushButton('Закрыть');close.clicked.connect(self.close);bar.addWidget(close);layout.addLayout(bar)
         if rid:
             row=db.fetchone('SELECT contract_number,contract_date,title,address,notes,client_id,client_name,phone,passport FROM gsn_projects WHERE id=?',(rid,))
             if not row:raise ValueError('Договор ГСН не найден')
             self.number.setText(row[0] or '');self.date.set_value(row[1]);self.title.setText(row[2]);self.address.setText(row[3] or '');self.notes.setText(row[4] or '');self.client_form.fill(get_client(db,row[5]) or dict(name=row[6],phone=row[7],passport=row[8]),row[5])
         if rid:self.amount.setValue(db.fetchone("SELECT contract_amount FROM gsn_projects WHERE id=?",(rid,))[0] or 0)
         self.executive.load(rid)
+        self.set_locked(bool(rid))
+    def set_locked(self,locked):
+        """Сохранённый договор открывается только для просмотра; поля разблокирует кнопка «Изменить»."""
+        self.locked=locked;self.page.setEnabled(not locked);self.edit_button.setVisible(bool(self.rid));self.edit_button.setText('Изменить' if locked else 'Заблокировать')
+    def toggle_edit(self):
+        if not self.locked and not self.save_data():return
+        self.set_locked(not self.locked)
+    def save_clicked(self):
+        if not self.rid and not self.client_form.confirm_duplicate():return
+        if self.save_data() and self.rid:self.set_locked(True)
+    def open_folder(self):
+        if not self.rid and not self.save_data():return
+        from .platform_utils import open_local
+        if self.executive.folder.text():open_local(self.executive.folder.text())
     def export_template(self):
         if self.save_data():
             from .report_dialog import ReportTemplateDialog
@@ -36,6 +50,9 @@ class GsnContractDialog(QDialog):
                 cid=save_client(db,client,self.client_form.client_id);values=(self.number.text().strip(),self.date.value(),self.title.text().strip(),self.address.text().strip(),self.notes.text(),cid,client['name'],client['phone'],client['passport']);rid=self.rid
                 if rid:db.execute('UPDATE gsn_projects SET contract_number=?,contract_date=?,title=?,address=?,notes=?,client_id=?,client_name=?,phone=?,passport=? WHERE id=?',(*values,rid))
                 else:rid=db.execute('INSERT INTO gsn_projects(contract_number,contract_date,title,address,notes,client_id,client_name,phone,passport) VALUES(?,?,?,?,?,?,?,?,?)',values).lastrowid
+                if not self.executive.folder.text().strip():
+                    from .gsv_project_domain import ensure_folder
+                    self.executive.folder.setText(ensure_folder('gsn_projects',self.number.text().strip() or f'договор_{rid}',client['name']))
                 self.executive.save(rid)
                 db.execute("UPDATE gsn_projects SET contract_amount=? WHERE id=?",(self.amount.value(),rid))
             self.rid=rid;self.client_form.client_id=cid;self.executive.bind(rid);self.status.setText(f'Сохранено · договор {rid} · клиент {cid}');return True
