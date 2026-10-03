@@ -1,0 +1,6 @@
+..............................................                           [100%]
+46 passed in 7.85s
+
+GUI smoke checks: smoke_gui, smoke_gsv_welding, smoke_stock, smoke_gsn, smoke_reports, smoke_revision_requests — passed (Qt offscreen).
+Migration from actual 2.3 archive — passed: history, archived GSV templates, payment opening balances, repeat initialization, pre-upgrade backup.
+Windows printing and user production templates: not tested.

@@ -1,0 +1,11 @@
+{
+  "records": 100000,
+  "files_imported": 1000,
+  "file_import_seconds": 0.26,
+  "insert_seconds": 2.394,
+  "search_avg_ms": 8.539,
+  "page_ms": 0.136,
+  "backup_seconds": 0.63,
+  "restore_seconds": 0.573,
+  "database_bytes": 34689024
+}

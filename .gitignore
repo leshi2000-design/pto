@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+*.db
+*.db-journal
+backups/
+.smetagaz/
+app.log*
+*.egg-info/
+.ruff_cache/
