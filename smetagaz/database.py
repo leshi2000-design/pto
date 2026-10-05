@@ -207,7 +207,7 @@ class DatabaseManager:
                 ('export_font', 'Segoe UI'), ('export_font_size', '13'),
                 ('export_company_name', 'ООО "ГазМонтаж"'),
                 ('export_excel_template', ''), ('export_word_template', ''),
-                ('app_name', 'СМЕТА-ГАЗ 2.5'), ('tabs_config', json.dumps(default_tabs))
+                ('app_name', 'СМЕТА-ГАЗ 2.6'), ('tabs_config', json.dumps(default_tabs))
             ]
             c.executemany("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", defaults)
 
@@ -253,7 +253,7 @@ class DatabaseManager:
             self.set_setting("today_tab_first","1")
         if renamed:self.set_setting("tabs_config",json.dumps(tabs_data))
         self.set_setting("schema_version","8")
-        if self.get_setting("app_name") in ("СМЕТА-ГАЗ 2.0","СМЕТА-ГАЗ 2.1","СМЕТА-ГАЗ 2.2","СМЕТА-ГАЗ 2.3","СМЕТА-ГАЗ 2.4"):self.set_setting("app_name","СМЕТА-ГАЗ 2.5")
+        if self.get_setting("app_name") in ("СМЕТА-ГАЗ 2.0","СМЕТА-ГАЗ 2.1","СМЕТА-ГАЗ 2.2","СМЕТА-ГАЗ 2.3","СМЕТА-ГАЗ 2.4","СМЕТА-ГАЗ 2.5"):self.set_setting("app_name","СМЕТА-ГАЗ 2.6")
 
     def close(self):
         with self._lock:

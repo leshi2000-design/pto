@@ -34,15 +34,28 @@ def export_registries(db, destination):
     wb.remove(wb.active)
 
     gsv_rows = db.fetchall(
-        """SELECT c.contract_number, c.contract_date, c.object_name, c.client_name, c.client_phone,
-                  c.contract_amount, e.title
+        """SELECT c.id, c.contract_number, c.contract_date, c.object_name, c.client_name, c.client_phone, c.contract_amount, e.title,
+                  c.object_address, c.contract_signed, c.work_start_date, c.work_end_date, c.acceptance_act_date, c.act_signed,
+                  c.est_materials, c.est_works, c.designer_code, c.designer, c.contract_folder,
+                  (SELECT coalesce(sum(count),0) FROM gsvm_joints j WHERE j.contract_id=c.id)
            FROM contracts c LEFT JOIN estimates e ON c.estimate_id = e.id ORDER BY c.id DESC"""
     )
+    from . import payments_domain
+    rows = []
+    for (cid, num, date, obj, client, phone, amount, title, address, signed, start, end, act, act_signed, mats, works, code, designer, folder, joints) in gsv_rows:
+        try:
+            paid = float(payments_domain.summary(db, 'contracts', cid)['paid'])
+        except Exception:
+            paid = 0.0
+        rows.append([num or "Б/Н", date or "", obj or "", client or "", phone or "", float(amount or 0), title or "— нет сметы —",
+                     address or "", "Да" if signed else "Нет", start or "", end or "", act or "", "Да" if act_signed else "Нет",
+                     float(mats or 0), float(works or 0), paid, float(amount or 0) - paid, code or "", designer or "", joints, folder or ""])
     _write_sheet(
         wb, "ГСВ",
-        ["№ Договора", "Дата", "Объект / Адрес", "Клиент", "Телефон", "Сумма (руб)", "Привязанная смета"],
-        [[num or "Б/Н", date or "", obj or "", client or "", phone or "", float(amount or 0), title or "— нет сметы —"]
-         for num, date, obj, client, phone, amount, title in gsv_rows],
+        ["№ Договора", "Дата", "Объект / Адрес", "Клиент", "Телефон", "Сумма (руб)", "Привязанная смета",
+         "Адрес объекта", "Договор подписан", "Начало работ", "Окончание работ", "Дата акта", "Акт подписан",
+         "Материалы по смете", "Работы по смете", "Оплачено", "Остаток", "Шифр проекта", "Проектировщик", "Стыков", "Папка договора"],
+        rows,
     )
 
     gsn_rows = db.fetchall(

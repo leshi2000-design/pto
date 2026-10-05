@@ -65,6 +65,8 @@ def initialize(db):
         agenda_migrate(db)
         from .gsv_project_domain import migrate as gsv_project_migrate
         gsv_project_migrate(db)
+        from .gsvm_domain import migrate as gsvm_migrate
+        gsvm_migrate(db)
         from .dossier_domain import migrate as dossier_migrate
         dossier_migrate(db)
         from .legal_entities_domain import migrate as legal_entities_migrate

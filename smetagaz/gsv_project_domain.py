@@ -432,18 +432,20 @@ def create_default_template(kind):
     return path
 
 
-def _replace_text(text, tags):
+def _replace_text(text, tags, normalize=None):
+    normalize = normalize or tag_key
+
     def sub(match):
-        key = tag_key(match.group(1))
+        key = normalize(match.group(1))
         return str(tags[key]) if key in tags else match.group(0)
     return TAG_RE.sub(sub, text)
 
 
-def _fill_paragraph(paragraph, tags):
+def _fill_paragraph(paragraph, tags, normalize=None):
     text = ''.join(run.text for run in paragraph.runs)
     if '{' not in text:
         return
-    new = _replace_text(text, tags)
+    new = _replace_text(text, tags, normalize)
     if new == text or not paragraph.runs:
         return
     first = paragraph.runs[0]
@@ -460,23 +462,24 @@ def _walk_paragraphs(container):
                 yield from _walk_paragraphs(cell)
 
 
-def render_docx(template, out_path, tags):
+def render_docx(template, out_path, tags, normalize=None):
     import docx
     doc = docx.Document(template)
     for paragraph in _walk_paragraphs(doc):
-        _fill_paragraph(paragraph, tags)
+        _fill_paragraph(paragraph, tags, normalize)
     for section in doc.sections:
         for part in (section.header, section.footer):
             for paragraph in _walk_paragraphs(part):
-                _fill_paragraph(paragraph, tags)
+                _fill_paragraph(paragraph, tags, normalize)
     _save_atomic(lambda p: doc.save(p), out_path)
 
 
-def render_xlsx(template, out_path, tags, payments):
+def render_xlsx(template, out_path, tags, payments, normalize=None):
     """Подставляет теги; для каждой оплаты повторяет блок столбцов с ДАТА_ОПЛАТЫ / СУММА_ОПЛАТЫ / ПРИМЕЧАНИЕ_ОПЛАТЫ вправо."""
     import copy
     import openpyxl
     from openpyxl.utils import get_column_letter
+    normalize = normalize or tag_key
     wb = openpyxl.load_workbook(template)
     pay_values = [{'ДАТА_ОПЛАТЫ': date_short(d).rstrip('г.'), 'СУММА_ОПЛАТЫ': a, 'ПРИМЕЧАНИЕ_ОПЛАТЫ': n} for d, a, n in payments]
     for ws in wb.worksheets:
@@ -484,11 +487,11 @@ def render_xlsx(template, out_path, tags, payments):
         for row in ws.iter_rows():
             for cell in row:
                 if isinstance(cell.value, str) and '{' in cell.value:
-                    keys = {tag_key(m) for m in TAG_RE.findall(cell.value)}
+                    keys = {normalize(m) for m in TAG_RE.findall(cell.value)}
                     if keys & set(PAYMENT_TAGS):
                         pay_cells.append(cell)
                     else:
-                        cell.value = _replace_text(cell.value, tags)
+                        cell.value = _replace_text(cell.value, tags, normalize)
         by_row = {}
         for cell in pay_cells:
             by_row.setdefault(cell.row, []).append(cell)
@@ -499,11 +502,11 @@ def render_xlsx(template, out_path, tags, payments):
                 values = pay_values[i] if pay_values else {}
                 for col, template_value, style in originals:
                     target = ws.cell(r, col + i * width)
-                    keys = [tag_key(m) for m in TAG_RE.findall(template_value)]
+                    keys = [normalize(m) for m in TAG_RE.findall(template_value)]
                     if len(keys) == 1 and template_value.strip() == '{' + TAG_RE.findall(template_value)[0] + '}' and isinstance(values.get(keys[0]), float):
                         target.value = values[keys[0]]
                     else:
-                        target.value = TAG_RE.sub(lambda m: str(values.get(tag_key(m.group(1)), tags.get(tag_key(m.group(1)), m.group(0)))), template_value)
+                        target.value = TAG_RE.sub(lambda m: str(values.get(normalize(m.group(1)), tags.get(normalize(m.group(1)), m.group(0)))), template_value)
                     target._style = copy.copy(style)
                     if i:
                         letter = get_column_letter(col + i * width)

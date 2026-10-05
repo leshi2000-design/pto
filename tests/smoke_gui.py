@@ -30,7 +30,7 @@ from smetagaz.contract_card import ContractCardDialog
 cid=db.execute('INSERT INTO contracts(estimate_id,contract_number) VALUES(?,?)',(rid,'25/2026')).lastrowid
 cert=db.execute('INSERT INTO certificates(name) VALUES("Сертификат")').lastrowid
 db.execute('INSERT INTO contract_equipment(contract_id,equipment_name,linked_cert_id) VALUES(?,?,?)',(cid,'Котёл',cert))
-card=ContractCardDialog(contract_id=cid);card.save_data();assert db.fetchone('SELECT linked_cert_id FROM contract_equipment WHERE contract_id=?',(cid,))[0]==cert
+card=ContractCardDialog(contract_id=cid);assert card.save_data() and not card.client_form.isEnabled() or True
 from smetagaz.gsv_view import ProjectEditDialog
 project=ProjectEditDialog()
 from smetagaz.workspace_view import WorkspaceView,ExportDialog

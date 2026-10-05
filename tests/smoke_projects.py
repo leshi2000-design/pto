@@ -59,8 +59,11 @@ import smetagaz.platform_utils as pu;pu.open_local=lambda p:None
 n.open_folder();assert os.path.isdir(n.executive.folder.text()) and os.path.basename(n.executive.folder.text()).startswith('ГСН-1 - ') and n.executive.folder.text().endswith('(Сидоров Сидор)'),n.executive.folder.text()
 n2=GsnContractDialog(n.rid);assert not n2.page.isEnabled() and n2.edit_button.isVisible() is not None;n2.toggle_edit();assert n2.page.isEnabled()
 from smetagaz.contract_card import ContractCardDialog
-c=ContractCardDialog(title='Дом');c.client_form.name.setText('Петров Пётр');c.inp_number.setText('М-7');assert c.save_data();assert not c.executive.folder.text();c.open_folder();assert os.path.basename(c.executive.folder.text()).startswith('М-7 - Дом (Петров Пётр)'),c.executive.folder.text()
-c2=ContractCardDialog(contract_id=c.contract_id);assert not c2.client_form.isEnabled();c2.toggle_edit();assert c2.client_form.isEnabled()
+from smetagaz import gsvm_domain as md
+c=ContractCardDialog(title='Дом');c.client_form.name.setText('Петров Пётр Иванович');c.inp_object_address.setText('д. Ключи, 5');assert c.save_data();assert not md.contract_folder(db,c.contract_id)           # без кнопки папка не создаётся
+assert c.inp_number.text().endswith('-02/'+str(__import__('datetime').date.today().year%100).zfill(2))
+assert c.ask_folder() and os.path.basename(md.contract_folder(db,c.contract_id)).startswith(c.inp_number.text().replace('/','.')+', д. Ключи, 5 (Петров П.И.)'),md.contract_folder(db,c.contract_id)
+c2=ContractCardDialog(contract_id=c.contract_id);assert not c2.client_form.isEnabled() and not c2.inp_object.isEnabled() and c2.equipment_tab.isEnabled();c2.toggle_edit();assert c2.client_form.isEnabled()
 # --- файлы клиента ---
 from smetagaz.client_files import client_folders,ClientFilesWidget
 (Path(row[6])/'тест.txt').write_text('x');widget=ClientFilesWidget(row[7]);assert widget.tree.topLevelItemCount()==1 and widget.tree.topLevelItem(0).childCount()>=1

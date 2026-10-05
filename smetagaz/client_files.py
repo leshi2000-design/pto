@@ -18,8 +18,8 @@ def client_folders(db, cid):
     for rid, number, obj, folder in db.fetchall('SELECT id,pd_number,object_name,project_folder FROM gsv_projects WHERE client_id=? ORDER BY id DESC', (cid,)):
         result.append((SECTIONS['gsv_projects'], f'{number} · {obj or ""}'.strip(' ·'), folder or ''))
     for rid, number, obj in db.fetchall('SELECT id,contract_number,object_name FROM contracts WHERE client_id=? ORDER BY id DESC', (cid,)):
-        row = db.fetchone("SELECT folder_path FROM executive_objects WHERE owner_type='contracts' AND owner_id=?", (rid,))
-        result.append((SECTIONS['contracts'], f'№{number or rid} · {obj or ""}'.strip(' ·'), row[0] if row else ''))
+        row = db.fetchone("SELECT contract_folder FROM contracts WHERE id=?", (rid,))
+        result.append((SECTIONS['contracts'], f'№{number or rid} · {obj or ""}'.strip(' ·'), row[0] if row and row[0] else ''))
     for rid, number, title in db.fetchall('SELECT id,contract_number,title FROM gsn_projects WHERE client_id=? ORDER BY id DESC', (cid,)):
         row = db.fetchone("SELECT folder_path FROM executive_objects WHERE owner_type='gsn_projects' AND owner_id=?", (rid,))
         result.append((SECTIONS['gsn_projects'], f'№{number or rid} · {title or ""}'.strip(' ·'), row[0] if row else ''))

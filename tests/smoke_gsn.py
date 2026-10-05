@@ -28,7 +28,7 @@ while reopened.executive.future and time.monotonic()<end:app.processEvents();tim
 assert not reopened.executive.future;assert len(list(output.iterdir()))==2;assert db.fetchone('SELECT count(*) FROM executive_generated')[0]==1
 view=GsnProjectsView();assert view.table.rowCount()==1;view.search.setText('ГСН-25');assert view.table.rowCount()==1;view.search.setText('не найдено');assert view.table.rowCount()==0
 from smetagaz.contract_card import ContractCardDialog
-contract=ContractCardDialog();contract.client_form.name.setText('Петров Пётр Петрович');contract.executive.fields['tu_number'].setText('ТУ-42');assert contract.save_data();assert domain.context(db,contract.executive.owner,contract.executive.rid)[0]['tu_number']=='ТУ-42'
+contract=ContractCardDialog();contract.client_form.name.setText('Петров Пётр Петрович');assert contract.save_data() and contract.contract_id         # монтаж ГСВ не связан с общим модулем «Исполнительная документация»
 # ProjectEditDialog (Проекты ГСВ) no longer embeds ExecutiveWorkspace/Equipment/Pipelines — those
 # belong to the installation contract card (ContractCardDialog) — but its own client+contract save
 # and the domain-level context for gsv_projects (used by report/export templates) must still work.

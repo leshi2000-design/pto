@@ -61,7 +61,7 @@ class GsvCatalogView(QWidget):
         super().__init__();self.pager=RegistryPager(self);layout=QVBoxLayout(self)
         layout.addWidget(QLabel('Трубопроводы ГСВ и их сертификаты. Изменение связи с сертификатом отражается в документации всех объектов, использующих этот вид.'))
         bar=QHBoxLayout();self.search=QLineEdit();self.search.setPlaceholderText('Поиск трубопровода…');bar.addWidget(self.search,1)
-        for label,callback in [('Добавить',self.create),('Изменить',self.edit),('Открыть сертификат',self.open_file)]:b=QPushButton(label);b.clicked.connect(callback);bar.addWidget(b)
+        for label,callback in [('Добавить',self.create),('Изменить',self.edit),('Открыть сертификат',self.open_file),('Зависимые сертификаты и по умолчанию…',self.open_rules)]:b=QPushButton(label);b.clicked.connect(callback);bar.addWidget(b)
         layout.addLayout(bar);self.table=QTableWidget(0,5);self.table.setHorizontalHeaderLabels(['Трубопровод','Ед.','Сертификат','Доступен','Путь']);self.table.setColumnWidth(0,250);self.table.horizontalHeader().setStretchLastSection(True);self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows);self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers);layout.addWidget(self.table,1)
         self.table.cellDoubleClicked.connect(lambda *_:self.edit());self.search.textChanged.connect(self.load_data);self.load_data()
     def selected(self):
@@ -70,6 +70,9 @@ class GsvCatalogView(QWidget):
         rows=self.pager.fetch('SELECT p.id,p.name,p.unit,c.cert_number,p.active,c.file_path FROM gsv_pipelines p LEFT JOIN certificates c ON c.id=p.certificate_id WHERE LOWER(p.name) LIKE ? ORDER BY p.id DESC',('%'+self.search.text().casefold()+'%',));self.table.setRowCount(len(rows))
         for r,(rid,name,unit,number,active,path) in enumerate(rows):
             for c,value in enumerate([name,unit,number,'Да' if active else 'Архив',path]):item=QTableWidgetItem(str(value or ''));item.setData(Qt.ItemDataRole.UserRole,rid);self.table.setItem(r,c,item)
+    def open_rules(self):
+        from .gsvm_tabs import RulesDialog
+        RulesDialog(self).exec()
     def create(self):PipelineDialog(parent=self).exec();self.load_data()
     def edit(self):
         if self.selected():PipelineDialog(self.selected(),self).exec();self.load_data()

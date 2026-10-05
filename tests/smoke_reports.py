@@ -26,6 +26,6 @@ view=Registry('balances');view.category.setCurrentIndex(view.category.findData('
 from smetagaz.report_templates import context
 query,params=view.pager.filters.apply(view.report_query,view.report_params);ctx,tables=context(db,'balances',filters={'query':query,'params':params});assert len(tables['items'])==420
 from smetagaz.contract_card import ContractCardDialog
-card=ContractCardDialog();assert card.executive.templates_table.rowCount()==8;assert card.executive.generate_button.isEnabled();card.close()
+card=ContractCardDialog();assert card.templates_tab.tpl.rowCount()==10 and not hasattr(card,'executive');card.close()
 main.toggle_theme();app.processEvents();main.grab().save(str(folder/'interface-dark.png'));main.toggle_theme();app.processEvents()
 main.backup_service.close();main.close();app.processEvents();print('REPORT GUI OK: templates, tag search, row expansion, balances across pages, GSV separation, light/dark theme')
