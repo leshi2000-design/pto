@@ -31,9 +31,19 @@ class GsnContractDialog(QDialog):
         if not self.rid and not self.client_form.confirm_duplicate():return
         if self.save_data() and self.rid:self.set_locked(True)
     def open_folder(self):
+        """Папка договора создаётся только по кнопке: привязать существующую или создать новую «номер - адрес (ФИО)»."""
         if not self.rid and not self.save_data():return
         from .platform_utils import open_local
-        if self.executive.folder.text():open_local(self.executive.folder.text())
+        from .folder_ui import choose_folder
+        from .gsv_project_domain import folder_name
+        import os
+        current=self.executive.folder.text().strip()
+        if not current or not os.path.isdir(current):
+            path,create=choose_folder(self,'gsn_projects',folder_name(self.number.text().strip() or f'договор_{self.rid}',self.address.text() or self.title.text(),self.client_form.name.text()),current)
+            if not path:return
+            if create:os.makedirs(path,exist_ok=True)
+            self.executive.folder.setText(path);self.save_data();current=path
+        open_local(current)
     def export_template(self):
         if self.save_data():
             from .report_dialog import ReportTemplateDialog
@@ -50,9 +60,6 @@ class GsnContractDialog(QDialog):
                 cid=save_client(db,client,self.client_form.client_id);values=(self.number.text().strip(),self.date.value(),self.title.text().strip(),self.address.text().strip(),self.notes.text(),cid,client['name'],client['phone'],client['passport']);rid=self.rid
                 if rid:db.execute('UPDATE gsn_projects SET contract_number=?,contract_date=?,title=?,address=?,notes=?,client_id=?,client_name=?,phone=?,passport=? WHERE id=?',(*values,rid))
                 else:rid=db.execute('INSERT INTO gsn_projects(contract_number,contract_date,title,address,notes,client_id,client_name,phone,passport) VALUES(?,?,?,?,?,?,?,?,?)',values).lastrowid
-                if not self.executive.folder.text().strip():
-                    from .gsv_project_domain import ensure_folder
-                    self.executive.folder.setText(ensure_folder('gsn_projects',self.number.text().strip() or f'договор_{rid}',client['name']))
                 self.executive.save(rid)
                 db.execute("UPDATE gsn_projects SET contract_amount=? WHERE id=?",(self.amount.value(),rid))
             self.rid=rid;self.client_form.client_id=cid;self.executive.bind(rid);self.status.setText(f'Сохранено · договор {rid} · клиент {cid}');return True

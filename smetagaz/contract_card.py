@@ -55,9 +55,19 @@ class ContractCardDialog(QDialog):
         if not self.contract_id and not self.client_form.confirm_duplicate():return
         if self.save_data() and self.contract_id:self.set_locked(True)
     def open_folder(self):
+        """Папка договора создаётся только по кнопке: привязать существующую или создать новую «номер - адрес (ФИО)»."""
         if not self.contract_id and not self.save_data():return
         from .platform_utils import open_local
-        if self.executive.folder.text():open_local(self.executive.folder.text())
+        from .folder_ui import choose_folder
+        from .gsv_project_domain import folder_name
+        import os
+        current=self.executive.folder.text().strip()
+        if not current or not os.path.isdir(current):
+            path,create=choose_folder(self,'contracts',folder_name(self.inp_number.text().strip() or f'договор_{self.contract_id}',self.inp_object.text(),self.client_form.name.text()),current)
+            if not path:return
+            if create:os.makedirs(path,exist_ok=True)
+            self.executive.folder.setText(path);self.save_data();current=path
+        open_local(current)
     def load_data(self):
         if not self.contract_id and self.estimate_id:
             found=db.fetchone('SELECT id FROM contracts WHERE estimate_id=?',(self.estimate_id,))
@@ -91,11 +101,7 @@ class ContractCardDialog(QDialog):
                 rid=self.contract_id
                 if rid:db.execute('UPDATE contracts SET '+','.join(f'{f}=?' for f in fields)+' WHERE id=?',(*data,rid))
                 else:rid=db.execute('INSERT INTO contracts('+','.join(fields)+') VALUES('+','.join('?' for _ in fields)+')',data).lastrowid
-                self.equipment.save(rid);self.pipelines.save(rid)
-                if not self.executive.folder.text().strip():
-                    from .gsv_project_domain import ensure_folder
-                    self.executive.folder.setText(ensure_folder('contracts',self.inp_number.text().strip() or f'договор_{rid}',values['name']))
-                self.executive.save(rid)
+                self.equipment.save(rid);self.pipelines.save(rid);self.executive.save(rid)
                 if self.estimate_id:
                     from .data_services import link_client
                     link_client(db,'estimates',self.estimate_id,cid)

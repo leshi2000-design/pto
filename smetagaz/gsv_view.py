@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QTableView, QPushButton, QLabel, QLineEdit, QTextEdit, QComboBox,
     QDateEdit, QFileDialog, QDialog, QHeaderView, QMessageBox,
     QScrollArea, QFrame, QGridLayout, QGroupBox, QDoubleSpinBox, QSplitter, QCheckBox, QTableWidget, QTableWidgetItem,
-    QMenu, QApplication, QAbstractItemView, QListWidget, QListWidgetItem, QToolButton
+    QMenu, QApplication, QAbstractItemView, QListWidget, QListWidgetItem, QToolButton, QTreeWidget, QTreeWidgetItem
 )
 from PyQt6.QtCore import Qt, QDate, QAbstractTableModel, QModelIndex, pyqtSignal, QTimer
 from PyQt6.QtGui import QColor, QFont, QKeySequence, QShortcut, QPixmap, QIcon
@@ -565,6 +565,7 @@ class ProjectEditDialog(QDialog):
             self.setWindowTitle("Новый договор · проект ГСВ")
             self.setup_new_record()
             self.refresh_docs()
+            self.refresh_folder()
 
     # --- интерфейс ---
     def setup_ui(self):
@@ -679,6 +680,10 @@ class ProjectEditDialog(QDialog):
             opn.clicked.connect(lambda _=False, k=kind: self.open_document(k))
             self.doc_open[kind] = opn
             l_docs.addWidget(opn, r, 3)
+        self.lbl_folder = QLabel()
+        self.lbl_folder.setStyleSheet("color: #65758b;")
+        self.lbl_folder.setWordWrap(True)
+        l_docs.addWidget(self.lbl_folder, len(gsvdom.DOC_KINDS), 0, 1, 4)
         l_docs.setColumnStretch(1, 1)
         layout.addWidget(grp_docs)
         layout.addStretch()
@@ -698,6 +703,9 @@ class ProjectEditDialog(QDialog):
         self.btn_folder = QPushButton("Папка договора")
         self.btn_folder.clicked.connect(self.open_folder)
         btn_layout.addWidget(self.btn_folder)
+        self.btn_folder_change = QPushButton("Сменить папку…")
+        self.btn_folder_change.clicked.connect(self.change_folder)
+        btn_layout.addWidget(self.btn_folder_change)
         self.btn_edit_toggle = QPushButton("Изменить")
         self.btn_edit_toggle.clicked.connect(self.toggle_edit)
         if self.is_new:
@@ -803,6 +811,7 @@ class ProjectEditDialog(QDialog):
         self.reload_status_lists()
         self.setWindowTitle(f"{row['pd_number']} | {row['object_name'] or 'Без объекта'} | {row['client_name'] or 'Без заказчика'}")
         self.refresh_docs()
+        self.refresh_folder()
 
     def save_clicked(self):
         if self.is_new and not self.client_form.confirm_duplicate():
@@ -830,7 +839,6 @@ class ProjectEditDialog(QDialog):
                     values += [f'{seq:02}-{year:02} ГСВ', seq, year, f'{seq:02}-03/{year:02}']
                     rid = db.execute('INSERT INTO gsv_projects(' + ','.join(fields) + ') VALUES(' + ','.join('?' for _ in fields) + ')', values).lastrowid
                 gsvdom.set_project_statuses(db, rid, self.checked_status_ids())
-                gsvdom.project_folder(db, rid)
             self.project_id = rid
             self.is_new = False
             self.client_form.client_id = cid
@@ -841,6 +849,7 @@ class ProjectEditDialog(QDialog):
             self.btn_edit_toggle.setVisible(True)
             self.save_status.setText(f'Сохранено · {row[0]} · клиент №{cid}')
             self.refresh_docs()
+            self.refresh_folder()
             return True
         except Exception as e:
             QMessageBox.warning(self, 'Договор не сохранён', str(e))
@@ -865,6 +874,10 @@ class ProjectEditDialog(QDialog):
     def make_document(self, kind):
         if (self.is_new or self.is_editing_enabled) and not self.save_data():
             return
+        from .folder_ui import ensure_project_folder
+        if not ensure_project_folder(self, db, self.project_id):
+            return
+        self.refresh_folder()
         try:
             path = gsvdom.generate(db, self.project_id, kind)
         except Exception as e:
@@ -878,9 +891,26 @@ class ProjectEditDialog(QDialog):
         open_file_or_dir(gsvdom.doc_path(db, self.project_id, kind))
 
     def open_folder(self):
+        """Папка договора: если не привязана — предлагает привязать существующую или создать новую; иначе открывает."""
         if (self.is_new or self.is_editing_enabled) and not self.save_data():
             return
-        open_file_or_dir(gsvdom.project_folder(db, self.project_id))
+        from .folder_ui import ensure_project_folder
+        folder = ensure_project_folder(self, db, self.project_id)
+        self.refresh_folder()
+        if folder:
+            open_file_or_dir(folder)
+
+    def change_folder(self):
+        if (self.is_new or self.is_editing_enabled) and not self.save_data():
+            return
+        from .folder_ui import change_project_folder
+        change_project_folder(self, db, self.project_id)
+        self.refresh_folder()
+
+    def refresh_folder(self):
+        folder = gsvdom.project_folder(db, self.project_id) if self.project_id else ''
+        self.lbl_folder.setText(f"Папка договора: {folder}" if folder else "Папка договора не привязана — нажмите «Папка договора»")
+        self.lbl_folder.setToolTip(folder)
 
     def open_payments(self):
         if (self.is_new or self.is_editing_enabled) and not self.save_data():
@@ -891,58 +921,150 @@ class ProjectEditDialog(QDialog):
 
 
 class SideStatusBoard(QWidget):
+    """Дерево статусов: «Статус работы / Статус клиента» → статус (число проектов) → проекты по порядку № ПД."""
     project_selected = pyqtSignal(int)
+    hide_requested = pyqtSignal()
+    PROJECT_ROLE = Qt.ItemDataRole.UserRole
+    STATUS_ROLE = Qt.ItemDataRole.UserRole + 1
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedWidth(290)
+        self.setMinimumWidth(230)
+        self.setMaximumWidth(420)
+        self.dark_mode = False
+        self.expanded = set()
         layout = QVBoxLayout(self)
+        head = QHBoxLayout()
+        title = QLabel("<b>Статусы</b>")
+        head.addWidget(title)
+        head.addStretch()
+        collapse = QPushButton("Свернуть всё")
+        collapse.setFlat(True)
+        collapse.clicked.connect(self.collapse_all)
+        hide = QPushButton("◀ Скрыть")
+        hide.setFlat(True)
+        hide.setToolTip("Скрыть дерево статусов (вернуть — кнопкой «Дерево статусов» в панели)")
+        hide.clicked.connect(self.hide_requested.emit)
+        head.addWidget(collapse)
+        head.addWidget(hide)
+        layout.addLayout(head)
         self.txt_search = QLineEdit()
-        self.txt_search.setPlaceholderText("Поиск по статусам...")
+        self.txt_search.setPlaceholderText("Найти проект по № ПД или заказчику…")
+        self.txt_search.setClearButtonEnabled(True)
         self.txt_search.textChanged.connect(self.reload_data)
         layout.addWidget(self.txt_search)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        container = QWidget()
-        self.box_layout = QVBoxLayout(container)
-        scroll.setWidget(container)
-        layout.addWidget(scroll)
+        self.tree = QTreeWidget()
+        self.tree.setHeaderHidden(True)
+        self.tree.setIndentation(16)
+        self.tree.setUniformRowHeights(True)
+        self.tree.setStyleSheet("QTreeWidget::item { padding: 4px 2px; } QTreeWidget::item:selected, QTreeWidget::item:selected:!active { background: #2563eb; color: #ffffff; }")
+        self.tree.itemClicked.connect(self.on_clicked)
+        self.tree.itemDoubleClicked.connect(self.on_double_clicked)
+        self.tree.itemExpanded.connect(self.on_expanded)
+        self.tree.itemCollapsed.connect(self.on_collapsed)
+        layout.addWidget(self.tree, 1)
+        hint = QLabel("Нажмите на статус — раскроется список проектов. Двойной щелчок по проекту открывает договор.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        layout.addWidget(hint)
 
     def set_dark_mode(self, dark_mode):
         self.dark_mode = dark_mode
         self.reload_data()
 
-    def reload_data(self):
-        while self.box_layout.count():
-            item = self.box_layout.takeAt(0)
-            if item.widget(): item.widget().deleteLater()
-        for kind, title in (("work", "СТАТУС РАБОТЫ"), ("client", "СТАТУС КЛИЕНТА")):
-            grp = QGroupBox(title)
-            lay = QVBoxLayout(grp)
-            for sid, name, color in gsvdom.catalog(db, kind):
-                lay.addWidget(self.build_section(name, color, sid))
-            self.box_layout.addWidget(grp)
-        self.box_layout.addStretch()
-
-    def build_section(self, title, color, status_id):
-        frame = QFrame()
-        l = QVBoxLayout(frame)
-        l.setContentsMargins(0, 2, 0, 2)
+    def status_counts(self):
         search = self.txt_search.text().strip().lower()
-        query = ("SELECT p.id, p.pd_number, p.client_name FROM gsv_projects p JOIN gsv_project_statuses s ON s.project_id=p.id WHERE s.status_id = ?")
-        params = [status_id]
+        sql = ("SELECT s.status_id, count(*) FROM gsv_project_statuses s JOIN gsv_projects p ON p.id=s.project_id")
+        params = []
         if search:
-            query += " AND (LOWER(p.pd_number) LIKE ? OR LOWER(p.client_name) LIKE ?)"
-            params.extend([f"%{search}%", f"%{search}%"])
-        rows = db.fetchall(query + " ORDER BY p.id DESC LIMIT 31", tuple(params))
-        head = QLabel(f'<span style="color:{color}">●</span> <b>{title}</b> · {min(len(rows), 30)}{"+" if len(rows) > 30 else ""}')
-        head.setTextFormat(Qt.TextFormat.RichText)
-        l.addWidget(head)
-        for r in rows[:30]:
-            btn = QPushButton(f"{r[1]}\n{r[2] or 'Без имени'}")
-            btn.clicked.connect(lambda ch=False, pid=r[0]: self.project_selected.emit(pid))
-            l.addWidget(btn)
-        return frame
+            sql += " WHERE (LOWER(p.pd_number) LIKE ? OR LOWER(p.client_name) LIKE ?)"
+            params = [f"%{search}%"] * 2
+        return dict(db.fetchall(sql + " GROUP BY s.status_id", tuple(params)))
+
+    def reload_data(self, *_):
+        self.tree.blockSignals(True)
+        self.tree.clear()
+        counts = self.status_counts()
+        searching = bool(self.txt_search.text().strip())
+        for kind, title in (("work", "Статус работы"), ("client", "Статус клиента")):
+            group = QTreeWidgetItem([title])
+            font = group.font(0)
+            font.setBold(True)
+            group.setFont(0, font)
+            self.tree.addTopLevelItem(group)
+            for sid, name, color in gsvdom.catalog(db, kind):
+                n = counts.get(sid, 0)
+                if searching and not n:
+                    continue
+                pix = QPixmap(12, 12)
+                pix.fill(QColor(color))
+                item = QTreeWidgetItem([f"{name}  ({n})"])
+                item.setIcon(0, QIcon(pix))
+                item.setData(0, self.STATUS_ROLE, sid)
+                if not n:
+                    item.setForeground(0, QColor("#94a3b8"))
+                else:
+                    item.addChild(QTreeWidgetItem(["…"]))      # раскрывающая стрелка; проекты подгружаются при открытии
+                group.addChild(item)
+            group.setExpanded(True)
+        self.tree.blockSignals(False)
+        # раскрытые статусы остаются раскрытыми после обновления
+        for g in range(self.tree.topLevelItemCount()):
+            group = self.tree.topLevelItem(g)
+            for i in range(group.childCount()):
+                item = group.child(i)
+                sid = item.data(0, self.STATUS_ROLE)
+                if (sid in self.expanded or (searching and item.childCount())) and item.childCount():
+                    item.setExpanded(True)
+
+    def fill_projects(self, item):
+        sid = item.data(0, self.STATUS_ROLE)
+        item.takeChildren()
+        search = self.txt_search.text().strip().lower()
+        sql = ("SELECT p.id, p.pd_number, p.client_name FROM gsv_projects p JOIN gsv_project_statuses s ON s.project_id=p.id WHERE s.status_id = ?")
+        params = [sid]
+        if search:
+            sql += " AND (LOWER(p.pd_number) LIKE ? OR LOWER(p.client_name) LIKE ?)"
+            params.extend([f"%{search}%"] * 2)
+        rows = db.fetchall(sql + " ORDER BY coalesce(p.year_num,0) DESC, coalesce(p.seq_num,0) DESC, p.id DESC LIMIT 301", tuple(params))
+        for pid, pd, client in rows[:300]:
+            child = QTreeWidgetItem([f"{pd} · {client or 'Без имени'}"])
+            child.setData(0, self.PROJECT_ROLE, pid)
+            item.addChild(child)
+        if len(rows) > 300:
+            more = QTreeWidgetItem(["… показаны первые 300, остальные — в реестре"])
+            more.setFlags(Qt.ItemFlag.NoItemFlags)
+            item.addChild(more)
+
+    def on_expanded(self, item):
+        sid = item.data(0, self.STATUS_ROLE)
+        if sid is None:
+            return
+        self.expanded.add(sid)
+        self.tree.blockSignals(True)
+        self.fill_projects(item)
+        self.tree.blockSignals(False)
+
+    def on_collapsed(self, item):
+        sid = item.data(0, self.STATUS_ROLE)
+        if sid is not None:
+            self.expanded.discard(sid)
+
+    def on_clicked(self, item, _column=0):
+        if item.data(0, self.STATUS_ROLE) is not None and item.childCount():
+            item.setExpanded(not item.isExpanded())
+
+    def on_double_clicked(self, item, _column=0):
+        pid = item.data(0, self.PROJECT_ROLE)
+        if pid:
+            self.project_selected.emit(pid)
+
+    def collapse_all(self):
+        self.expanded.clear()
+        for g in range(self.tree.topLevelItemCount()):
+            group = self.tree.topLevelItem(g)
+            for i in range(group.childCount()):
+                group.child(i).setExpanded(False)
 
 
 class GsvProjectsView(QWidget):
@@ -966,7 +1088,7 @@ class GsvProjectsView(QWidget):
         self.btn_urgent.clicked.connect(self.toggle_urgent)
 
         self.txt_search = QLineEdit()
-        self.txt_search.setPlaceholderText("Поиск...")
+        self.txt_search.setPlaceholderText("Поиск по № ПД, объекту, заказчику…")
         self.txt_search.textChanged.connect(self.load_data)
 
         btn_tpl = QPushButton("Шаблоны документов")
@@ -980,20 +1102,30 @@ class GsvProjectsView(QWidget):
         btn_statuses = QPushButton("Статусы…")
         btn_statuses.clicked.connect(self.edit_statuses)
 
-        for w in [btn_add, btn_reports, self.btn_urgent, self.txt_search]: top_bar.addWidget(w)
-        top_bar.addStretch()
-        top_bar.addWidget(btn_import)
-        top_bar.addWidget(btn_statuses)
-        top_bar.addWidget(btn_tpl)
-        top_bar.addWidget(btn_tags)
-        top_bar.addWidget(btn_excel)
-        payments=QPushButton("Оплаты");payments.clicked.connect(self.open_payments);top_bar.addWidget(payments)
+        # Реестр всегда упорядочен по номеру проектной документации (год, затем порядковый номер)
+        self.order_desc = db.get_setting("gsvp_order_desc", "1") == "1"
+        self.btn_order = QPushButton()
+        self.btn_order.setToolTip("Реестр всегда упорядочен по номеру ПД. Нажмите, чтобы изменить направление.")
+        self.btn_order.clicked.connect(self.toggle_order)
+        self.btn_tree = QPushButton("Дерево статусов")
+        self.btn_tree.setCheckable(True)
+        self.btn_tree.setToolTip("Показать / скрыть дерево статусов слева")
+        self.btn_tree.toggled.connect(self.set_tree_visible)
+        self.txt_search.setMinimumWidth(260)
+        for w in [btn_add, btn_reports, self.btn_urgent, self.btn_order, self.btn_tree]: top_bar.addWidget(w)
+        top_bar.addWidget(self.txt_search, 1)
         layout.addLayout(top_bar)
+        tools_bar = QHBoxLayout()
+        payments=QPushButton("Оплаты");payments.clicked.connect(self.open_payments)
+        for w in (btn_import, btn_statuses, btn_tpl, btn_tags, btn_excel, payments): tools_bar.addWidget(w)
+        tools_bar.addStretch()
+        layout.addLayout(tools_bar)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         self.side_board = SideStatusBoard()
         self.side_board.set_dark_mode(self.dark_mode)
         self.side_board.project_selected.connect(self.open_edit_dialog)
+        self.side_board.hide_requested.connect(lambda: self.btn_tree.setChecked(False))
         splitter.addWidget(self.side_board)
 
         self.view_table = QTableView()
@@ -1010,6 +1142,9 @@ class GsvProjectsView(QWidget):
         splitter.addWidget(self.view_table)
         splitter.setStretchFactor(1, 1)
         layout.addWidget(splitter)
+        self.update_order_button()
+        self.btn_tree.setChecked(db.get_setting("gsvp_tree_visible", "1") == "1")
+        self.set_tree_visible(self.btn_tree.isChecked())
 
         # Full backups are managed by AutoBackupService in the main window.
 
@@ -1017,6 +1152,19 @@ class GsvProjectsView(QWidget):
         self.dark_mode = db.get_setting("is_dark", "0") == "1"
         self.model.set_dark_mode(self.dark_mode)
         self.side_board.set_dark_mode(self.dark_mode)
+
+    def set_tree_visible(self, visible):
+        self.side_board.setVisible(visible)
+        db.set_setting("gsvp_tree_visible", "1" if visible else "0")
+
+    def update_order_button(self):
+        self.btn_order.setText("№ ПД ↓ новые сверху" if self.order_desc else "№ ПД ↑ старые сверху")
+
+    def toggle_order(self):
+        self.order_desc = not self.order_desc
+        db.set_setting("gsvp_order_desc", "1" if self.order_desc else "0")
+        self.update_order_button()
+        self.load_data()
 
     def toggle_urgent(self):
         self.urgent_filter_active = self.btn_urgent.isChecked()
@@ -1072,5 +1220,6 @@ class GsvProjectsView(QWidget):
             conditions.append('(LOWER(pd_number) LIKE ? OR LOWER(object_name) LIKE ? OR LOWER(client_name) LIKE ?)');params.extend(['%'+q+'%']*3)
         if self.urgent_filter_active:conditions.append("coalesce(act_signed,0)=0 AND date(due_date) <= date('now','+5 days')")
         if conditions:sql+=' WHERE '+' AND '.join(conditions)
-        rows=self.pager.fetch(sql+' ORDER BY id DESC',params)
+        direction='DESC' if self.order_desc else 'ASC'
+        rows=self.pager.fetch(sql+f' ORDER BY coalesce(year_num,0) {direction}, coalesce(seq_num,0) {direction}, id {direction}',params)
         self.model.update_data(rows);self.side_board.reload_data()

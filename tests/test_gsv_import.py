@@ -78,7 +78,7 @@ def test_full_import(d, tmp_path):
     p = dict(zip(cols, row))
     assert p['object_name'] == 'Жилой дом' and p['client_address'] == 'г. Минск, ул. Лесная 5' and p['contract_number'] == '01-03/26'
     assert (p['contract_date'], p['act_date'], p['due_date'], p['cost'], p['tu_text']) == ('2026-01-12', '2026-02-10', '2026-02-11', 250, '№ 15 от 05.01.2026')
-    assert (p['seq_num'], p['year_num'], p['contract_signed'], p['act_signed']) == (1, 26, 1, 1) and p['project_folder']
+    assert (p['seq_num'], p['year_num'], p['contract_signed'], p['act_signed']) == (1, 26, 1, 1) and not p['project_folder']      # папку пользователь привязывает кнопкой
     assert g.project_statuses(d, p['id'], 'work') == ['Сделано'] and g.project_statuses(d, p['id'], 'client') == ['Акт подписан']
     client = d.fetchone('SELECT name,phone,address,passport FROM crm.clients WHERE id=?', (p['client_id'],))
     assert client == ('Иванов Иван Иванович', '375291112233', 'г. Минск, ул. Лесная 5', 'МР 1234567, выдан Фрунзенским РУВД 04.03.2015')
@@ -124,6 +124,7 @@ def test_tu_tag_and_export(d, tmp_path):
     headers, rows, _ = imp.read_table(path)
     imp.import_rows(d, imp.prepare(d, rows, imp.auto_map(headers)))
     pid = d.fetchone('SELECT id FROM gsv_projects')[0]
+    g.link_folder(d, pid, tmp_path / 'папка проекта', create=True)
     assert g.project_tags(d, pid)['ТУ'] == '№ 15 от 05.01.2026'
     ws = openpyxl.load_workbook(g.generate(d, pid, 'card')).active
     assert any(ws.cell(r, 2).value == '№ 15 от 05.01.2026' for r in range(1, ws.max_row + 1))

@@ -18,13 +18,16 @@ def d(tmp_path, monkeypatch):
     d.close()
 
 
-def make_project(d, **extra):
+def make_project(d, link=True, **extra):
     cid = d.execute("INSERT INTO crm.clients(name,phone,address,passport,passport_issuer,passport_date) VALUES('Иванов Иван Иванович','375291112233 (основной); 375447778899 (жена)','г. Минск, ул. Лесная 5','МР 1234567','Фрунзенский РУВД','2015-03-04')").lastrowid
     cols = dict(pd_number='01-26 ГСВ', seq_num=1, year_num=26, object_name='Жилой дом', address='д. Ключи', client_name='Иванов Иван Иванович', client_id=cid,
                 contract_number='01-03/26', contract_date='2026-11-12', due_date='2026-12-12', act_date='2026-12-10', cost=250, notes='Срочно',
                 contract_signed=1, act_signed=1)
     cols.update(extra)
-    return d.execute(f"INSERT INTO gsv_projects({','.join(cols)}) VALUES({','.join('?' for _ in cols)})", tuple(cols.values())).lastrowid
+    pid = d.execute(f"INSERT INTO gsv_projects({','.join(cols)}) VALUES({','.join('?' for _ in cols)})", tuple(cols.values())).lastrowid
+    if link:      # папку привязывает пользователь кнопкой; для тестов документов привязываем сразу
+        g.link_folder(d, pid, d.db_name.replace('smetagaz.db', f'folder_{pid}'), create=True)
+    return pid
 
 
 def test_defaults_statuses_and_migration(d):
@@ -75,7 +78,7 @@ def test_word_documents_and_regeneration(d):
     path = g.generate(d, pid, 'contract')
     text = '\n'.join(p.text for p in docx.Document(path).paragraphs)
     assert '01-03/26' in text and '12 ноября 2026г.' in text and 'Иванов Иван Иванович' in text and '{' not in text
-    assert os.path.dirname(path).endswith('01-26 ГСВ Иванов Иван Иванович') or 'Проекты ГСВ' in path
+    assert os.path.dirname(path).endswith(f'folder_{pid}')
     assert g.doc_state(d, pid, 'contract') == 'fresh'
     d.execute("UPDATE gsv_projects SET cost=300 WHERE id=?", (pid,))
     assert g.doc_state(d, pid, 'contract') == 'stale'             # данные изменились — нужна кнопка «переформировать»
@@ -152,3 +155,40 @@ def test_calendar_marks_projects_with_client_name(d):
     assert [(e['kind'], e['title']) for e in events] == [('contract', 'Заключение договора Иванов И.И. (не подписан)')]
     acts = a.events_between(d, date(2026, 12, 10), date(2026, 12, 10), date(2026, 11, 1))
     assert acts[0]['title'] == 'Подписан акт Иванов И.И.'
+
+
+def test_folder_is_never_created_automatically(d):
+    pid = make_project(d, link=False)
+    assert g.project_folder(d, pid) == ''
+    with pytest.raises(ValueError, match='папку договора'):
+        g.generate(d, pid, 'contract')
+    assert not (g.PROJECTS_DIR / 'Проекты ГСВ').exists()
+
+
+def test_new_folder_name_is_pd_address_client(d):
+    pid = make_project(d, link=False, address='д. Ключи, уч. 12')
+    assert g.project_folder_name(d, pid) == '01-26 ГСВ - д. Ключи, уч. 12 (Иванов Иван Иванович)'
+    assert g.folder_name('01-26 ГСВ', 'ул. Лесная/5: «А»', 'Иванов И.') == '01-26 ГСВ - ул. Лесная_5_ «А» (Иванов И.)'
+    d.execute('UPDATE gsv_projects SET address=NULL WHERE id=?', (pid,))
+    assert g.project_folder_name(d, pid).startswith('01-26 ГСВ - г. Минск, ул. Лесная 5')        # без адреса объекта берётся адрес клиента
+    path = g.link_folder(d, pid, g.PROJECTS_DIR / 'Проекты ГСВ' / g.project_folder_name(d, pid), create=True)
+    assert os.path.isdir(path) and g.project_folder(d, pid) == path
+    with pytest.raises(ValueError):
+        g.link_folder(d, pid, str(g.PROJECTS_DIR / 'нет такой'))
+
+
+def test_old_empty_auto_folders_are_unlinked_once(d, tmp_path):
+    empty = g.PROJECTS_DIR / 'Проекты ГСВ' / 'пустая'
+    filled = g.PROJECTS_DIR / 'Проекты ГСВ' / 'с файлами'
+    empty.mkdir(parents=True)
+    filled.mkdir(parents=True)
+    (filled / 'a.txt').write_text('x')
+    own = tmp_path / 'моя папка'
+    own.mkdir()
+    a = make_project(d, link=False, project_folder=str(empty))
+    b = make_project(d, link=False, pd_number='02-26 ГСВ', seq_num=2, project_folder=str(filled))
+    c = make_project(d, link=False, pd_number='03-26 ГСВ', seq_num=3, project_folder=str(own))
+    d.set_setting('gsvp_folders_unlinked', '0')
+    assert g.unlink_empty_auto_folders(d) == 1
+    assert g.project_folder(d, a) == '' and not empty.exists()
+    assert g.project_folder(d, b) == str(filled) and g.project_folder(d, c) == str(own)      # непустые и чужие папки не трогаются

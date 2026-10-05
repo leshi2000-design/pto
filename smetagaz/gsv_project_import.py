@@ -251,7 +251,6 @@ def import_rows(db, prepared, on_exists='skip', infer_statuses=True):
                     if infer_statuses:
                         names = ['Акт подписан', 'Сделано'] if act else ['Договор подписан'] if contract else ['Договор не подписан']
                         gd.set_project_statuses(db, pid, [ids[n] for n in names if n in ids])
-                gd.project_folder(db, pid)
         except Exception as e:
             report['errors'].append((p['row'], str(e)))
     return report

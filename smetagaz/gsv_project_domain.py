@@ -189,6 +189,7 @@ def migrate(db):
                        (int(client in ('Подписан', 'Оплачен')), int(bool(act)), pid))
             set_project_statuses(db, pid, project_status_ids(db, pid))     # текстовые копии статусов получают новые названия
         db.set_setting('gsvp_migrated', '1')
+    unlink_empty_auto_folders(db)
 
 
 def catalog(db, kind):
@@ -539,24 +540,72 @@ def safe_name(text):
     return re.sub(r'\s+', ' ', re.sub(r'[\\/:*?"<>|]', '_', str(text or '')).strip())[:80] or 'без_названия'
 
 
-def ensure_folder(section, number, client_name=''):
-    """Создаёт папку документов договора в каталоге своего раздела и возвращает путь."""
-    path = PROJECTS_DIR / SECTION_DIRS[section] / safe_name(f'{str(number).replace("/", "-")} {client_name}'.strip())
-    path.mkdir(parents=True, exist_ok=True)
-    return str(path)
+def folder_name(number, address='', client=''):
+    """Имя новой папки договора: «01-26 ГСВ - адрес объекта (ФИО клиента)»."""
+    name = str(number or '').strip().replace('/', '-')
+    if str(address or '').strip():
+        name += f' - {" ".join(str(address).split())[:90]}'
+    if str(client or '').strip():
+        name += f' ({" ".join(str(client).split())})'
+    return safe_name(name)
+
+
+def section_root(section):
+    return PROJECTS_DIR / SECTION_DIRS[section]
+
+
+def project_folder_name(db, pid):
+    """Предлагаемое имя папки проекта: № ПД - адрес объекта (ФИО клиента)."""
+    row = db.fetchone('SELECT p.pd_number,p.address,p.client_address,(SELECT address FROM crm.clients WHERE id=p.client_id),p.object_name,p.client_name '
+                      'FROM gsv_projects p WHERE p.id=?', (pid,))
+    if not row:
+        raise ValueError('Сначала сохраните договор')
+    # адрес объекта; если не заполнен — адрес клиента, затем наименование объекта
+    return folder_name(row[0], row[1] or row[2] or row[3] or row[4], row[5])
 
 
 def project_folder(db, pid):
-    row = db.fetchone('SELECT project_folder,pd_number,client_name FROM gsv_projects WHERE id=?', (pid,))
+    """Привязанная папка проекта или '' — сама по себе папка не создаётся (только по кнопке «Папка договора»)."""
+    row = db.fetchone('SELECT project_folder FROM gsv_projects WHERE id=?', (pid,))
     if not row:
         raise ValueError('Сначала сохраните договор')
-    folder = row[0]
-    if folder:
-        os.makedirs(folder, exist_ok=True)
-        return folder
-    folder = ensure_folder('gsv_projects', row[1], row[2])
-    db.execute('UPDATE gsv_projects SET project_folder=? WHERE id=?', (folder, pid))
-    return folder
+    return row[0] if row[0] and os.path.isdir(row[0]) else ''
+
+
+def link_folder(db, pid, path, create=False):
+    """Привязывает к проекту существующую папку или (create=True) создаёт новую."""
+    path = str(path)
+    if create:
+        os.makedirs(path, exist_ok=True)
+    if not os.path.isdir(path):
+        raise ValueError('Папка не найдена: ' + path)
+    db.execute('UPDATE gsv_projects SET project_folder=? WHERE id=?', (path, pid))
+    return path
+
+
+def unlink_empty_auto_folders(db):
+    """Однократно отвязывает пустые папки, созданные программой автоматически ранее (непустые не трогаются)."""
+    if db.get_setting('gsvp_folders_unlinked', '0') == '1':
+        return 0
+    removed = 0
+    root = str(PROJECTS_DIR)
+    candidates = [('gsv_projects', pid, p) for pid, p in db.fetchall("SELECT id,project_folder FROM gsv_projects WHERE coalesce(project_folder,'')<>''")]
+    candidates += [('executive_objects', rid, p) for rid, p in db.fetchall("SELECT id,folder_path FROM executive_objects WHERE coalesce(folder_path,'')<>''")]
+    for table, rid, path in candidates:
+        if not str(path).startswith(root):
+            continue
+        try:
+            if os.path.isdir(path) and not os.listdir(path):
+                os.rmdir(path)
+            elif os.path.isdir(path):
+                continue
+        except OSError:
+            continue
+        column = 'folder_path' if table == 'executive_objects' else 'project_folder'
+        db.execute(f'UPDATE {table} SET {column}=? WHERE id=?', ('', rid))
+        removed += 1
+    db.set_setting('gsvp_folders_unlinked', '1')
+    return removed
 
 
 # --- ДОКУМЕНТЫ -------------------------------------------------------------------------------
@@ -584,6 +633,8 @@ def generate(db, pid, kind):
     if kind == 'act' and not tags['ДАТА_АКТА_С']:
         raise ValueError('Укажите дату акта в карточке договора')
     folder = project_folder(db, pid)
+    if not folder:
+        raise ValueError('Сначала привяжите или создайте папку договора кнопкой «Папка договора»')
     template = template_path(db, kind)
     prefix = DOC_KINDS[kind][3]
     ext = '.xlsx' if kind == 'card' else '.docx'
