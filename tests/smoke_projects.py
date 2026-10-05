@@ -66,3 +66,15 @@ from datetime import date
 ev=a.events_between(db,date(2026,11,13),date(2026,11,13));assert any(e['title'].startswith('Заключение договора Иванов И.И.') for e in ev)
 print('PROJECTS GUI OK: client-first contract, 30-day due date, locked cards, multi-status editor, Word/Excel documents with regenerate flag, client files, calendar')
 for w in (p,q,r,n,n2,c,c2,view):w.close()
+# --- импорт из Excel ---
+import sys as _sys
+_sys.path.insert(0,str(Path(__file__).resolve().parent))
+from test_gsv_import import make_xlsx,ROWS
+from smetagaz.gsv_import_view import ImportProjectsDialog
+xlsx=Path(folder.name)/'clients.xlsx';make_xlsx(xlsx,ROWS[1:3])
+imp_dialog=ImportProjectsDialog(view,str(xlsx));assert [c.currentData() for c in imp_dialog.combos][:4]==['pd_number','object_name','client_address','client_name']
+imp_dialog.check();assert imp_dialog.preview.rowCount()==2 and imp_dialog.run.isEnabled()
+QMessageBox.question=lambda *a,**k:QMessageBox.StandardButton.Yes;QMessageBox.information=lambda *a,**k:None
+imp_dialog.do_import();assert db.fetchone("SELECT count(*) FROM gsv_projects WHERE object_name IN ('Баня','Гараж')")[0]==2
+card=ProjectEditDialog(db.fetchone("SELECT id FROM gsv_projects WHERE object_name='Гараж'")[0]);assert card.txt_tu.text()=='ТУ 99' and not card.txt_tu.isEnabled()
+print('IMPORT GUI OK: column mapping, preview, import, TU field')

@@ -154,6 +154,7 @@ class StatusPage(QWidget):
         root = QHBoxLayout(self)
         left = QVBoxLayout()
         self.list = QListWidget()
+        self.list.setStyleSheet('QListWidget::item { padding: 7px 8px; border-radius: 6px; margin: 1px 2px; } QListWidget::item:hover { background: rgba(37,99,235,0.12); } QListWidget::item:selected, QListWidget::item:selected:active, QListWidget::item:selected:!active { background: #2563eb; color: #ffffff; font-weight: 600; }')
         left.addWidget(self.list, 1)
         bar = QHBoxLayout()
         self.btn_new = QPushButton("＋ Новый")
@@ -602,6 +603,10 @@ class ProjectEditDialog(QDialog):
         l_info.addWidget(self.txt_object, 0, 1)
         l_info.addWidget(QLabel("Адрес объекта:"), 1, 0)
         l_info.addWidget(self.txt_address, 1, 1)
+        self.txt_tu = QLineEdit()
+        self.txt_tu.setPlaceholderText("Номер и дата технических условий, выданных клиенту, например: № 123 от 01.02.2026")
+        l_info.addWidget(QLabel("ТУ:"), 2, 0)
+        l_info.addWidget(self.txt_tu, 2, 1)
         layout.addWidget(grp_info)
 
         self.client_form = ClientForm()
@@ -753,7 +758,7 @@ class ProjectEditDialog(QDialog):
         self.txt_contract_num.setText(f"XX-03/{curr_year:02d} (авто)")
 
     def editable_widgets(self):
-        return [self.txt_object, self.txt_address, self.txt_notes, self.dt_contract, self.chk_contract_signed, self.dt_due,
+        return [self.txt_object, self.txt_address, self.txt_tu, self.txt_notes, self.dt_contract, self.chk_contract_signed, self.dt_due,
                 self.dt_act, self.chk_act, self.spn_cost, self.lst_work, self.lst_client, self.client_form]
 
     def set_fields_enabled(self, enabled):
@@ -780,6 +785,7 @@ class ProjectEditDialog(QDialog):
         self.txt_object.setText(row["object_name"] or "")
         self.txt_address.setText(row["address"] or "")
         self.txt_notes.setPlainText(row["notes"] or "")
+        self.txt_tu.setText(row.get("tu_text") or "")
         if row["contract_date"]:
             self.dt_contract.blockSignals(True)
             self.dt_contract.setDate(QDate.fromString(row["contract_date"], "yyyy-MM-dd"))
@@ -809,11 +815,11 @@ class ProjectEditDialog(QDialog):
             with db.transaction():
                 cid = save_client(db, client, self.client_form.client_id)
                 fields = ['object_name', 'address', 'client_name', 'phone', 'passport', 'contract_date', 'due_date', 'act_date', 'cost', 'notes',
-                          'client_id', 'client_address', 'contract_signed', 'act_signed']
+                          'client_id', 'client_address', 'contract_signed', 'act_signed', 'tu_text']
                 values = [self.txt_object.text().strip(), self.txt_address.text().strip(), client['name'], client['phone'], client['passport'],
                           self.dt_contract.date().toString('yyyy-MM-dd'), self.dt_due.date().toString('yyyy-MM-dd'), self.dt_act.value() or None,
                           self.spn_cost.value(), self.txt_notes.toPlainText(), cid, client['address'],
-                          int(self.chk_contract_signed.isChecked()), int(self.chk_act.isChecked())]
+                          int(self.chk_contract_signed.isChecked()), int(self.chk_act.isChecked()), self.txt_tu.text().strip()]
                 rid = self.project_id
                 if rid:
                     db.execute('UPDATE gsv_projects SET ' + ','.join(f'{f}=?' for f in fields) + ' WHERE id=?', (*values, rid))
@@ -969,11 +975,14 @@ class GsvProjectsView(QWidget):
         btn_excel.clicked.connect(lambda: export_all_to_excel(self))
         btn_tags = QPushButton("Теги")
         btn_tags.clicked.connect(self.show_tag_reference)
+        btn_import = QPushButton("Импорт из Excel…")
+        btn_import.clicked.connect(self.import_excel)
         btn_statuses = QPushButton("Статусы…")
         btn_statuses.clicked.connect(self.edit_statuses)
 
         for w in [btn_add, btn_reports, self.btn_urgent, self.txt_search]: top_bar.addWidget(w)
         top_bar.addStretch()
+        top_bar.addWidget(btn_import)
         top_bar.addWidget(btn_statuses)
         top_bar.addWidget(btn_tpl)
         top_bar.addWidget(btn_tags)
@@ -1020,6 +1029,11 @@ class GsvProjectsView(QWidget):
             PaymentsDialog('gsv_projects',self.model.get_row_record(row)[0],self).exec();self.load_data()
     def show_tag_reference(self):
         TemplateSettingsDialog(self).exec()
+
+    def import_excel(self):
+        from .gsv_import_view import ImportProjectsDialog
+        ImportProjectsDialog(self).exec()
+        self.load_data()
 
     def edit_statuses(self):
         StatusEditorDialog(self).exec()

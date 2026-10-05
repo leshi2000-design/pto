@@ -56,7 +56,7 @@ class CatalogPage(QWidget):
     def __init__(self,kind,parent=None):
         super().__init__(parent);self.kind=kind;self.is_tag=kind=='tags';self.table='task_tags' if self.is_tag else 'task_statuses';self.current_id=None;self.color=DEFAULT_TAG_COLOR
         root=QHBoxLayout(self);left=QVBoxLayout();self.search=QLineEdit();self.search.setPlaceholderText('Поиск по названию');left.addWidget(self.search)
-        self.list=QListWidget();self.list.setIconSize(QSize(16,16));left.addWidget(self.list,1);bar=QHBoxLayout()
+        self.list=QListWidget();self.list.setIconSize(QSize(16,16));self.list.setStyleSheet('QListWidget::item { padding: 7px 8px; border-radius: 6px; margin: 1px 2px; } QListWidget::item:hover { background: rgba(37,99,235,0.12); } QListWidget::item:selected, QListWidget::item:selected:active, QListWidget::item:selected:!active { background: #2563eb; color: #ffffff; font-weight: 600; }');left.addWidget(self.list,1);bar=QHBoxLayout()
         self.btn_new=QPushButton('＋ Новый тег' if self.is_tag else '＋ Новый статус');self.btn_new.setProperty('type','primary');bar.addWidget(self.btn_new)
         if not self.is_tag:
             self.btn_up=QPushButton('▲');self.btn_down=QPushButton('▼')
