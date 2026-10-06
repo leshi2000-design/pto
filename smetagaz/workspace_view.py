@@ -64,21 +64,58 @@ class RecordDialog(QDialog):
         fields={'crm.clients':['name','phone','address','passport','passport_issuer','passport_date','notes'],'gsn_projects':['title','address','notes'],'welders':['name','certificate','notes'],'writeoffs':['title','notes']}[table]
         row=db.fetchone(f'SELECT {",".join(fields)} FROM {table} WHERE id=?',(rid,)) if rid else None
         for i,k in enumerate(fields):
-            inp=QLineEdit(str(row[i] or '') if row else '');self.inputs[k]=inp;form.addRow(LABELS.get(k) or {'passport_issuer':'Кем выдан','passport_date':'Дата выдачи (ГГГГ-ММ-ДД)'}.get(k,k),inp)
+            value=str(row[i] or '') if row else ''
+            if table=='crm.clients' and k=='phone':
+                from .domain_widgets import PhonesEditor
+                inp=PhonesEditor();inp.setText(value)
+            elif table=='crm.clients' and k=='passport_date':
+                from .domain_widgets import OptionalDate
+                inp=OptionalDate();inp.set_value(value)
+            else:inp=QLineEdit(value)
+            self.inputs[k]=inp;form.addRow(LABELS.get(k) or {'passport_issuer':'Кем выдан','passport_date':'Дата выдачи'}.get(k,k),inp)
         if table=='crm.clients' and rid:
             # карточка клиента: его данные и файлы папок всех его договоров
             from PyQt6.QtWidgets import QTabWidget
             from .client_files import ClientFilesWidget
             data=QWidget();data.setLayout(form);tabs=QTabWidget();self.tabs=tabs;tabs.addTab(data,'Данные клиента');tabs.addTab(ClientFilesWidget(rid),'Файлы договоров');layout.addWidget(tabs);self.resize(780,560)
         else:layout.addLayout(form)
-        buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Save|QDialogButtonBox.StandardButton.Cancel);buttons.accepted.connect(self.save);buttons.rejected.connect(self.reject);layout.addWidget(buttons)
+        buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Save|QDialogButtonBox.StandardButton.Cancel);buttons.accepted.connect(self.save);buttons.rejected.connect(self.reject)
+        if table=='crm.clients' and rid:
+            remove=buttons.addButton('Удалить клиента',QDialogButtonBox.ButtonRole.DestructiveRole);remove.clicked.connect(self.remove_client)
+        layout.addWidget(buttons)
+    def field_text(self,key):
+        from .domain_widgets import OptionalDate
+        w=self.inputs[key]
+        return w.value() if isinstance(w,OptionalDate) else w.text().strip()
+    def remove_client(self):
+        if confirm_delete_client(self,self.rid):self.done(2)
     def save(self):
-        fields=list(self.inputs);values=[self.inputs[k].text().strip() for k in fields]
+        fields=list(self.inputs);values=[self.field_text(k) for k in fields]
         if not values[0]:QMessageBox.warning(self,'Ошибка','Укажите название / имя');return
+        if self.table=='crm.clients':
+            key=' '.join(values[0].split()).casefold()
+            twin=[r for r in db.fetchall('SELECT id,name FROM crm.clients WHERE id IS NOT ?',(self.rid,)) if ' '.join((r[1] or '').split()).casefold()==key]
+            if twin and QMessageBox.question(self,'Такой клиент уже есть','Клиент с таким ФИО уже есть в базе. Всё равно сохранить?')!=QMessageBox.StandardButton.Yes:return
         with db.transaction():
             if self.rid:db.execute(f'UPDATE {self.table} SET '+','.join(f'{k}=?' for k in fields)+' WHERE id=?',(*values,self.rid))
             else:self.rid=db.execute(f'INSERT INTO {self.table} ({",".join(fields)}) VALUES ({",".join("?" for _ in fields)})',values).lastrowid
         self.accept()
+
+def confirm_delete_client(parent,cid):
+    """Подтверждение и удаление клиента с обезличиванием его договоров. True — клиент удалён."""
+    from .data_services import client_links,delete_client
+    row=db.fetchone('SELECT name FROM crm.clients WHERE id=?',(cid,))
+    if not row:return False
+    links=client_links(db,cid)
+    text=f'Удалить клиента «{row[0]}»?'
+    if links:
+        text+='\n\nКлиент используется:\n'+'\n'.join(f'• {label}: {n}' for label,n in links.items())
+        text+='\n\nДоговоры, суммы, оплаты и файлы останутся, но ФИО, телефон, паспорт и адрес клиента в них будут стёрты. Это нельзя отменить.'
+    else:text+='\n\nЭто нельзя отменить.'
+    if QMessageBox.question(parent,'Удаление клиента',text)!=QMessageBox.StandardButton.Yes:return False
+    try:delete_client(db,cid)
+    except ValueError as e:QMessageBox.warning(parent,'Удаление клиента',str(e));return False
+    return True
 
 class WorkspaceView(QWidget):
     def __init__(self,initial='estimates',picker=False):
@@ -93,19 +130,24 @@ class WorkspaceView(QWidget):
         self.timer=QTimer(self);self.timer.setSingleShot(True);self.timer.setInterval(300);self.timer.timeout.connect(self.reset)
         self.query.textChanged.connect(lambda:self.timer.start());self.source.currentIndexChanged.connect(self.reset)
         actions=QHBoxLayout();layout.addLayout(actions)
-        for label,fn in [('Открыть',self.open),('Создать',self.create),('Связать с клиентом',self.assign),('Экспорт…',self.export)]:
+        for label,fn in [('Открыть / изменить',self.open),('Создать',self.create),('Связать с клиентом',self.assign),('Экспорт…',self.export)]:
             b=QPushButton(label);b.clicked.connect(fn);actions.addWidget(b)
+        self.delete_button=QPushButton('Удалить клиента');self.delete_button.setProperty('type','danger');self.delete_button.clicked.connect(self.delete_client);actions.addWidget(self.delete_button)
         self.table=QTableWidget();self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers);self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows);self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection);self.table.cellDoubleClicked.connect(lambda *_:self.open());layout.addWidget(self.table)
         nav=QHBoxLayout();layout.addLayout(nav);self.prev=QPushButton('← Назад');self.next=QPushButton('Далее →');self.label=QLabel();nav.addWidget(self.prev);nav.addWidget(self.label);nav.addWidget(self.next)
         self.prev.clicked.connect(lambda:self.page(-1));self.next.clicked.connect(lambda:self.page(1))
         self.source.setEnabled(not picker);self.load_data()
     def reset(self,*_):self.offset=0;self.load_data()
+    def delete_client(self):
+        rid=self.selected_id()
+        if rid and self.source.currentData()=='crm.clients' and confirm_delete_client(self,rid):self.load_data()
     def page(self,direction):self.offset=max(0,self.offset+direction*self.page_size);self.load_data()
     def selected_id(self):
         row=self.table.currentRow();return self.table.item(row,0).data(Qt.ItemDataRole.UserRole) if row>=0 else None
     def load_data(self):
         source=self.source.currentData()
         if not source:return
+        self.delete_button.setVisible(source=='crm.clients' and not self.picker)
         if source=='crm.clients':cols=['id','name','phone'];fields=['name','phone']
         else:
             _,title,fields=SOURCES[source];cols=list(dict.fromkeys(['id',title,*fields[:3]]))

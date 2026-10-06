@@ -142,3 +142,42 @@ def link_client(db, table, rid, cid):
             phone='client_phone' if table=='estimates' else 'phone'
             db.execute(f'UPDATE {table} SET client_name=?,{phone}=? WHERE id=?',(*row,rid))
         if table=='estimates': db.execute('UPDATE contracts SET client_id=? WHERE estimate_id=?',(cid,rid))
+
+
+# --- Удаление клиента ---------------------------------------------------------------------------------------------
+CLIENT_LINKS = [
+    ('estimates', 'Сметы', ('client_name', 'client_phone')),
+    ('contracts', 'Монтаж ГСВ', ('client_name', 'client_phone', 'client_address', 'passport_series_number', 'passport_issued_by', 'passport_issue_date')),
+    ('gsv_projects', 'Проекты ГСВ', ('client_name', 'phone', 'passport', 'client_address')),
+    ('gsn_projects', 'Монтаж ГСН', ('client_name', 'phone', 'passport')),
+    ('kanban_tasks', 'Задачи', ()),
+    ('calendar_events', 'События календаря', ()),
+    ('writeoffs', 'Списания', ()),
+]
+
+
+def client_links(db, cid):
+    """{раздел: число записей}, где используется клиент."""
+    return {label: n for table, label, _cols in CLIENT_LINKS if (n := db.fetchone(f'SELECT count(*) FROM {table} WHERE client_id=?', (cid,))[0])}
+
+
+def delete_client(db, cid):
+    """Удаляет клиента и обезличивает связанные записи: связь снимается, а ФИО, телефон, паспорт и адрес в договорах и сметах очищаются.
+
+    Очистка обязательна: иначе при следующем запуске программа заново создала бы клиента по имени из сметы или проекта.
+    Сами договоры, суммы, оплаты и документы остаются. Возвращает {раздел: число записей}.
+    """
+    if not db.fetchone('SELECT 1 FROM crm.clients WHERE id=?', (cid,)):
+        raise ValueError('Клиент не найден')
+    links = client_links(db, cid)
+    with db.transaction():
+        for table, _label, cols in CLIENT_LINKS:
+            columns = {r[1] for r in db.fetchall(f'PRAGMA table_info({table})')}
+            blank = ','.join(f"{c}=''" for c in cols if c in columns)
+            db.execute(f'UPDATE {table} SET client_id=NULL' + (',' + blank if blank else '') + ' WHERE client_id=?', (cid,))
+        db.execute('DELETE FROM crm.clients WHERE id=?', (cid,))
+    try:
+        db.execute('VACUUM crm')        # физически убирает удалённые данные из файла clients.db
+    except Exception:
+        pass
+    return links

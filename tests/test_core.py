@@ -115,3 +115,30 @@ def test_search_paging_and_reopen(database):
     assert len(first)==len(second)==100
     assert not {r[1] for r in first}&{r[1] for r in second}
     database.init_db();assert len([r for r in search(database,'газовая',500) if r[0]=='materials'])==215
+
+
+def test_delete_client_detaches_and_erases_personal_copies(tmp_path):
+    from smetagaz.database import DatabaseManager
+    from smetagaz.data_services import client_links, delete_client
+    d = DatabaseManager(tmp_path / 'smetagaz.db')
+    d.init_db()
+    cid = d.execute("INSERT INTO crm.clients(name,phone,passport) VALUES('Иванов Иван','123','МР 1')").lastrowid
+    keep = d.execute("INSERT INTO crm.clients(name) VALUES('Другой')").lastrowid
+    est = d.execute("INSERT INTO estimates(title,total,client_id,client_name,client_phone) VALUES('Смета',10,?,'Иванов Иван','123')", (cid,)).lastrowid
+    con = d.execute("INSERT INTO contracts(contract_number,client_id,client_name,client_phone,passport_series_number,client_address) VALUES('1',?,'Иванов Иван','123','МР 1','Минск')", (cid,)).lastrowid
+    d.execute("INSERT INTO gsv_projects(pd_number,client_id,client_name,phone,passport) VALUES('01-26 ГСВ',?,'Иванов Иван','123','МР 1')", (cid,))
+    d.execute("INSERT INTO kanban_tasks(title,client_id) VALUES('Позвонить',?)", (cid,))
+    assert client_links(d, cid) == {'Сметы': 1, 'Монтаж ГСВ': 1, 'Проекты ГСВ': 1, 'Задачи': 1}
+    delete_client(d, cid)
+    assert d.fetchone('SELECT count(*) FROM crm.clients')[0] == 1 and d.fetchone('SELECT id FROM crm.clients')[0] == keep
+    assert d.fetchone('SELECT client_id,client_name,client_phone FROM estimates WHERE id=?', (est,)) == (None, '', '')
+    assert d.fetchone('SELECT client_id,client_name,passport_series_number,client_address FROM contracts WHERE id=?', (con,)) == (None, '', '', '')
+    assert d.fetchone('SELECT client_id,client_name,phone,passport FROM gsv_projects') == (None, '', '', '')
+    assert d.fetchone('SELECT title,client_id FROM kanban_tasks') == ('Позвонить', None)       # сами записи остались
+    d.close()
+    again = DatabaseManager(tmp_path / 'smetagaz.db')
+    again.init_db()
+    assert again.fetchone('SELECT count(*) FROM crm.clients')[0] == 1                          # после перезапуска клиент не воскресает
+    with __import__('pytest').raises(ValueError):
+        delete_client(again, cid)
+    again.close()

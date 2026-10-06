@@ -95,4 +95,14 @@ assert board.tree.topLevelItemCount()==2 and item.childCount()>=1 and not item.i
 board.on_clicked(item);assert item.isExpanded() and item.child(0).data(0,board.PROJECT_ROLE)
 board.on_double_clicked(item.child(0));assert picked
 v2.btn_tree.setChecked(False);assert board.isHidden() and db.get_setting('gsvp_tree_visible')=='0';v2.btn_tree.setChecked(True);assert not board.isHidden()
+# --- модуль «Клиенты»: изменение и удаление ---
+from smetagaz.workspace_view import WorkspaceView,RecordDialog
+import smetagaz.workspace_view as wv
+cl=WorkspaceView('crm.clients');assert not cl.delete_button.isHidden()
+cid_edit=db.fetchone("SELECT id FROM crm.clients WHERE name LIKE 'Иванов%'")[0]
+rd=RecordDialog('crm.clients',cid_edit);rd.inputs['phone'].setText('111 (основной); 222 (жена)');rd.inputs['address'].setText('Новый адрес');rd.inputs['passport_date'].set_value('2020-01-02');rd.save()
+assert db.fetchone('SELECT phone,address,passport_date FROM crm.clients WHERE id=?',(cid_edit,))==('111 (основной); 222 (жена)','Новый адрес','2020-01-02')
+assert db.fetchone('SELECT phone FROM gsv_projects WHERE client_id=?',(cid_edit,))[0]=='111 (основной); 222 (жена)'          # изменение клиента видно в договорах
+cl.load_data();cl.table.selectRow(0);target=cl.selected_id();QMessageBox.question=lambda *a,**k:QMessageBox.StandardButton.Yes
+before=db.fetchone('SELECT count(*) FROM crm.clients')[0];cl.delete_client();assert db.fetchone('SELECT count(*) FROM crm.clients')[0]==before-1 and not db.fetchone('SELECT 1 FROM crm.clients WHERE id=?',(target,))
 print('IMPORT GUI OK: column mapping, preview, import, TU field')
