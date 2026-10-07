@@ -190,6 +190,7 @@ class DatabaseManager:
                 {"id": "gsv", "name": "Проекты ГСВ", "visible": 1},
                 {"id": "gsn", "name": "Монтаж ГСН", "visible": 1},
                 {"id": "legal_entities", "name": "Юрлица", "visible": 1},
+                {"id": "smr", "name": "СМР", "visible": 1},
                 {"id": "exec", "name": "Исполнительная док.", "visible": 1},
                 {"id": "materials", "name": "Справочник", "visible": 1},
                 {"id": "welders", "name": "Сварщики", "visible": 1},
@@ -207,7 +208,7 @@ class DatabaseManager:
                 ('export_font', 'Segoe UI'), ('export_font_size', '13'),
                 ('export_company_name', 'ООО "ГазМонтаж"'),
                 ('export_excel_template', ''), ('export_word_template', ''),
-                ('app_name', 'СМЕТА-ГАЗ 2.7'), ('tabs_config', json.dumps(default_tabs))
+                ('app_name', 'СМЕТА-ГАЗ 2.8'), ('tabs_config', json.dumps(default_tabs))
             ]
             c.executemany("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", defaults)
 
@@ -274,7 +275,7 @@ class DatabaseManager:
         self.set_setting("schema_version","8")
         from . import __version__ as _app_version
         self.set_setting("app_version",_app_version)
-        if self.get_setting("app_name") in ("СМЕТА-ГАЗ 2.0","СМЕТА-ГАЗ 2.1","СМЕТА-ГАЗ 2.2","СМЕТА-ГАЗ 2.3","СМЕТА-ГАЗ 2.4","СМЕТА-ГАЗ 2.5","СМЕТА-ГАЗ 2.6"):self.set_setting("app_name","СМЕТА-ГАЗ 2.7")
+        if self.get_setting("app_name") in ("СМЕТА-ГАЗ 2.0","СМЕТА-ГАЗ 2.1","СМЕТА-ГАЗ 2.2","СМЕТА-ГАЗ 2.3","СМЕТА-ГАЗ 2.4","СМЕТА-ГАЗ 2.5","СМЕТА-ГАЗ 2.6","СМЕТА-ГАЗ 2.7"):self.set_setting("app_name","СМЕТА-ГАЗ 2.8")
 
     def close(self):
         with self._lock:

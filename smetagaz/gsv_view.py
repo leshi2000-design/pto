@@ -418,7 +418,7 @@ class ReportsDialog(QDialog):
     def generate_report(self):
         d_from, d_to = self.dt_from.date().toString("yyyy-MM-dd"), self.dt_to.date().toString("yyyy-MM-dd")
         rep_type = self.cmb_report_type.currentIndex()
-        sql = "SELECT pd_number, object_name, client_name, contract_number, contract_date, due_date, act_date, cost, work_status, client_status FROM gsv_projects WHERE 1=1"
+        sql = "SELECT pd_number, object_name, coalesce(nullif(client_name,''),party_name), contract_number, contract_date, due_date, act_date, cost, work_status, client_status FROM gsv_projects WHERE 1=1"
         params = []
         # «Сдано» — только с подписанным актом; «Оплачено» — выбран статус клиента «Оплачено»
         if rep_type == 0: sql += " AND act_signed = 1 AND act_date BETWEEN ? AND ?"; params.extend([d_from, d_to])
@@ -610,6 +610,10 @@ class ProjectEditDialog(QDialog):
         l_info.addWidget(self.txt_tu, 2, 1)
         layout.addWidget(grp_info)
 
+        from .counterparty_ui import CustomerSwitch
+        self.customer = CustomerSwitch('gsv_projects', lambda: self.project_id, self.save_data)
+        self.customer.changed.connect(self.apply_customer_mode)
+        layout.addWidget(self.customer)
         self.client_form = ClientForm()
         layout.addWidget(self.client_form)
         self.txt_client = self.client_form.name
@@ -767,7 +771,7 @@ class ProjectEditDialog(QDialog):
 
     def editable_widgets(self):
         return [self.txt_object, self.txt_address, self.txt_tu, self.txt_notes, self.dt_contract, self.chk_contract_signed, self.dt_due,
-                self.dt_act, self.chk_act, self.spn_cost, self.lst_work, self.lst_client, self.client_form]
+                self.dt_act, self.chk_act, self.spn_cost, self.lst_work, self.lst_client, self.client_form, self.customer.rb_person, self.customer.rb_legal, self.customer.combo]
 
     def set_fields_enabled(self, enabled):
         for w in self.editable_widgets():
@@ -808,27 +812,44 @@ class ProjectEditDialog(QDialog):
         cid = row["client_id"]
         client = get_client(db, cid) or dict(name=row["client_name"], phone=row["phone"], passport=row["passport"])
         self.client_form.fill(client, cid)
+        self.customer.set_legal(row.get("le_client_id"))
         self.reload_status_lists()
-        self.setWindowTitle(f"{row['pd_number']} | {row['object_name'] or 'Без объекта'} | {row['client_name'] or 'Без заказчика'}")
+        self.setWindowTitle(f"{row['pd_number']} | {row['object_name'] or 'Без объекта'} | {row['client_name'] or row.get('party_name') or 'Без заказчика'}")
         self.refresh_docs()
         self.refresh_folder()
 
+    def apply_customer_mode(self):
+        legal = self.customer.is_legal()
+        self.client_form.setVisible(not legal)
+        for kind in gsvdom.DOC_KINDS:
+            self.doc_make[kind].setEnabled(not legal)
+            self.doc_open[kind].setEnabled(not legal)
+        if not legal:
+            self.refresh_docs()
+        self.btn_payments.setEnabled(not legal)
+        if legal:
+            self.save_status.setText('Заказчик — юрлицо: договор, акт, справка и оплаты оформляются в разделе «Юрлица».')
+
     def save_clicked(self):
-        if self.is_new and not self.client_form.confirm_duplicate():
+        if self.is_new and not self.customer.is_legal() and not self.client_form.confirm_duplicate():
             return
         self.save_data()
 
     def save_data(self):
         try:
-            client = self.client_form.values()
+            legal = self.customer.is_legal()
+            if legal and not self.customer.legal_id():
+                raise ValueError('Выберите юрлицо-заказчика')
+            client = dict(name='', phone='', passport='', address='') if legal else self.client_form.values()
             with db.transaction():
-                cid = save_client(db, client, self.client_form.client_id)
+                cid = None if legal else save_client(db, client, self.client_form.client_id)
+                party_name = db.fetchone('SELECT name FROM le_clients WHERE id=?', (self.customer.legal_id(),))[0] if legal else ''
                 fields = ['object_name', 'address', 'client_name', 'phone', 'passport', 'contract_date', 'due_date', 'act_date', 'cost', 'notes',
-                          'client_id', 'client_address', 'contract_signed', 'act_signed', 'tu_text']
+                          'client_id', 'client_address', 'contract_signed', 'act_signed', 'tu_text', 'le_client_id', 'party_name']
                 values = [self.txt_object.text().strip(), self.txt_address.text().strip(), client['name'], client['phone'], client['passport'],
                           self.dt_contract.date().toString('yyyy-MM-dd'), self.dt_due.date().toString('yyyy-MM-dd'), self.dt_act.value() or None,
                           self.spn_cost.value(), self.txt_notes.toPlainText(), cid, client['address'],
-                          int(self.chk_contract_signed.isChecked()), int(self.chk_act.isChecked()), self.txt_tu.text().strip()]
+                          int(self.chk_contract_signed.isChecked()), int(self.chk_act.isChecked()), self.txt_tu.text().strip(), self.customer.legal_id(), party_name]
                 rid = self.project_id
                 if rid:
                     db.execute('UPDATE gsv_projects SET ' + ','.join(f'{f}=?' for f in fields) + ' WHERE id=?', (*values, rid))
@@ -841,13 +862,14 @@ class ProjectEditDialog(QDialog):
                 gsvdom.set_project_statuses(db, rid, self.checked_status_ids())
             self.project_id = rid
             self.is_new = False
-            self.client_form.client_id = cid
-            self.client_form.info.setText(f'Клиент №{cid}. Данные сохранены.')
+            if not legal:
+                self.client_form.client_id = cid
+                self.client_form.info.setText(f'Клиент №{cid}. Данные сохранены.')
             row = db.fetchone('SELECT pd_number,contract_number FROM gsv_projects WHERE id=?', (rid,))
             self.txt_pd.setText(row[0])
             self.txt_contract_num.setText(row[1])
             self.btn_edit_toggle.setVisible(True)
-            self.save_status.setText(f'Сохранено · {row[0]} · клиент №{cid}')
+            self.save_status.setText(f'Сохранено · {row[0]} · ' + (f'заказчик: {party_name}' if legal else f'клиент №{cid}'))
             self.refresh_docs()
             self.refresh_folder()
             return True
@@ -980,7 +1002,7 @@ class SideStatusBoard(QWidget):
         sql = ("SELECT s.status_id, count(*) FROM gsv_project_statuses s JOIN gsv_projects p ON p.id=s.project_id")
         params = []
         if search:
-            sql += " WHERE (LOWER(p.pd_number) LIKE ? OR LOWER(p.client_name) LIKE ?)"
+            sql += " WHERE (LOWER(p.pd_number) LIKE ? OR LOWER(coalesce(nullif(p.client_name,''),p.party_name)) LIKE ?)"
             params = [f"%{search}%"] * 2
         return dict(db.fetchall(sql + " GROUP BY s.status_id", tuple(params)))
 
@@ -1024,10 +1046,10 @@ class SideStatusBoard(QWidget):
         sid = item.data(0, self.STATUS_ROLE)
         item.takeChildren()
         search = self.txt_search.text().strip().lower()
-        sql = ("SELECT p.id, p.pd_number, p.client_name FROM gsv_projects p JOIN gsv_project_statuses s ON s.project_id=p.id WHERE s.status_id = ?")
+        sql = ("SELECT p.id, p.pd_number, coalesce(nullif(p.client_name,''),p.party_name) FROM gsv_projects p JOIN gsv_project_statuses s ON s.project_id=p.id WHERE s.status_id = ?")
         params = [sid]
         if search:
-            sql += " AND (LOWER(p.pd_number) LIKE ? OR LOWER(p.client_name) LIKE ?)"
+            sql += " AND (LOWER(p.pd_number) LIKE ? OR LOWER(coalesce(nullif(p.client_name,''),p.party_name)) LIKE ?)"
             params.extend([f"%{search}%"] * 2)
         rows = db.fetchall(sql + " ORDER BY coalesce(p.year_num,0) DESC, coalesce(p.seq_num,0) DESC, p.id DESC LIMIT 301", tuple(params))
         for pid, pd, client in rows[:300]:
@@ -1220,10 +1242,10 @@ class GsvProjectsView(QWidget):
 
     def load_data(self):
         q=self.txt_search.text().strip().casefold()
-        sql="SELECT id,pd_number,object_name,client_name,cost,client_status,work_status,project_folder,due_date,coalesce(act_signed,0),act_date FROM gsv_projects"
+        sql="SELECT id,pd_number,object_name,coalesce(nullif(client_name,''),party_name),cost,client_status,work_status,project_folder,due_date,coalesce(act_signed,0),act_date FROM gsv_projects"
         conditions=[];params=[]
         if q:
-            conditions.append('(LOWER(pd_number) LIKE ? OR LOWER(object_name) LIKE ? OR LOWER(client_name) LIKE ?)');params.extend(['%'+q+'%']*3)
+            conditions.append('(LOWER(pd_number) LIKE ? OR LOWER(object_name) LIKE ? OR LOWER(coalesce(nullif(client_name,''),party_name)) LIKE ?)');params.extend(['%'+q+'%']*3)
         if self.urgent_filter_active:conditions.append("coalesce(act_signed,0)=0 AND date(due_date) <= date('now','+5 days')")
         if conditions:sql+=' WHERE '+' AND '.join(conditions)
         direction='DESC' if self.order_desc else 'ASC'

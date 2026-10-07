@@ -12,9 +12,9 @@ MONTHS = ['', 'январь', 'февраль', 'март', 'апрель', 'м�
 SECTIONS = {'gsv_projects': 'Проекты ГСВ', 'contracts': 'Монтаж ГСВ', 'le_contracts': 'Юрлица', 'smr_contracts': 'СМР'}
 COUNTERPARTY = {'le_contracts': 'le', 'smr_contracts': 'smr'}
 SQL = {
-    'gsv_projects': ("SELECT id,pd_number,contract_number,contract_date,act_date,client_name,object_name,address,cost,coalesce(act_signed,0) "
+    'gsv_projects': ("SELECT id,pd_number,contract_number,contract_date,act_date,coalesce(nullif(client_name,''),party_name),object_name,address,cost,coalesce(act_signed,0) "
                      "FROM gsv_projects WHERE coalesce(act_date,'')<>''"),
-    'contracts': ("SELECT id,contract_number,contract_number,contract_date,acceptance_act_date,client_name,object_name,object_address,contract_amount,coalesce(act_signed,0) "
+    'contracts': ("SELECT id,contract_number,contract_number,contract_date,acceptance_act_date,coalesce(nullif(client_name,''),party_name),object_name,object_address,contract_amount,coalesce(act_signed,0) "
                   "FROM contracts WHERE coalesce(acceptance_act_date,'')<>''"),
 }
 

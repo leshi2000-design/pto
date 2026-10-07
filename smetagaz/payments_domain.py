@@ -65,11 +65,20 @@ def report(db,start,end,section=''):
     for pid,day,amount,owner,rid,eid,note in db.fetchall('SELECT id,date,amount,owner_type,owner_id,estimate_id,note FROM payments WHERE date BETWEEN ? AND ? ORDER BY date,id',(start,end)):
         if eid:
             owner,rid='estimates',eid
-            for table in ('contracts','gsn_projects','gsv_projects'):
+            for table in ('contracts','gsn_projects','gsv_projects','smr_contracts'):
                 found=db.fetchone(f'SELECT id FROM {table} WHERE estimate_id=?',(eid,))
                 if found:owner,rid=table,found[0];break
         if owner not in OWNERS:owner,rid='estimates',eid
         if not rid:continue
         if section and owner!=section:continue
-        data=record(db,owner,rid);result.append(dict(id=pid,date=day,amount=amount,section=OWNERS[owner][1],number=data.get('contract_number') or str(rid),object_name=data.get('title') or data.get('object_name',''),client_name=data.get('client_name',''),note=note or ''))
+        data=record(db,owner,rid);result.append(dict(id=pid,date=day,amount=amount,section=OWNERS[owner][1],number=data.get('contract_number') or str(rid),object_name=data.get('title') or data.get('object_name',''),client_name=_client_label(db,owner,data),note=note or ''))
     return result
+
+def _client_label(db,owner,data):
+    if owner=='le_contracts':
+        from . import contracts_core as cc
+        return cc.party_label(db,'le',data)
+    if owner=='smr_contracts':
+        from . import contracts_core as cc
+        return cc.party_label(db,'smr',data)
+    return data.get('client_name') or data.get('party_name') or ''

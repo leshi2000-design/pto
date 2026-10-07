@@ -59,3 +59,37 @@ def test_dialogs_and_registries(env):
     ui.SmrView()
     from smetagaz.legal_entities_view import LegalEntitiesView
     LegalEntitiesView()
+
+
+def test_legal_customer_in_gsv_cards(env, monkeypatch):
+    db, ui = env
+    import smetagaz.gsv_view as gv, smetagaz.contract_card as cardm
+    import sys
+    from smetagaz.database import db as singleton
+    for name, mod in list(sys.modules.items()):
+        if name.startswith('smetagaz') and getattr(mod, 'db', None) is singleton:
+            monkeypatch.setattr(mod, 'db', db)
+    monkeypatch.setattr(ui.ContractDialog, 'exec', lambda self: 1)
+    lid = cc.save_legal(db, dict(name='ООО Ромашка', unp='123456789', head_name='Иванов И.И.'))
+    before = db.fetchone('SELECT count(*) FROM crm.clients')[0]
+    dlg = gv.ProjectEditDialog()
+    dlg.customer.set_legal(lid)
+    dlg.txt_object.setText('Котельная')
+    dlg.spn_cost.setValue(500)
+    assert dlg.save_data()
+    row = db.fetchone('SELECT le_client_id,party_name,client_name,client_id FROM gsv_projects WHERE id=?', (dlg.project_id,))
+    assert row == (lid, 'ООО Ромашка', '', None)
+    assert db.fetchone('SELECT count(*) FROM crm.clients')[0] == before
+    dlg.customer.open_contract()
+    c = db.fetchone("SELECT id,client_id,amount FROM le_contracts WHERE source_type='gsv_projects' AND source_id=?", (dlg.project_id,))
+    assert c[1] == lid and c[2] == 500
+    assert cc.contract_from_source(db, 'gsv_projects', dlg.project_id) == (c[0], False)
+    reopened = gv.ProjectEditDialog(dlg.project_id)
+    assert reopened.customer.is_legal() and reopened.customer.legal_id() == lid
+    card = cardm.ContractCardDialog()
+    card.customer.set_legal(lid)
+    card.inp_object.setText('Дом')
+    assert card.save_data()
+    assert db.fetchone('SELECT le_client_id,party_name,client_id FROM contracts WHERE id=?', (card.contract_id,)) == (lid, 'ООО Ромашка', None)
+    assert db.fetchone('SELECT count(*) FROM crm.clients')[0] == before
+    assert cc.contract_from_source(db, 'contracts', card.contract_id)[1] is True

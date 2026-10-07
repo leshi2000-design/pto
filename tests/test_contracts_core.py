@@ -63,3 +63,46 @@ def test_smr_person_and_legal_with_estimate(db):
         cc.save_contract(db, 'smr', dict(party_type='person'))
     tags = cc.tag_map(db, 'smr', c1)
     assert 'СТОИМОСТЬ_МАТЕРИАЛОВ' in tags and 'СТОИМОСТЬ_МАТЕРИАЛОВ' not in cc.tag_map(db, 'le', cc.save_contract(db, 'le', dict(client_id=lid, direction='Монтажные работы')))
+
+
+def test_integration_with_other_subsystems(db, tmp_path):
+    from smetagaz import acts_statement, agenda_domain, integrity, contracts_excel_export, payments_domain
+    from smetagaz.data_services import search
+    from datetime import date
+    lid = make_legal(db)
+    pid = db.execute("INSERT INTO crm.clients(name) VALUES('Петров Пётр')").lastrowid
+    c1 = cc.save_contract(db, 'le', dict(client_id=lid, direction='Монтажные работы', contract_date='2026-03-01', end_date='2026-03-30', amount=1000, signed=1, subject='Монтаж ВДГО'))
+    c2 = cc.save_contract(db, 'smr', dict(party_type='person', person_id=pid, contract_date='2026-03-02', amount=500, signed=1))
+    a1 = cc.save_act(db, 'le', dict(contract_id=c1, act_date='2026-03-20', amount=1500, signed=1))
+    cc.save_act(db, 'smr', dict(contract_id=c2, act_date='2026-03-25', amount=100, signed=0))
+    payments_domain.add(db, 'le_contracts', c1, 300, '2026-03-10')
+    payments_domain.add(db, 'smr_contracts', c2, 50, '2026-03-11')
+    # ведомость актов
+    st = acts_statement.statement(db, 'le_contracts', 2026, 3)
+    assert [r['number'] for r in st['signed']] == ['1'] and st['signed'][0]['client'] == 'ООО Ромашка' and st['signed'][0]['paid'] == 300
+    assert len(acts_statement.statement(db, 'smr_contracts', 2026, 3)['unsigned']) == 1
+    out = tmp_path / 'v.xlsx'
+    acts_statement.export_statement(db, 'le_contracts', 2026, 3, out)
+    assert out.exists()
+    # календарь
+    events = agenda_domain.events_between(db, date(2026, 3, 1), date(2026, 3, 31)) if hasattr(agenda_domain, 'events_between') else []
+    titles = ' | '.join(e['title'] for e in events)
+    assert events and 'Ромашка' in titles and 'Петров' in titles
+    # оплаты
+    rows = payments_domain.report(db, '2026-03-01', '2026-03-31')
+    assert {r['section'] for r in rows} == {'Юрлица', 'СМР'} and {r['client_name'] for r in rows} == {'ООО Ромашка', 'Петров Пётр'}
+    # проверка базы: акты больше суммы договора
+    assert any('больше суммы договора' in f['text'] for f in integrity.check(db))
+    # экспорт и поиск
+    xlsx = tmp_path / 'r.xlsx'
+    contracts_excel_export.export_registries(db, xlsx)
+    assert search(db, 'ВДГО')
+
+
+def test_deleting_person_client_detaches_smr(db):
+    from smetagaz.data_services import client_links, delete_client
+    pid = db.execute("INSERT INTO crm.clients(name) VALUES('Сидоров')").lastrowid
+    c = cc.save_contract(db, 'smr', dict(party_type='person', person_id=pid, amount=10))
+    assert client_links(db, pid) == {'СМР': 1}
+    delete_client(db, pid)
+    assert cc.contract(db, 'smr', c)['person_id'] is None

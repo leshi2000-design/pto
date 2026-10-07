@@ -21,9 +21,11 @@ SOURCES = {
  'norm_profiles': ('Норма расхода','name',['name','diameter','thickness','basis']),
  'stock_acts': ('Акт списания','number',['number','object_name','act_date','notes']),
  'defect_acts': ('Дефектный акт','number',['number','object_name','act_date','reason']),
- 'le_clients': ('Юрлицо','name',['name','unp','contact_person','phone','email']),
- 'le_contracts': ('Договор (юрлицо)','contract_number',['contract_number','direction','object_name','status','note']),
+ 'le_clients': ('Юрлицо','name',['name','full_name','unp','okpo','legal_address','head_name','contact_person','phone','email']),
+ 'le_contracts': ('Договор (юрлицо)','contract_number',['contract_number','direction','subject','object_name','object_address','status','note']),
  'le_acts': ('Акт (юрлицо)','act_number',['act_number','description','note']),
+ 'smr_contracts': ('Договор СМР','contract_number',['contract_number','subject','object_name','object_address','status','note']),
+ 'smr_acts': ('Акт СМР','act_number',['act_number','description','note']),
  'le_outgoing': ('Исходящий документ','reg_number',['reg_number','recipient','subject','note']),
 }
 
@@ -109,7 +111,7 @@ def initialize(db):
         END''')
         db.execute('CREATE TABLE IF NOT EXISTS export_profiles (record_key TEXT PRIMARY KEY, options TEXT NOT NULL)')
         db.execute('CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(kind UNINDEXED, record_id UNINDEXED, title, body, tokenize="unicode61")')
-        rebuild=db.get_setting('fts_version')!='6'
+        rebuild=db.get_setting('fts_version')!='7'
         for table_idx, (table, (_,title,fields)) in enumerate(SOURCES.items(), 1):
             body=" || ' ' || ".join(f"coalesce(new.{f},'')" for f in fields)
             for action in ['insert','update','delete']:
@@ -122,7 +124,7 @@ def initialize(db):
             for table_idx,(table,(_,title,fields)) in enumerate(SOURCES.items(),1):
                 body=" || ' ' || ".join(f"coalesce({f},'')" for f in fields)
                 db.execute(f"INSERT OR REPLACE INTO search_index(rowid,kind,record_id,title,body) SELECT {table_idx}*1000000000000+id,'{table}',id,{title},{body} FROM {table}")
-            db.set_setting('fts_version','6')
+            db.set_setting('fts_version','7')
 
 
 def search(db, query, limit=100, offset=0):
@@ -160,7 +162,10 @@ CLIENT_LINKS = [
 
 def client_links(db, cid):
     """{раздел: число записей}, где используется клиент."""
-    return {label: n for table, label, _cols in CLIENT_LINKS if (n := db.fetchone(f'SELECT count(*) FROM {table} WHERE client_id=?', (cid,))[0])}
+    links = {label: n for table, label, _cols in CLIENT_LINKS if (n := db.fetchone(f'SELECT count(*) FROM {table} WHERE client_id=?', (cid,))[0])}
+    if (n := db.fetchone('SELECT count(*) FROM smr_contracts WHERE person_id=?', (cid,))[0]):
+        links['СМР'] = n
+    return links
 
 
 def delete_client(db, cid):
@@ -177,6 +182,7 @@ def delete_client(db, cid):
             columns = {r[1] for r in db.fetchall(f'PRAGMA table_info({table})')}
             blank = ','.join(f"{c}=''" for c in cols if c in columns)
             db.execute(f'UPDATE {table} SET client_id=NULL' + (',' + blank if blank else '') + ' WHERE client_id=?', (cid,))
+        db.execute('UPDATE smr_contracts SET person_id=NULL WHERE person_id=?', (cid,))
         db.execute('DELETE FROM crm.clients WHERE id=?', (cid,))
     try:
         db.execute('VACUUM crm')        # физически убирает удалённые данные из файла clients.db

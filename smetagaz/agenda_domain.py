@@ -192,14 +192,14 @@ def events_between(db, start, end, today=None):
     # --- договоры, акты, сроки: первичный документ каждого раздела отмечается в календаре ---
     # (SQL, вид, раздел, таблица, столбец клиента, условие «подписан»)
     contracts = (
-        ("SELECT id,contract_date,contract_number,object_name,client_name,coalesce(contract_signed,1) FROM contracts WHERE coalesce(contract_date,'')<>''", 'contract', 'Монтаж ГСВ', 'contracts'),
-        ("SELECT id,contract_date,contract_number,object_name,client_name,coalesce(contract_signed,1) FROM gsv_projects WHERE coalesce(contract_date,'')<>''", 'contract', 'Проект ГСВ', 'gsv_projects'),
+        ("SELECT id,contract_date,contract_number,object_name,coalesce(nullif(client_name,''),party_name),coalesce(contract_signed,1) FROM contracts WHERE coalesce(contract_date,'')<>''", 'contract', 'Монтаж ГСВ', 'contracts'),
+        ("SELECT id,contract_date,contract_number,object_name,coalesce(nullif(client_name,''),party_name),coalesce(contract_signed,1) FROM gsv_projects WHERE coalesce(contract_date,'')<>''", 'contract', 'Проект ГСВ', 'gsv_projects'),
         ("SELECT id,contract_date,contract_number,title,client_name,1 FROM gsn_projects WHERE coalesce(contract_date,'')<>''", 'contract', 'Монтаж ГСН', 'gsn_projects'),
-        ("SELECT id,acceptance_act_date,contract_number,object_name,client_name,coalesce(act_signed,1) FROM contracts WHERE coalesce(acceptance_act_date,'')<>''", 'act', 'Монтаж ГСВ', 'contracts'),
-        ("SELECT id,act_date,contract_number,object_name,client_name,coalesce(act_signed,1) FROM gsv_projects WHERE coalesce(act_date,'')<>''", 'act', 'Проект ГСВ', 'gsv_projects'),
-        ("SELECT id,work_start_date,contract_number,object_name,client_name,1 FROM contracts WHERE coalesce(work_start_date,'')<>''", 'work', 'Монтаж ГСВ · начало работ', 'contracts'),
-        ("SELECT id,work_end_date,contract_number,object_name,client_name,1 FROM contracts WHERE coalesce(work_end_date,'')<>''", 'work', 'Монтаж ГСВ · окончание работ', 'contracts'),
-        ("SELECT id,due_date,contract_number,object_name,client_name,1 FROM gsv_projects WHERE coalesce(due_date,'')<>''", 'project', 'Срок проекта ГСВ', 'gsv_projects'),
+        ("SELECT id,acceptance_act_date,contract_number,object_name,coalesce(nullif(client_name,''),party_name),coalesce(act_signed,1) FROM contracts WHERE coalesce(acceptance_act_date,'')<>''", 'act', 'Монтаж ГСВ', 'contracts'),
+        ("SELECT id,act_date,contract_number,object_name,coalesce(nullif(client_name,''),party_name),coalesce(act_signed,1) FROM gsv_projects WHERE coalesce(act_date,'')<>''", 'act', 'Проект ГСВ', 'gsv_projects'),
+        ("SELECT id,work_start_date,contract_number,object_name,coalesce(nullif(client_name,''),party_name),1 FROM contracts WHERE coalesce(work_start_date,'')<>''", 'work', 'Монтаж ГСВ · начало работ', 'contracts'),
+        ("SELECT id,work_end_date,contract_number,object_name,coalesce(nullif(client_name,''),party_name),1 FROM contracts WHERE coalesce(work_end_date,'')<>''", 'work', 'Монтаж ГСВ · окончание работ', 'contracts'),
+        ("SELECT id,due_date,contract_number,object_name,coalesce(nullif(client_name,''),party_name),1 FROM gsv_projects WHERE coalesce(due_date,'')<>''", 'project', 'Срок проекта ГСВ', 'gsv_projects'),
     )
     for sql, kind, section, table in contracts:
         # даты могли быть записаны как ГГГГ-ММ-ДД или ДД.ММ.ГГГГ, поэтому диапазон проверяется после нормализации
@@ -219,6 +219,32 @@ def events_between(db, start, end, today=None):
                 title = f'{section} {number}'
                 detail = ' · '.join(x for x in (name, short) if x)
             out.append(_event(datetime.strptime(day, ISO).date(), kind, title.strip(), detail, (table, rid)))
+    # --- договоры и акты «Юрлиц» и «СМР» ---
+    from . import contracts_core as cc
+    for mod, section in (('le', 'Юрлица'), ('smr', 'СМР')):
+        c = cc.cfg(mod)
+        for table, day_col, kind, num_col in ((c['contracts'], 'contract_date', 'contract', 'contract_number'), (c['contracts'], 'end_date', 'work', 'contract_number')):
+            for rid, day, number, name in db.fetchall(f"SELECT id,{day_col},{num_col},coalesce(nullif(object_address,''),object_name) FROM {table} WHERE coalesce({day_col},'')<>''"):
+                day = norm_date(day)
+                if not day or not s <= day <= e:
+                    continue
+                ct = cc.contract(db, mod, rid)
+                short = cc.party_label(db, mod, ct)
+                number = f'№{number}' if number else 'без номера'
+                if kind == 'contract':
+                    title = f'Заключение договора {short}'.strip() + ('' if ct['signed'] else ' (не подписан)')
+                    detail = f'{section} · {number} · {name or "без названия"}'
+                else:
+                    title, detail = f'{section} · окончание работ {number}', ' · '.join(x for x in (name, short) if x)
+                out.append(_event(datetime.strptime(day, ISO).date(), kind, title.strip(), detail, (table, rid)))
+        for aid, day, number, signed, cid in db.fetchall(f"SELECT id,act_date,act_number,coalesce(signed,0),contract_id FROM {c['acts']} WHERE coalesce(act_date,'')<>''"):
+            day = norm_date(day)
+            if not day or not s <= day <= e:
+                continue
+            ct = cc.contract(db, mod, cid)
+            short = cc.party_label(db, mod, ct)
+            out.append(_event(datetime.strptime(day, ISO).date(), 'act', ('Подписан акт ' if signed else 'Акт (не подписан) ') + short,
+                              f'{section} · акт №{number or "б/н"} · договор {ct["contract_number"] or "без номера"}', (c['contracts'], cid)))
     # --- оплаты (единая книга платежей) ---
     from .payments_domain import report
     try:

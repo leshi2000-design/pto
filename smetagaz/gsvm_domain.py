@@ -158,7 +158,7 @@ def link_folder(db, cid, path, create=False):
 
 
 def suggested_folder_name(db, cid):
-    row = db.fetchone('SELECT contract_number,object_address,object_name,client_name FROM contracts WHERE id=?', (cid,))
+    row = db.fetchone('SELECT contract_number,object_address,object_name,coalesce(nullif(client_name,\'\'),party_name) FROM contracts WHERE id=?', (cid,))
     if not row:
         raise ValueError('Сначала сохраните договор')
     return folder_name(row[0], row[1] or row[2], row[3])

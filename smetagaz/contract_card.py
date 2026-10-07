@@ -57,6 +57,10 @@ class ContractCardDialog(QDialog):
         form.addRow('Адрес объекта', self.inp_object_address)
         body.addWidget(obj)
 
+        from .counterparty_ui import CustomerSwitch
+        self.customer = CustomerSwitch('contracts', lambda: self.contract_id, self.ensure_saved)
+        self.customer.changed.connect(self.apply_customer_mode)
+        body.addWidget(self.customer)
         self.client_form = ClientForm()
         body.addWidget(self.client_form)
         # имена, которыми пользуются другие модули
@@ -180,7 +184,7 @@ class ContractCardDialog(QDialog):
         dl.addWidget(self.lbl_folder, r + 1, 0, 1, 5)
         body.addWidget(docs)
         body.addStretch()
-        self.lock_widgets = [obj, self.client_form, notes_box, project, terms]
+        self.lock_widgets = [obj, self.customer, self.client_form, notes_box, project, terms]
 
         # --- остальные вкладки ---
         self.equipment_tab = EquipmentTab(self)
@@ -293,6 +297,7 @@ class ContractCardDialog(QDialog):
             client = get_client(db, c['client_id']) or dict(name=c['client_name'], phone=c['client_phone'], address=c['client_address'], passport=c['passport_series_number'],
                                                            passport_issuer=c['passport_issued_by'], passport_date=c['passport_issue_date'])
             self.client_form.fill(client, c['client_id'])
+            self.customer.set_legal(c.get('le_client_id'))
             try:
                 changed = md.refresh_estimate_pipelines(db, self.contract_id)
                 if changed:
@@ -312,12 +317,29 @@ class ContractCardDialog(QDialog):
         self.refresh_docs()
 
     # --- сохранение ---
+    def apply_customer_mode(self):
+        """Заказчик-юрлицо: техническая часть остаётся здесь, а договор, акт, справка и оплаты оформляются в разделе «Юрлица»."""
+        legal = self.customer.is_legal()
+        self.client_form.setVisible(not legal)
+        if hasattr(self, 'doc_make'):
+            for kind in dd.MAIN_KINDS:
+                self.doc_make[kind].setEnabled(not legal)
+                self.doc_open[kind].setEnabled(not legal)
+            if not legal:
+                self.refresh_docs()
+        if legal and hasattr(self, 'status'):
+            self.status.setText('Заказчик — юрлицо: договор, акт, справка и оплаты оформляются в разделе «Юрлица».')
+
     def save_data(self):
         try:
-            values = self.client_form.values()
+            legal = self.customer.is_legal()
+            if legal and not self.customer.legal_id():
+                raise ValueError('Выберите юрлицо-заказчика')
+            values = dict(name='', phone='', address='', passport='', passport_issuer='', passport_date='') if legal else self.client_form.values()
             contract_date = self.date_contract.date().toString('yyyy-MM-dd')
             with db.transaction():
-                cid = save_client(db, values, self.client_form.client_id)
+                cid = None if legal else save_client(db, values, self.client_form.client_id)
+                party_name = db.fetchone('SELECT name FROM le_clients WHERE id=?', (self.customer.legal_id(),))[0] if legal else ''
                 number = self.inp_number.text().strip()
                 seq = year = None
                 if not self.contract_id and (not number or number.upper().startswith('XX')):
@@ -332,7 +354,7 @@ class ContractCardDialog(QDialog):
                     passport_issued_by=values['passport_issuer'], passport_issue_date=values['passport_date'], work_start_date=contract_date,
                     work_end_date=self.date_end.date().toString('yyyy-MM-dd'), acceptance_act_date=self.date_act.value(), contract_amount=self.inp_amount.value(),
                     client_id=cid, client_name=values['name'], client_phone=values['phone'], contract_signed=int(self.chk_contract_signed.isChecked()),
-                    act_signed=int(self.chk_act_signed.isChecked()), designer_code=self.inp_code.text().strip(), designer=self.inp_designer.text().strip(),
+                    act_signed=int(self.chk_act_signed.isChecked()), le_client_id=self.customer.legal_id(), party_name=party_name, designer_code=self.inp_code.text().strip(), designer=self.inp_designer.text().strip(),
                     project_month=self.dt_project.date().toString('yyyy-MM') if self.chk_project_month.isChecked() else '', notes=self.inp_notes.toPlainText().strip())
                 rid = self.contract_id
                 if rid:
@@ -343,13 +365,14 @@ class ContractCardDialog(QDialog):
                 self.contract_id = rid
                 self.equipment_tab.save(rid)
                 self.pipes_tab.save(rid)
-                if self.estimate_id:
+                if self.estimate_id and not legal:
                     from .data_services import link_client
                     link_client(db, 'estimates', self.estimate_id, cid)
-            self.client_form.client_id = cid
-            self.client_form.info.setText(f'Клиент №{cid}. Данные сохранены.')
+            if not legal:
+                self.client_form.client_id = cid
+                self.client_form.info.setText(f'Клиент №{cid}. Данные сохранены.')
             self.inp_number.setText(db.fetchone('SELECT contract_number FROM contracts WHERE id=?', (rid,))[0])
-            self.status.setText(f'Сохранено · договор {self.inp_number.text()} · клиент №{cid}')
+            self.status.setText(f'Сохранено · договор {self.inp_number.text()} · ' + (f'заказчик: {party_name}' if legal else f'клиент №{cid}'))
             self.edit_button.setVisible(True)
             self.refresh_estimate_ui()
             self.refresh_docs()
@@ -374,7 +397,7 @@ class ContractCardDialog(QDialog):
 
     def save_clicked(self):
         is_new = not self.contract_id
-        if is_new and not self.client_form.confirm_duplicate():
+        if is_new and not self.customer.is_legal() and not self.client_form.confirm_duplicate():
             return
         if self.save_data():
             if is_new:
@@ -384,7 +407,7 @@ class ContractCardDialog(QDialog):
     def ensure_saved(self):
         if self.contract_id:
             return self.save_panels() if not self.locked else True
-        if not self.client_form.confirm_duplicate():
+        if not self.customer.is_legal() and not self.client_form.confirm_duplicate():
             return False
         return self.save_data()
 

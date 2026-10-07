@@ -32,7 +32,7 @@ def test_export_registries_writes_both_sheets_and_overwrites(database, tmp_path)
     assert path.exists()
 
     wb = load_workbook(path)
-    assert wb.sheetnames == ['ГСВ', 'ГСН']
+    assert wb.sheetnames == ['ГСВ', 'ГСН', 'Юрлица', 'СМР']
     gsv = wb['ГСВ']
     assert gsv.cell(1, 1).value == '№ Договора'
     assert gsv.cell(2, 1).value == '1/26'

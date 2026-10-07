@@ -211,14 +211,15 @@ def context(db, cid):
     if c.get('client_id'):
         from .gsv_domain import get_client
         client = get_client(db, c['client_id']) or {}
-    name = client.get('name') or c.get('client_name') or ''
+    name = client.get('name') or c.get('client_name') or c.get('party_name') or ''
+    is_org = bool(c.get('le_client_id'))
     from . import payments_domain
     pays = sorted(((d, float(a), n or '') for _i, d, a, n in payments_domain.history(db, 'contracts', cid)), key=lambda p: p[0])
     paid = sum(a for _d, a, _n in pays)
     cost = float(c.get('contract_amount') or 0)
     ctx = {
         'contract.number': c.get('contract_number') or '', 'contract.date': c.get('contract_date') or '', 'client.name': name,
-        'client.short': get_initials_first(name) if name else '', 'client.passport': client.get('passport') or c.get('passport_series_number') or '',
+        'client.short': (name if is_org else get_initials_first(name)) if name else '', 'client.passport': client.get('passport') or c.get('passport_series_number') or '',
         'client.passport_date': client.get('passport_date') or c.get('passport_issue_date') or '',
         'client.passport_issuer': client.get('passport_issuer') or c.get('passport_issued_by') or '',
         'client.phone': client.get('phone') or c.get('client_phone') or '', 'client.address': client.get('address') or c.get('client_address') or '',

@@ -3,8 +3,8 @@ import os
 
 from PyQt6.QtWidgets import (QWidget, QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout, QLabel, QLineEdit, QTextEdit, QComboBox, QPushButton, QCheckBox,
                               QDoubleSpinBox, QTableWidget, QTableWidgetItem, QAbstractItemView, QMessageBox, QFileDialog, QTabWidget, QRadioButton, QHeaderView,
-                              QApplication)
-from PyQt6.QtCore import Qt, QDate
+                              QApplication, QGroupBox)
+from PyQt6.QtCore import Qt, QDate, pyqtSignal
 from PyQt6.QtGui import QColor
 
 from .database import db
@@ -1197,3 +1197,78 @@ class SmrView(QWidget):
         tabs.addTab(ActsRegistry('smr'), 'Акты')
         tabs.addTab(TemplatesTab('smr'), 'Шаблоны и теги')
         layout.addWidget(tabs)
+
+
+class CustomerSwitch(QGroupBox):
+    """Выбор заказчика в карточках проекта / монтажа ГСВ: физлицо (как раньше) или юрлицо из справочника «Юрлица».
+    Документы юрлица (договор, акт, справка) оформляются только в разделе «Юрлица» — отсюда создаётся или открывается связанный договор."""
+    changed = pyqtSignal()
+
+    def __init__(self, source_type, source_id_getter, ensure_saved, parent=None):
+        super().__init__('Заказчик', parent)
+        self.source_type, self.source_id, self.ensure_saved = source_type, source_id_getter, ensure_saved
+        layout = QGridLayout(self)
+        self.rb_person = QRadioButton('Физическое лицо')
+        self.rb_legal = QRadioButton('Юридическое лицо')
+        self.rb_person.setChecked(True)
+        layout.addWidget(self.rb_person, 0, 0)
+        layout.addWidget(self.rb_legal, 0, 1)
+        self.combo = QComboBox()
+        populate_legal_combo(self.combo)
+        layout.addWidget(self.combo, 1, 0, 1, 2)
+        new = QPushButton('＋ Новое юрлицо…')
+        new.clicked.connect(self.new_legal)
+        layout.addWidget(new, 1, 2)
+        self.info = QLabel('')
+        self.info.setWordWrap(True)
+        self.info.setStyleSheet('color:#65758b;')
+        layout.addWidget(self.info, 2, 0, 1, 3)
+        self.btn_contract = QPushButton('Договор в «Юрлицах»…')
+        self.btn_contract.clicked.connect(self.open_contract)
+        layout.addWidget(self.btn_contract, 3, 0, 1, 3)
+        self.rb_legal.toggled.connect(self.toggled)
+        self.combo.currentIndexChanged.connect(self.refresh)
+        self.toggled()
+
+    def is_legal(self):
+        return self.rb_legal.isChecked()
+
+    def legal_id(self):
+        return self.combo.currentData() if self.is_legal() else None
+
+    def set_legal(self, legal_id):
+        populate_legal_combo(self.combo, legal_id)
+        self.rb_legal.setChecked(bool(legal_id))
+        self.rb_person.setChecked(not legal_id)
+        self.toggled()
+
+    def toggled(self, *_):
+        legal = self.is_legal()
+        self.combo.setEnabled(legal)
+        self.btn_contract.setVisible(legal)
+        self.refresh()
+        self.changed.emit()
+
+    def refresh(self, *_):
+        row = cc.legal(db, self.combo.currentData()) if self.is_legal() and self.combo.currentData() else None
+        if self.is_legal():
+            self.info.setText(f'Договор, акт и справка оформляются в разделе «Юрлица». УНП {row["unp"] or "—"}, руководитель: {row["head_name"] or "не указан"}.' if row
+                              else 'Выберите юрлицо. Договор, акт и справка оформляются в разделе «Юрлица».')
+        else:
+            self.info.setText('')
+
+    def new_legal(self):
+        d = LegalClientDialog(parent=self)
+        if d.exec():
+            populate_legal_combo(self.combo, d.client_id)
+            self.rb_legal.setChecked(True)
+
+    def open_contract(self):
+        if not self.ensure_saved() or not self.source_id():
+            return
+        try:
+            cid, created = cc.contract_from_source(db, self.source_type, self.source_id())
+        except Exception as e:
+            warn(self, str(e))
+            return
+        ContractDialog('le', cid, self).exec()

@@ -11,11 +11,15 @@ FILE_CHECKS = [
     ('gsv_project_docs', 'project_id', "kind", 'file_path', 'Проекты ГСВ · документы', 'Документ проекта'),
     ('welding_documents', 'id', 'title', 'file_path', 'Сварщики', 'Аттестат / документ сварщика'),
     ('attachments', 'estimate_id', 'file_name', 'file_path', 'Сметы', 'Вложение сметы'),
+    ('le_docs', 'ref_id', "kind", 'file_path', 'Юрлица · документы', 'Документ'),
+    ('smr_docs', 'ref_id', "kind", 'file_path', 'СМР · документы', 'Документ'),
 ]
 FOLDER_CHECKS = [
-    ('contracts', 'id', "coalesce(contract_number,'')||' '||coalesce(client_name,'')", 'contract_folder', 'Монтаж ГСВ'),
-    ('gsv_projects', 'id', "coalesce(pd_number,'')||' '||coalesce(client_name,'')", 'project_folder', 'Проекты ГСВ'),
+    ('contracts', 'id', "coalesce(contract_number,'')||' '||coalesce(nullif(client_name,''),party_name)", 'contract_folder', 'Монтаж ГСВ'),
+    ('gsv_projects', 'id', "coalesce(pd_number,'')||' '||coalesce(nullif(client_name,''),party_name)", 'project_folder', 'Проекты ГСВ'),
     ('executive_objects', 'id', "owner_type||' №'||owner_id", 'folder_path', 'Исполнительная документация'),
+    ('le_contracts', 'id', "coalesce(contract_number,'')||' '||coalesce(object_name,'')", 'folder', 'Юрлица'),
+    ('smr_contracts', 'id', "coalesce(contract_number,'')||' '||coalesce(object_name,'')", 'folder', 'СМР'),
 ]
 TEMPLATE_SETTINGS = ['gsvp_tpl_contract', 'gsvp_tpl_act', 'gsvp_tpl_card', 'custom_template_path', 'export_excel_template', 'export_word_template']
 LIMIT = 300
@@ -50,7 +54,7 @@ def check(db):
         for rid, name, cid in db.fetchall(f"SELECT id,{title},client_id FROM {table} WHERE client_id IS NOT NULL AND client_id NOT IN (SELECT id FROM crm.clients) LIMIT {LIMIT}"):
             found.append(_finding('error', 'Клиенты', f'{label}: «{name or rid}» ссылается на удалённого клиента №{cid}', (table, rid), 'client_link'))
         if table != 'estimates':
-            for rid, name in db.fetchall(f"SELECT id,{title} FROM {table} WHERE client_id IS NULL AND trim(coalesce(client_name,''))='' LIMIT {LIMIT}"):
+            for rid, name in db.fetchall(f"SELECT id,{title} FROM {table} WHERE client_id IS NULL AND {'le_client_id IS NULL AND ' if 'le_client_id' in _columns(db, table) else ''}trim(coalesce(client_name,''))='' LIMIT {LIMIT}"):
                 found.append(_finding('warn', 'Клиенты', f'{label}: договор «{name or rid}» без клиента', (table, rid)))
     dup = db.fetchall("SELECT lower(trim(name)),count(*),group_concat(id) FROM crm.clients GROUP BY lower(trim(name)) HAVING count(*)>1 LIMIT 100")
     for name, n, ids in dup:
@@ -62,7 +66,7 @@ def check(db):
                 found.append(_finding('error', 'Оплаты', f'Оплата {amount} от {day}: смета №{eid} не существует'))
             elif not eid and not owner:
                 found.append(_finding('error', 'Оплаты', f'Оплата {amount} от {day} не привязана ни к одному договору или смете'))
-            elif not eid and owner in ('contracts', 'gsv_projects', 'gsn_projects', 'estimates') and not db.fetchone(f'SELECT 1 FROM {owner} WHERE id=?', (oid,)):
+            elif not eid and owner in ('contracts', 'gsv_projects', 'gsn_projects', 'estimates', 'le_contracts', 'smr_contracts') and not db.fetchone(f'SELECT 1 FROM {owner} WHERE id=?', (oid,)):
                 found.append(_finding('error', 'Оплаты', f'Оплата {amount} от {day}: договор ({owner} №{oid}) не существует'))
             if (amount or 0) <= 0:
                 found.append(_finding('warn', 'Оплаты', f'Оплата от {day} с нулевой или отрицательной суммой'))
@@ -77,6 +81,20 @@ def check(db):
         found.append(_finding('warn', 'Договоры', f'Проект «{num}»: акт отмечен подписанным, но дата акта не указана', ('gsv_projects', rid)))
     for num, n in db.fetchall("SELECT contract_number,count(*) FROM contracts WHERE coalesce(contract_number,'')<>'' GROUP BY contract_number HAVING count(*)>1"):
         found.append(_finding('warn', 'Договоры', f'Монтаж ГСВ: номер договора «{num}» повторяется {n} раза'))
+    # --- юрлица и СМР ---
+    for mod, label in (('le', 'Юрлица'), ('smr', 'СМР')):
+        ct, ac = f'{mod}_contracts', f'{mod}_acts'
+        if not _table_exists(db, ct):
+            continue
+        for rid, num, amount, acts_sum in db.fetchall(f"SELECT c.id,c.contract_number,c.amount,(SELECT coalesce(sum(amount),0) FROM {ac} WHERE contract_id=c.id) FROM {ct} c"):
+            if (acts_sum or 0) - (amount or 0) > 0.005:
+                found.append(_finding('warn', 'Договоры', f'{label}: по договору «{num}» актов на {acts_sum:.2f}, что больше суммы договора {amount or 0:.2f}', (ct, rid)))
+        for rid, num in db.fetchall(f"SELECT a.id,a.act_number FROM {ac} a WHERE a.signed=1 AND coalesce(a.act_date,'')=''"):
+            found.append(_finding('warn', 'Договоры', f'{label}: акт «{num}» отмечен подписанным, но дата акта не указана', (ac, rid)))
+        for num, n in db.fetchall(f"SELECT contract_number,count(*) FROM {ct} WHERE coalesce(contract_number,'')<>'' GROUP BY contract_number HAVING count(*)>1"):
+            found.append(_finding('warn', 'Договоры', f'{label}: номер договора «{num}» повторяется {n} раза'))
+    for rid, num in db.fetchall("SELECT id,contract_number FROM smr_contracts WHERE (party_type='person' AND (person_id IS NULL OR person_id NOT IN (SELECT id FROM crm.clients))) OR (party_type='legal' AND legal_id IS NULL)"):
+        found.append(_finding('error', 'Клиенты', f'СМР: у договора «{num}» нет контрагента или клиент удалён', ('smr_contracts', rid)))
     # --- файлы и папки ---
     for table, key, label, column, section, what in FILE_CHECKS:
         if not _table_exists(db, table) or column not in _columns(db, table):
@@ -90,7 +108,7 @@ def check(db):
         for rid, name, path in db.fetchall(f"SELECT {key},{label},{column} FROM {table} WHERE coalesce({column},'')<>'' LIMIT 5000"):
             if not os.path.isdir(path):
                 found.append(_finding('warn', 'Папки', f'{section}: «{(name or "").strip()}» — папка не найдена: {path}', (table, rid)))
-    for key in TEMPLATE_SETTINGS + [r[0] for r in db.fetchall("SELECT key FROM settings WHERE key LIKE 'gsvm_tpl_%'")]:
+    for key in TEMPLATE_SETTINGS + [r[0] for r in db.fetchall("SELECT key FROM settings WHERE key LIKE 'gsvm_tpl_%' OR key LIKE 'le_tpl_%' OR key LIKE 'smr_tpl_%'")]:
         path = db.get_setting(key, '')
         if path and not os.path.isfile(path):
             found.append(_finding('warn', 'Шаблоны', f'Шаблон ({key}) не найден: {path}'))

@@ -26,7 +26,7 @@ def _write_sheet(wb, title, headers, rows):
 
 
 def export_registries(db, destination):
-    """Overwrite `destination` with a fresh two-sheet snapshot (ГСВ, ГСН)."""
+    """Overwrite `destination` with a fresh snapshot (ГСВ, ГСН, Юрлица, СМР)."""
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
 
@@ -34,7 +34,7 @@ def export_registries(db, destination):
     wb.remove(wb.active)
 
     gsv_rows = db.fetchall(
-        """SELECT c.id, c.contract_number, c.contract_date, c.object_name, c.client_name, c.client_phone, c.contract_amount, e.title,
+        """SELECT c.id, c.contract_number, c.contract_date, c.object_name, coalesce(nullif(c.client_name,''),c.party_name), c.client_phone, c.contract_amount, e.title,
                   c.object_address, c.contract_signed, c.work_start_date, c.work_end_date, c.acceptance_act_date, c.act_signed,
                   c.est_materials, c.est_works, c.designer_code, c.designer, c.contract_folder,
                   (SELECT coalesce(sum(count),0) FROM gsvm_joints j WHERE j.contract_id=c.id)
@@ -67,6 +67,22 @@ def export_registries(db, destination):
         [[num or "", date or "", title or "", client or "", phone or "", address or ""]
          for num, date, title, client, phone, address in gsn_rows],
     )
+
+    from . import contracts_core as cc
+    for mod, sheet in (('le', 'Юрлица'), ('smr', 'СМР')):
+        table = cc.cfg(mod)['contracts']
+        cur = db.execute(f'SELECT * FROM {table} ORDER BY id DESC')
+        names = [d[0] for d in cur.description]
+        rows = []
+        for raw in cur.fetchall():
+            rec = dict(zip(names, raw))
+            paid = sum(a for _d, a, _n in cc.payments(db, mod, rec['id']))
+            acts_sum = sum(float(a['amount'] or 0) for a in cc.acts(db, mod, rec['id']))
+            rows.append([rec['contract_number'] or 'Б/Н', rec['contract_date'] or '', cc.party_label(db, mod, rec), rec['object_name'] or '', rec['object_address'] or '',
+                         rec['subject'] or '', float(rec['amount'] or 0), 'Да' if rec['vat_included'] else 'Нет', 'Да' if rec['signed'] else 'Нет', acts_sum, paid,
+                         float(rec['amount'] or 0) - paid, rec['status'] or '', rec['folder'] or ''])
+        _write_sheet(wb, sheet, ['№ договора', 'Дата', 'Контрагент', 'Объект', 'Адрес объекта', 'Предмет', 'Сумма', 'НДС включён', 'Подписан', 'Актов на сумму', 'Оплачено', 'Остаток',
+                                 'Статус', 'Папка договора'], rows)
 
     # Never let a plain string be reinterpreted as a formula by Excel (same guard as elsewhere in the app).
     for sheet in wb.worksheets:
