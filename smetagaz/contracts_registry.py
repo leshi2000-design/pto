@@ -24,6 +24,7 @@ class ContractsRegistryView(QWidget):
         btn_new.clicked.connect(self.new_contract)
         top_bar.addWidget(btn_new)
         payments=QPushButton("Оплаты");payments.clicked.connect(self.open_payments);top_bar.addWidget(payments)
+        acts=QPushButton("Ведомость актов…");acts.setToolTip("Подписанные акты за календарный месяц для бухгалтерии");acts.clicked.connect(lambda:__import__("smetagaz.acts_statement_view",fromlist=["x"]).ActsStatementDialog("contracts",self).exec());top_bar.addWidget(acts)
         tags=QPushButton("Теги для шаблонов");tags.clicked.connect(self.show_tag_reference);top_bar.addWidget(tags)
         top_bar.addSpacing(20)
 

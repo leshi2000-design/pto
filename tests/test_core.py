@@ -142,3 +142,26 @@ def test_delete_client_detaches_and_erases_personal_copies(tmp_path):
     with __import__('pytest').raises(ValueError):
         delete_client(again, cid)
     again.close()
+
+
+def test_safety_backup_and_version_snapshot(tmp_path):
+    from smetagaz.database import DatabaseManager
+    from smetagaz import __version__
+    import sqlite3
+    d = DatabaseManager(tmp_path / 'smetagaz.db')
+    d.init_db()
+    assert not (tmp_path / 'backups').exists()                       # чистая установка — копировать нечего
+    d.execute("INSERT INTO crm.clients(name) VALUES('Иванов')")
+    folder = d.safety_backup('import')
+    assert (sqlite3.connect(folder + '/clients.db').execute('SELECT name FROM clients').fetchone()[0] == 'Иванов')
+    assert sqlite3.connect(folder + '/smetagaz.db').execute("SELECT count(*) FROM sqlite_master WHERE name='estimates'").fetchone()[0] == 1
+    for _ in range(4):
+        d.safety_backup('import', keep=3)
+    assert len(list((tmp_path / 'backups').glob('before_import_*'))) == 3      # старые снимки удаляются
+    d.init_db()
+    assert not list((tmp_path / 'backups').glob('before_upgrade_*'))          # та же версия — повторного снимка нет
+    d.set_setting('app_version', '0.0.1')
+    d.init_db()
+    assert len(list((tmp_path / 'backups').glob('before_upgrade_*'))) == 1    # новая версия программы — снимок перед обновлением
+    assert d.get_setting('app_version') == __version__
+    d.close()

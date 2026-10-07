@@ -874,6 +874,9 @@ class ProjectEditDialog(QDialog):
     def make_document(self, kind):
         if (self.is_new or self.is_editing_enabled) and not self.save_data():
             return
+        from . import preflight, preflight_ui
+        if not preflight_ui.confirm(self, f'«{gsvdom.DOC_KINDS[kind][0]}»', preflight.check_project(db, self.project_id, kind)):
+            return
         from .folder_ui import ensure_project_folder
         if not ensure_project_folder(self, db, self.project_id):
             return
@@ -1117,7 +1120,10 @@ class GsvProjectsView(QWidget):
         layout.addLayout(top_bar)
         tools_bar = QHBoxLayout()
         payments=QPushButton("Оплаты");payments.clicked.connect(self.open_payments)
-        for w in (btn_import, btn_statuses, btn_tpl, btn_tags, btn_excel, payments): tools_bar.addWidget(w)
+        btn_acts = QPushButton("Ведомость актов…")
+        btn_acts.setToolTip("Подписанные акты за календарный месяц для бухгалтерии")
+        btn_acts.clicked.connect(lambda: __import__("smetagaz.acts_statement_view", fromlist=["x"]).ActsStatementDialog("gsv_projects", self).exec())
+        for w in (btn_acts, btn_import, btn_statuses, btn_tpl, btn_tags, btn_excel, payments): tools_bar.addWidget(w)
         tools_bar.addStretch()
         layout.addLayout(tools_bar)
 

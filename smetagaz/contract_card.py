@@ -592,7 +592,12 @@ class ContractCardDialog(QDialog):
         self.lbl_folder.setText(f'Папка договора: {folder}' if folder else 'Папка договора не привязана — программа предложит создать или выбрать её при формировании документов и кнопкой «Папка договора».')
 
     def make_document(self, kind):
-        if not self.ensure_saved() or not self.ensure_folder():
+        if not self.ensure_saved():
+            return
+        from . import preflight, preflight_ui
+        if not preflight_ui.confirm(self, f'«{dd.DOC_KINDS[kind][0]}»', preflight.check_montage(db, self.contract_id, kind)):
+            return
+        if not self.ensure_folder():
             return
         try:
             path = dd.generate(db, self.contract_id, kind)

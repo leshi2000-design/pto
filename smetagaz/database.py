@@ -207,9 +207,31 @@ class DatabaseManager:
                 ('export_font', 'Segoe UI'), ('export_font_size', '13'),
                 ('export_company_name', 'ООО "ГазМонтаж"'),
                 ('export_excel_template', ''), ('export_word_template', ''),
-                ('app_name', 'СМЕТА-ГАЗ 2.6'), ('tabs_config', json.dumps(default_tabs))
+                ('app_name', 'СМЕТА-ГАЗ 2.7'), ('tabs_config', json.dumps(default_tabs))
             ]
             c.executemany("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", defaults)
+
+    def safety_backup(self, reason, keep=10):
+        """Снимок smetagaz.db и clients.db в backups/before_<причина>_<время>. Возвращает папку; при ошибке бросает исключение.
+
+        Вызывается перед действиями, которые трудно отменить: импорт, удаление клиента, обновление версии.
+        """
+        from pathlib import Path
+        from datetime import datetime
+        root=Path(self.db_name).parent/'backups'
+        folder=root/(f'before_{reason}_'+datetime.now().strftime('%Y%m%d_%H%M%S_%f'))
+        folder.mkdir(parents=True)
+        with self._lock:
+            with sqlite3.connect(folder/'smetagaz.db') as target:
+                self.conn.backup(target)
+            clients=Path(self.db_name).with_name('clients.db')
+            if clients.exists():
+                with sqlite3.connect(clients) as source, sqlite3.connect(folder/'clients.db') as target:source.backup(target)
+        old=sorted(root.glob(f'before_{reason}_*'))
+        for stale in old[:-keep] if keep else []:
+            for f in stale.iterdir():f.unlink()
+            stale.rmdir()
+        return str(folder)
 
     def init_db(self):
         # Save original databases before the first schema upgrade.
@@ -218,14 +240,11 @@ class DatabaseManager:
         has_schema=self.fetchone("SELECT 1 FROM sqlite_master WHERE type='table' AND name='estimates'")
         has_settings=self.fetchone("SELECT 1 FROM sqlite_master WHERE type='table' AND name='settings'")
         version=self.get_setting('schema_version','') if has_settings else ''
-        if has_schema and version!='8':
-            folder=Path(self.db_name).parent/'backups'/('before_upgrade_'+datetime.now().strftime('%Y%m%d_%H%M%S_%f'))
-            folder.mkdir(parents=True)
-            with sqlite3.connect(folder/'smetagaz.db') as target:
-                self.conn.backup(target)
-            clients=Path(self.db_name).with_name('clients.db')
-            if clients.exists():
-                with sqlite3.connect(clients) as source, sqlite3.connect(folder/'clients.db') as target:source.backup(target)
+        from . import __version__
+        app_version=self.get_setting('app_version','') if has_settings else ''
+        # Снимок базы делается при смене схемы и при каждом обновлении версии программы.
+        if has_schema and (version!='8' or app_version!=__version__):
+            self.safety_backup('upgrade')
         with self.transaction():
             self._init_schema()
         from .data_services import initialize
@@ -253,7 +272,9 @@ class DatabaseManager:
             self.set_setting("today_tab_first","1")
         if renamed:self.set_setting("tabs_config",json.dumps(tabs_data))
         self.set_setting("schema_version","8")
-        if self.get_setting("app_name") in ("СМЕТА-ГАЗ 2.0","СМЕТА-ГАЗ 2.1","СМЕТА-ГАЗ 2.2","СМЕТА-ГАЗ 2.3","СМЕТА-ГАЗ 2.4","СМЕТА-ГАЗ 2.5"):self.set_setting("app_name","СМЕТА-ГАЗ 2.6")
+        from . import __version__ as _app_version
+        self.set_setting("app_version",_app_version)
+        if self.get_setting("app_name") in ("СМЕТА-ГАЗ 2.0","СМЕТА-ГАЗ 2.1","СМЕТА-ГАЗ 2.2","СМЕТА-ГАЗ 2.3","СМЕТА-ГАЗ 2.4","СМЕТА-ГАЗ 2.5","СМЕТА-ГАЗ 2.6"):self.set_setting("app_name","СМЕТА-ГАЗ 2.7")
 
     def close(self):
         with self._lock:

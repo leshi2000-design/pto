@@ -10,6 +10,7 @@ def warning(*a,**k):raise AssertionError(str(a[1:]))
 QMessageBox.warning=warning
 from smetagaz.database import db
 db.init_db()
+import smetagaz.preflight_ui as pfu;PREFLIGHT_SEEN=[];pfu.confirm=lambda parent,title,issues:PREFLIGHT_SEEN.append((title,issues)) or True      # сверку подтверждаем автоматически
 from smetagaz import gsv_project_domain as g
 from smetagaz.gsv_view import ProjectEditDialog,GsvProjectsView,StatusEditorDialog,TemplateSettingsPanel
 # --- новый договор: поля открыты, номера и срок по умолчанию ---

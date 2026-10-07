@@ -158,8 +158,13 @@ class ImportProjectsDialog(QDialog):
             return
         if QMessageBox.question(self, 'Импорт', 'Импортировать проверенные строки? Перед импортом рекомендуется сделать резервную копию базы.') != QMessageBox.StandardButton.Yes:
             return
+        try:
+            backup = db.safety_backup('import')       # резервная копия базы перед массовым импортом
+        except Exception as e:
+            QMessageBox.warning(self, 'Импорт отменён', f'Не удалось создать резервную копию базы, импорт не выполнен:\n{e}')
+            return
         report = imp.import_rows(db, self.prepared, self.on_exists.currentData(), self.infer.isChecked())
-        text = f'Создано договоров: {report["created"]}, обновлено: {report["updated"]}, пропущено: {report["skipped"]}, ошибок: {len(report["errors"])}.'
+        text = f'Создано договоров: {report["created"]}, обновлено: {report["updated"]}, пропущено: {report["skipped"]}, ошибок: {len(report["errors"])}.\nРезервная копия базы до импорта: {backup}'
         if report['errors']:
             text += '\n\n' + '\n'.join(f'Строка {self.header_row + n}: {msg}' for n, msg in report['errors'][:15])
         self.summary.setText(text.split('\n')[0])

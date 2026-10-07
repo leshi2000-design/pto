@@ -110,9 +110,11 @@ def confirm_delete_client(parent,cid):
     text=f'Удалить клиента «{row[0]}»?'
     if links:
         text+='\n\nКлиент используется:\n'+'\n'.join(f'• {label}: {n}' for label,n in links.items())
-        text+='\n\nДоговоры, суммы, оплаты и файлы останутся, но ФИО, телефон, паспорт и адрес клиента в них будут стёрты. Это нельзя отменить.'
-    else:text+='\n\nЭто нельзя отменить.'
+        text+='\n\nДоговоры, суммы, оплаты и файлы останутся, но ФИО, телефон, паспорт и адрес клиента в них будут стёрты. Это нельзя отменить (кроме восстановления из резервной копии, которая будет создана автоматически).'
+    else:text+='\n\nПеред удалением будет создана резервная копия базы.'
     if QMessageBox.question(parent,'Удаление клиента',text)!=QMessageBox.StandardButton.Yes:return False
+    try:db.safety_backup('delete_client')
+    except Exception as e:QMessageBox.warning(parent,'Удаление отменено',f'Не удалось создать резервную копию базы, клиент не удалён:\n{e}');return False
     try:delete_client(db,cid)
     except ValueError as e:QMessageBox.warning(parent,'Удаление клиента',str(e));return False
     return True

@@ -786,8 +786,14 @@ class DocsTab(QWidget):
         r = self.table.currentRow()
         return self.table.item(r, 0).data(Qt.ItemDataRole.UserRole) if r >= 0 else None
 
-    def make_kind(self, kind):
-        if not self.dialog.ensure_saved() or not self.dialog.ensure_folder():
+    def make_kind(self, kind, check=True):
+        if not self.dialog.ensure_saved():
+            return None
+        if check:
+            from . import preflight, preflight_ui
+            if not preflight_ui.confirm(self, f'«{dd.DOC_KINDS[kind][0]}»', preflight.check_montage(db, self.dialog.contract_id, kind)):
+                return None
+        if not self.dialog.ensure_folder():
             return None
         try:
             return dd.generate(db, self.dialog.contract_id, kind)
@@ -805,8 +811,19 @@ class DocsTab(QWidget):
 
     def make_all(self):
         done = 0
+        if not self.dialog.ensure_saved():
+            return
+        from . import preflight, preflight_ui
+        issues, seen = [], set()
+        for kind in dd.ID_KINDS:              # сверка один раз для всего комплекта
+            for i in preflight.check_montage(db, self.dialog.contract_id, kind):
+                if i['text'] not in seen:
+                    seen.add(i['text'])
+                    issues.append(i)
+        if not preflight_ui.confirm(self, 'Комплект исполнительной документации', issues):
+            return
         for kind in dd.ID_KINDS:
-            if self.make_kind(kind):
+            if self.make_kind(kind, check=False):
                 done += 1
             else:
                 break

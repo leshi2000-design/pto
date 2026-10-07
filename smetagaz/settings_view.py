@@ -165,6 +165,15 @@ class SettingsView(QWidget):
         box_excel_layout.addLayout(excel_bar)
         layout.addWidget(box_excel)
 
+        # 6. Проверка целостности базы.
+        box_integrity = QFrame()
+        box_integrity_layout = QVBoxLayout(box_integrity)
+        box_integrity_layout.addWidget(QLabel("Проверка целостности базы: договоры без клиента, оплаты без договора, пропавшие файлы, папки и шаблоны."))
+        btn_integrity = QPushButton("Проверить базу…")
+        btn_integrity.clicked.connect(lambda: __import__("smetagaz.integrity_view", fromlist=["x"]).IntegrityDialog(self).exec())
+        box_integrity_layout.addWidget(btn_integrity)
+        layout.addWidget(box_integrity)
+
         layout.addStretch()
         scroll.setWidget(container)
         main_layout.addWidget(scroll)

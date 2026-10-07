@@ -10,6 +10,7 @@ def warning(*a,**k):raise AssertionError(str(a[1:]))
 QMessageBox.warning=warning;QMessageBox.information=lambda *a,**k:None
 from smetagaz.database import db
 db.init_db()
+import smetagaz.preflight_ui as pfu;PREFLIGHT_SEEN=[];pfu.confirm=lambda parent,title,issues:PREFLIGHT_SEEN.append((title,issues)) or True      # сверку подтверждаем автоматически
 from smetagaz import gsvm_domain as md,gsvm_docs as dd
 import smetagaz.folder_ui as fu,smetagaz.gsvm_tabs as tabs,smetagaz.contract_card as cc
 opened=[];tabs.open_local=lambda p,verb=None:opened.append((p,verb));cc.open_file=lambda parent,p,verb=None:opened.append((p,verb)) or True
