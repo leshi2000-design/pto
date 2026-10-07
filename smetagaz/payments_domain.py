@@ -1,7 +1,7 @@
 """A single payment ledger, shared by an estimate and its linked contract."""
 from decimal import Decimal
 from datetime import date
-OWNERS={'estimates':('total','Сметы'),'contracts':('contract_amount','ГСВ'),'gsn_projects':('contract_amount','ГСН'),'gsv_projects':('cost','Проектирование ГСВ')}
+OWNERS={'estimates':('total','Сметы'),'contracts':('contract_amount','ГСВ'),'gsn_projects':('contract_amount','ГСН'),'gsv_projects':('cost','Проектирование ГСВ'),'le_contracts':('amount','Юрлица'),'smr_contracts':('amount','СМР')}
 def migrate(db):
     for table,additions in {'payments':{'owner_type':'TEXT','owner_id':'INTEGER','note':"TEXT DEFAULT ''"},'gsn_projects':{'estimate_id':'INTEGER REFERENCES estimates(id)','contract_amount':'REAL DEFAULT 0'},'gsv_projects':{'estimate_id':'INTEGER REFERENCES estimates(id)'},'estimates':{'payment_opening':'REAL DEFAULT 0'}}.items():
         cols={r[1] for r in db.fetchall(f'PRAGMA table_info({table})')}
@@ -53,7 +53,7 @@ def link(db,owner,rid,eid):
         if old and history(db,owner,rid):raise ValueError('У связанной сметы есть оплаты. Перепривязка запрещена, чтобы не переносить деньги между объектами.')
         if eid:
             account(db,'estimates',eid)
-            for table in ('contracts','gsn_projects','gsv_projects'):
+            for table in ('contracts','gsn_projects','gsv_projects','smr_contracts'):
                 found=db.fetchone(f'SELECT id FROM {table} WHERE estimate_id=?',(eid,))
                 if found and (table!=owner or found[0]!=rid):raise ValueError('Эта смета уже связана с другим договором')
         db.execute(f'UPDATE {owner} SET estimate_id=? WHERE id=?',(eid,rid))
