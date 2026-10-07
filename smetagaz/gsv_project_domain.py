@@ -141,7 +141,7 @@ DOC_KINDS = {
     'act': ('Акт (Word)', 'gsvp_tpl_act', 'Шаблон_акта_проект_ГСВ.docx', 'Акт'),
     'card': ('Карточка клиента (Excel)', 'gsvp_tpl_card', 'Шаблон_карточки_клиента_проект_ГСВ.xlsx', 'Карточка_клиента'),
 }
-SECTION_DIRS = {'gsv_projects': 'Проекты ГСВ', 'contracts': 'Монтаж ГСВ', 'gsn_projects': 'Монтаж ГСН'}
+SECTION_DIRS = {'gsv_projects': 'Проекты ГСВ', 'contracts': 'Монтаж ГСВ', 'gsn_projects': 'Монтаж ГСН', 'le': 'Юрлица', 'smr': 'СМР'}
 PROJECTS_DIR = DATA_DIR / 'projects'
 TEMPLATES_DIR = DATA_DIR / 'templates'
 

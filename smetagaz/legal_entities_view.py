@@ -792,10 +792,12 @@ class OutgoingLogRegistry(QWidget):
 class LegalEntitiesView(QWidget):
     def __init__(self):
         super().__init__()
+        from .counterparty_ui import ContractsRegistry, ActsRegistry, LegalClientsRegistry as Directory, TemplatesTab
         layout = QVBoxLayout(self)
         tabs = QTabWidget()
-        tabs.addTab(LegalContractsRegistry(), "Договоры")
-        tabs.addTab(LegalActsRegistry(), "Акты")
-        tabs.addTab(LegalClientsRegistry(), "Юрлица")
+        tabs.addTab(ContractsRegistry('le'), "Договоры")
+        tabs.addTab(ActsRegistry('le'), "Акты")
+        tabs.addTab(Directory(), "Справочник юрлиц")
         tabs.addTab(OutgoingLogRegistry(), "Исходящая документация")
+        tabs.addTab(TemplatesTab('le'), "Шаблоны и теги")
         layout.addWidget(tabs)

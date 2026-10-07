@@ -9,7 +9,8 @@ from .agenda_domain import norm_date
 from . import gsv_project_domain as gd
 
 MONTHS = ['', 'январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь']
-SECTIONS = {'gsv_projects': 'Проекты ГСВ', 'contracts': 'Монтаж ГСВ'}
+SECTIONS = {'gsv_projects': 'Проекты ГСВ', 'contracts': 'Монтаж ГСВ', 'le_contracts': 'Юрлица', 'smr_contracts': 'СМР'}
+COUNTERPARTY = {'le_contracts': 'le', 'smr_contracts': 'smr'}
 SQL = {
     'gsv_projects': ("SELECT id,pd_number,contract_number,contract_date,act_date,client_name,object_name,address,cost,coalesce(act_signed,0) "
                      "FROM gsv_projects WHERE coalesce(act_date,'')<>''"),
@@ -48,10 +49,29 @@ def _paid(db, section, rid):
 
 def statement(db, section, year, month):
     """{'signed': [...], 'unsigned': [...]} — акты, датированные выбранным месяцем; сначала по дате акта."""
-    if section not in SQL:
-        raise ValueError('Ведомость формируется для проектов ГСВ и монтажа ГСВ')
+    if section not in SQL and section not in COUNTERPARTY:
+        raise ValueError('Неизвестный раздел для ведомости')
     prefix = f'{year:04d}-{month:02d}'
     result = {'signed': [], 'unsigned': []}
+    if section in COUNTERPARTY:
+        from . import contracts_core as cc
+        mod = COUNTERPARTY[section]
+        c = cc.cfg(mod)
+        for aid, number, act_date, amount, signed, cid in db.fetchall(f"SELECT id,act_number,act_date,amount,coalesce(signed,0),contract_id FROM {c['acts']} WHERE coalesce(act_date,'')<>''"):
+            act = norm_date(act_date)
+            if not act.startswith(prefix):
+                continue
+            ct = cc.contract(db, mod, cid)
+            paid = sum(a for _d, a, _n in cc.payments(db, mod, cid))
+            path = cc.doc_path(db, mod, 'act', aid)
+            amount = float(amount or 0)
+            row = dict(id=aid, number=number or '', contract_number=ct['contract_number'] or '', contract_date=norm_date(ct['contract_date']), act_date=act,
+                       client=cc.party_label(db, mod, ct), object=ct['object_name'] or '', address=ct['object_address'] or '', amount=amount, paid=paid, rest=float(ct['amount'] or 0) - paid,
+                       file=path if path and os.path.isfile(path) else '')
+            result['signed' if signed else 'unsigned'].append(row)
+        for rows in result.values():
+            rows.sort(key=lambda r: (r['act_date'], r['number']))
+        return result
     for rid, number, contract_number, contract_date, act_date, client, obj, address, amount, signed in db.fetchall(SQL[section]):
         act = norm_date(act_date)
         if not act.startswith(prefix):

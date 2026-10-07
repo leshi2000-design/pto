@@ -618,3 +618,47 @@ def contract_from_source(db, source_type, source_id):
     if row[7]:
         save_act(db, 'le', dict(contract_id=cid, act_date=row[7], amount=row[5], description=subject, signed=1))
     return cid, True
+
+
+# --- СВЕРКА ПЕРЕД ФОРМИРОВАНИЕМ ----------------------------------------------------------------
+
+def check(db, mod, kind, ref_id):
+    """Замечания перед формированием документа: [{'level': 'error'|'warn', 'text': …}]."""
+    cid, aid = _ids(db, mod, kind, ref_id)
+    c = contract(db, mod, cid)
+    p = party(db, mod, c)
+    out = []
+
+    def add(level, text):
+        out.append(dict(level=level, text=text))
+    if not (c.get('contract_number') or '').strip():
+        add('error', 'Не указан номер договора')
+    if not c.get('contract_date'):
+        add('error', 'Не указана дата договора')
+    if not p['name']:
+        add('error', 'Не выбран контрагент')
+    if p['kind'] == 'legal':
+        for key, label in (('unp', 'УНП'), ('legal_address', 'юридический адрес'), ('bank', 'банк'), ('account', 'расчётный счёт'), ('head_name', 'ФИО руководителя'),
+                           ('head_name_gen', 'ФИО руководителя в родительном падеже'), ('basis', 'основание (устав/доверенность)')):
+            if not p[key]:
+                add('warn', f'У юрлица не заполнено: {label}')
+    else:
+        if not p['passport']:
+            add('warn', 'У клиента не заполнены паспортные данные')
+        if not p['address']:
+            add('warn', 'У клиента не указан адрес')
+    if not float(c.get('amount') or 0):
+        add('warn', 'Сумма договора равна нулю')
+    if not (c.get('subject') or '').strip() and kind == 'contract':
+        add('warn', 'Не указан предмет договора')
+    if aid:
+        a = act(db, mod, aid)
+        if not a.get('act_date'):
+            add('error', 'У акта не указана дата')
+        if not float(a.get('amount') or 0):
+            add('error', 'У акта нулевая сумма')
+        if not (a.get('description') or '').strip():
+            add('warn', 'Не заполнено описание работ в акте')
+    if mod == 'smr' and estimate_state(db, cid) == 'stale':
+        add('error', 'Смета изменена после получения данных — обновите стоимость в карточке договора')
+    return out

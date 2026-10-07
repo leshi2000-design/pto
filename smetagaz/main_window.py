@@ -35,6 +35,7 @@ from .executive_view import ExecutiveDocsView
 from .gsv_catalog import GsvCatalogView
 from .extra_views import GsnProjectsView, WeldersView, CalculatorsView, WriteoffView
 from .legal_entities_view import LegalEntitiesView
+from .counterparty_ui import SmrView
 
 class GlobalSearchDialog(QDialog):
     def __init__(self, main_window):
@@ -121,6 +122,7 @@ class MainWindow(QMainWindow):
             "gsv": GsvProjectsView,
             "gsn": GsnProjectsView,
             "legal_entities": LegalEntitiesView,
+            "smr": SmrView,
             "exec": ExecutiveDocsView,
             "materials": MaterialsView,
             "welders": WeldersView,
@@ -159,6 +161,7 @@ class MainWindow(QMainWindow):
             ("gsv", "Проекты ГСВ"),
             ("gsn", "Монтаж ГСН"),
             ("legal_entities", "Юрлица"),
+            ("smr", "СМР"),
             ("exec", "Исполнительная док."),
             ("materials", "Справочник"),
             ("welders", "Сварщики"),
