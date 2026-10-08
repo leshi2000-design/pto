@@ -22,6 +22,7 @@ from .pagination import RegistryPager
 from .widgets import SmartTableManager
 from .dialogs_common import PaymentDialog
 from .estimate_editor import EstimateEditorDialog
+from . import estimates_domain as ed
 
 
 class EstimatesTree(QTreeWidget):
@@ -150,12 +151,18 @@ class EstimatesView(QWidget):
         self.combo_status.currentIndexChanged.connect(self.load_data)
         actions.addWidget(self.combo_status)
 
+        actions.addWidget(QLabel("Договор:"))
+        self.combo_contract = QComboBox()
+        self.combo_contract.addItems(["Все сметы", "Без договора", "С договором"])
+        self.combo_contract.currentIndexChanged.connect(self.load_data)
+        actions.addWidget(self.combo_contract)
+
         actions.addStretch()
 
         self.btn_cols = QPushButton("Настройка колонок ▼")
         self.cols_menu = QMenu(self)
         self.col_actions = []
-        self.headers = ["Шифр / Объект", "Клиент", "Телефон", "Статусы", "Дата", "Сумма (руб)", "Оплачено", "Долг"]
+        self.headers = ["Шифр / Объект", "Клиент", "Телефон", "Статусы", "Дата", "Сумма (руб)", "Оплачено", "Долг", "Договор"]
 
         hidden_cols = []
         try: hidden_cols = json.loads(db.get_setting("estimates_hidden_cols", "[]"))
@@ -193,7 +200,7 @@ class EstimatesView(QWidget):
         right_layout.setContentsMargins(5, 0, 0, 0)
 
         self.table = EstimatesTable(self)
-        self.table.setColumnCount(8)
+        self.table.setColumnCount(9)
         self.table.setHorizontalHeaderLabels(self.headers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -203,7 +210,7 @@ class EstimatesView(QWidget):
         for i in hidden_cols:
             if i != 0: self.table.setColumnHidden(i, True)
 
-        self.table_manager = SmartTableManager(self.table, main_col=0, default_widths={1: 150, 2: 120, 3: 160, 4: 100, 5: 120, 6: 110, 7: 110})
+        self.table_manager = SmartTableManager(self.table, main_col=0, default_widths={1: 150, 2: 120, 3: 160, 4: 100, 5: 120, 6: 110, 7: 110, 8: 230})
         right_layout.addWidget(self.table)
         self.splitter.addWidget(right_widget)
 
@@ -319,7 +326,7 @@ class EstimatesView(QWidget):
 
         search_str = self.search_inp.text().strip().lower() if hasattr(self, 'search_inp') else ""
 
-        query = "SELECT id, title, client_name, client_phone, statuses, date, total, paid FROM estimates"
+        query = "SELECT id, title, coalesce(nullif(client_name,''),party_name), client_phone, statuses, date, total, paid FROM estimates"
         params = []
         conditions = []
 
@@ -332,8 +339,13 @@ class EstimatesView(QWidget):
             params.append(f"%{curr_status}%")
 
         if search_str:
-            conditions.append("(LOWER(title) LIKE ? OR LOWER(client_name) LIKE ? OR LOWER(client_phone) LIKE ?)")
+            conditions.append("(LOWER(title) LIKE ? OR LOWER(coalesce(nullif(client_name,''),party_name)) LIKE ? OR LOWER(client_phone) LIKE ?)")
             params.extend([f"%{search_str}%", f"%{search_str}%", f"%{search_str}%"])
+
+        mode = self.combo_contract.currentIndex() if hasattr(self, 'combo_contract') else 0
+        if mode:
+            linked = " OR ".join(f"id IN (SELECT estimate_id FROM {t} WHERE estimate_id IS NOT NULL)" for t in ed.CONTRACT_TABLES)
+            conditions.append(f"({linked})" if mode == 2 else f"NOT ({linked})")
 
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
@@ -377,6 +389,11 @@ class EstimatesView(QWidget):
             item_debt.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             item_debt.setForeground(QColor("#DC2626") if debt > 0 else QColor("#16A34A"))
             self.table.setItem(row_idx, 7, item_debt)
+
+            info = ed.contract_of(db, est_id)
+            item_contract = QTableWidgetItem(info['label'] if info else "— без договора —")
+            item_contract.setForeground(QColor("#2563EB") if info else QColor("#94A3B8"))
+            self.table.setItem(row_idx, 8, item_contract)
 
         self.table.setUpdatesEnabled(True)
         self.table_manager.adjust_main_column()
@@ -453,15 +470,10 @@ class EstimatesView(QWidget):
 
             try:
                 with db.transaction() as cur:
-                    def_ov = float(db.get_setting('def_overhead_pct', '15.0'))
-                    def_pr = float(db.get_setting('def_profit_pct', '10.0'))
-                    def_vat = float(db.get_setting('def_vat_pct', '20.0'))
-                    def_soc = float(db.get_setting('def_social_pct', '34.6'))
-
                     cur.execute("""INSERT INTO estimates 
-                                        (title, date, total, paid, statuses, overhead_pct, profit_pct, vat_pct, social_pct, folder_id) 
-                                        VALUES (?, ?, 0.0, 0.0, 'Передано в работу', ?, ?, ?, ?, ?)""",
-                                     (f"Отчет: {base_name}", date_str, def_ov, def_pr, def_vat, def_soc, self.selected_folder_id))
+                                        (title, date, total, paid, statuses, folder_id) 
+                                        VALUES (?, ?, 0.0, 0.0, 'Передано в работу', ?)""",
+                                     (f"Отчет: {base_name}", date_str, self.selected_folder_id))
                     est_id = cur.lastrowid
 
                     added_count = 0
@@ -528,23 +540,22 @@ class EstimatesView(QWidget):
             QMessageBox.critical(self, "Ошибка импорта", f"Не удалось прочитать файл отчета:\n{e}\n\nВозможно файл открыт в Excel.")
 
     def new_estimate(self):
-        name, ok = QInputDialog.getText(self, "Новая смета", "Шифр или наименование объекта:")
-        if ok and name.strip():
-            date_str = datetime.now().strftime("%Y-%m-%d")
-            def_ov = float(db.get_setting('def_overhead_pct', '15.0'))
-            def_pr = float(db.get_setting('def_profit_pct', '10.0'))
-            def_vat = float(db.get_setting('def_vat_pct', '20.0'))
-            def_soc = float(db.get_setting('def_social_pct', '34.6'))
-
-            cur = db.execute("""INSERT INTO estimates 
-                                (title, date, total, paid, statuses, overhead_pct, profit_pct, vat_pct, social_pct, folder_id) 
-                                VALUES (?, ?, 0.0, 0.0, 'Предварительная смета', ?, ?, ?, ?, ?)""",
-                             (name.strip(), date_str, def_ov, def_pr, def_vat, def_soc, self.selected_folder_id))
-            est_id = cur.lastrowid
-            logging.info(f"Создана смета: {name.strip()} (ID {est_id})")
-            editor = EstimateEditorDialog(est_id, name.strip(), self)
-            editor.exec()
-            self.load_data()
+        from .estimates_ui import NewEstimateDialog
+        from . import estimates_domain as ed
+        dlg = NewEstimateDialog(self)
+        if not dlg.exec():
+            return
+        title, client, contract, link = dlg.values()
+        try:
+            est_id = ed.create_estimate(db, title, client, contract, link, self.selected_folder_id, db.get_setting('estimate_prepared_by', ''))
+        except ValueError as e:
+            QMessageBox.warning(self, "Новая смета", str(e))
+            return
+        name = db.fetchone("SELECT title FROM estimates WHERE id=?", (est_id,))[0]
+        logging.info(f"Создана смета: {name} (ID {est_id})")
+        editor = EstimateEditorDialog(est_id, name, self)
+        editor.exec()
+        self.load_data()
 
     def open_estimate(self):
         curr = self.table.currentRow()

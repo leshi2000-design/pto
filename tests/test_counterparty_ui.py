@@ -14,7 +14,7 @@ def env(tmp_path, monkeypatch):
     d = DatabaseManager(tmp_path / 'smetagaz.db')
     d.init_db()
     import importlib, sys
-    for name in ('notes_view', 'gsn_catalog', 'tasks_view', 'today_view', 'workspace_view', 'main_window', 'gsv_view', 'contract_card', 'payments_view', 'board_domain'):
+    for name in ('notes_view', 'gsn_catalog', 'tasks_view', 'today_view', 'workspace_view', 'main_window', 'gsv_view', 'contract_card', 'payments_view', 'board_domain', 'estimates_ui', 'estimate_editor', 'estimates_registry', 'work_breakdown_view', 'report_dialog', 'dialogs_common'):
         importlib.import_module('smetagaz.' + name)
     from smetagaz.database import db as singleton
     for name, mod in list(sys.modules.items()):
@@ -161,6 +161,7 @@ def test_sidebar_sections_notes_and_gsn_catalog(env, monkeypatch):
         if name.startswith('smetagaz') and getattr(mod, 'db', None) is singleton:
             monkeypatch.setattr(mod, 'db', db)
     monkeypatch.setattr(QMessageBox, 'question', lambda *a, **k: QMessageBox.StandardButton.Yes)
+    from datetime import date
     # дерево меню
     w = mw.MainWindow()
     names = [b.text() for b in w.tabs_buttons]
@@ -185,16 +186,84 @@ def test_sidebar_sections_notes_and_gsn_catalog(env, monkeypatch):
     assert db.fetchone("SELECT count(*) FROM notes WHERE title='Позвонить прорабу'")[0] == 1
     panel.new_note()
     assert panel.current_link() == ('', None)
-    # справочник ГСН
-    cert = db.execute("INSERT INTO certificates(name,cert_number) VALUES('Сертификат ПЭ100','123')").lastrowid
-    cert2 = db.execute("INSERT INTO certificates(name,cert_number) VALUES('По умолчанию','9')").lastrowid
-    pid = db.execute("INSERT INTO gsn_pipelines(name,unit,certificate_id) VALUES('Труба ПЭ100 63','м',?)", (cert,)).lastrowid
-    gn.add_cert_rule(db, 'pipeline_text', 'ПЭ100', cert2)
-    db.execute('INSERT INTO gsn_default_certs(certificate_id) VALUES(?)', (cert2,))
-    got = gn.required_certificates(db, [pid], ['Кран шаровой'])
-    assert [c['id'] for c in got] == [cert, cert2]
+    # справочник ГСН: независим от ГСВ
+    c1 = gn.save_cert(db, dict(name='Сертификат ПЭ100', number='123', valid_to='2026-10-20'))
+    c2 = gn.save_cert(db, dict(name='Общий', always=True))
+    item = gn.save_item(db, dict(category='Трубопроводы', name='Труба ПЭ100 63', unit='м'), cert_ids=[c1])
+    assert [c['id'] for c in gn.required_certificates(db, [item])] == [c1, c2]
+    assert gn.required_certificates(db, []) == [dict(id=c2, name='Общий', number='', path='', reason='всегда')]
+    assert gn.cert_state('2026-12-20', date(2026, 10, 8))[0] == 'ok' and gn.cert_state('2026-10-20', date(2026, 10, 8))[0] == 'soon' and gn.cert_state('2026-10-01', date(2026, 10, 8))[0] == 'expired'
+    assert db.fetchone('SELECT count(*) FROM certificates')[0] == 0        # общий реестр сертификатов ГСВ не затронут
     with pytest.raises(ValueError):
-        gn.add_cert_rule(db, 'pipeline_text', 'ПЭ100', cert2)
+        gn.save_cert(db, dict(name='x', valid_from='2026-02-01', valid_to='2026-01-01'))
     catalog = gn.GsnCatalogView()
-    assert catalog.table.rowCount() == 1
-    gn.GsnRulesDialog()
+    catalog.load_data()
+    assert catalog.items.table.rowCount() == 1 and catalog.certs.table.rowCount() == 2
+    gn.GsnItemDialog(item)
+    gn.GsnCertDialog(c1)
+
+
+def test_estimates_ui(env, monkeypatch, tmp_path):
+    db, ui = env
+    from docx import Document
+    from smetagaz import estimates_domain as ed
+    import smetagaz.estimates_ui as eu, smetagaz.estimate_editor as ee, smetagaz.work_breakdown_view as wb
+    monkeypatch.setattr(QMessageBox, 'question', lambda *a, **k: QMessageBox.StandardButton.Yes)
+    pid = db.execute("INSERT INTO crm.clients(name,phone) VALUES('Петров Пётр','+375')").lastrowid
+    lid = cc.save_legal(db, dict(name='ООО Ромашка'))
+    cid = cc.save_contract(db, 'smr', dict(party_type='person', person_id=pid, contract_date='2026-05-01', amount=1))
+    # диалог создания: по умолчанию без договора
+    d = eu.NewEstimateDialog()
+    d.cmb_person.setCurrentIndex(d.cmb_person.findData(pid))
+    assert d.values() == ('', ('person', pid), None, False)
+    d.contract = ('smr_contracts', cid)
+    d.rb_contract.setChecked(True)
+    assert d.values()[2] == ('smr_contracts', cid) and d.values()[3] is False
+    d.chk_link.setChecked(True)
+    assert d.values()[3] is True
+    d.rb_none.setChecked(True)
+    assert d.values() == ('', None, None, False)
+    eid = ed.create_estimate(db, 'Баня', client=('person', pid))
+    for name, itype, qty, price, purchase in (('Труба', 'Материал', 10, 10, 6), ('Монтаж', 'Работа', 2, 50, 30)):
+        db.execute("INSERT INTO estimate_items(estimate_id,name,item_type,unit,quantity,price,sum,purchase_price) VALUES(?,?,?,?,?,?,?,?)", (eid, name, itype, 'шт', qty, price, qty * price, purchase))
+    # модуль и реестр
+    module = eu.EstimatesModule()
+    reg = module.registry
+    assert reg.table.columnCount() == 9 and reg.table.item(0, 8).text() == '— без договора —'
+    reg.combo_contract.setCurrentIndex(2)
+    assert reg.table.rowCount() == 0
+    reg.combo_contract.setCurrentIndex(1)
+    assert reg.table.rowCount() == 1
+    # редактор: без начислений, договор привязывается и отвязывается
+    editor = ee.EstimateEditorDialog(eid, 'Баня')
+    assert not hasattr(editor, 'chk_vat') and not hasattr(editor, 'chk_social') and not hasattr(editor, 'show_item_profits')
+    assert editor.grand_total == 200
+    monkeypatch.setattr(ee.EstimateEditorDialog, 'pick_contract', lambda self, with_estimate, title: ('smr_contracts', cid))
+    editor.link_contract()
+    assert ed.contract_of(db, eid)['section'] == 'СМР' and 'Договор:' in editor.lbl_contract.text()
+    editor.fill_contract_menu()
+    assert [a.text() for a in editor.contract_menu.actions()][-1] == 'Отвязать договор'
+    editor.unlink_contract()
+    assert ed.contract_of(db, eid) is None
+    ed.set_client(db, eid, 'legal', lid)
+    editor.load_meta()
+    assert editor.inp_client.text() == 'ООО Ромашка' and editor.inp_client.isReadOnly()
+    editor.spin_total_adj.setValue(10)
+    assert db.fetchone('SELECT total,client_name,party_name FROM estimates WHERE id=?', (eid,)) == (220.0, '', 'ООО Ромашка')
+    # единое окно расшифровки и маржи
+    dlg = wb.WorkBreakdownDialog(eid)
+    assert dlg.tabs.count() == 3 and dlg.table_works.rowCount() == 1 and dlg.table_materials.rowCount() == 1 and dlg.table_summary.rowCount() == 11
+    # шаблоны и теги
+    tpl = tmp_path / 't.docx'
+    doc = Document(); doc.add_paragraph('{{клиент}} {{итого}}'); doc.save(tpl)
+    db.execute('UPDATE estimates SET prepared_by=? WHERE id=?', ('Иванов', eid))
+    db.execute("INSERT INTO report_templates(kind,name,file_path) VALUES('estimates','Смета',?)", (str(tpl),))
+    tab = eu.EstimateTemplatesTab()
+    tab.templates.selectRow(0)
+    tab.check_template()
+    assert tab.status.text().startswith('Проверка пройдена')
+    assert tab.tags.rowCount() >= 30 and tab.table_tags.rowCount() > 20
+    tab.new_tag()
+    tab.tags.item(tab.tags.rowCount() - 1, 0).setText('Сумма Работ')
+    tab.save_tags()
+    assert db.fetchone("SELECT count(*) FROM est_tags WHERE name='сумма_работ'")[0] == 1

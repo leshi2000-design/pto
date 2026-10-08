@@ -40,8 +40,8 @@ def test_repeat_formula_rejected_and_output_untouched(tmp_path):
     assert out.read_bytes()==b'original'
 
 def test_estimate_context_totals_and_export(db,tmp_path):
-    rid=db.execute("INSERT INTO estimates(title,date,total,paid,has_vat,vat_pct,mat_adj_pct) VALUES('Смета','2026-09-01',132,32,1,20,10)").lastrowid
-    db.execute("INSERT INTO estimate_items(estimate_id,name,item_type,quantity,price,sum) VALUES(?, 'Труба','Материал',10,10,100)",(rid,));ctx,tables=reports.context(db,'estimates',rid);assert ctx['calculated_total']==132;assert ctx['debt']==100;assert tables['items'][0]['quantity']==10
+    rid=db.execute("INSERT INTO estimates(title,date,total,paid,mat_adj_pct) VALUES('Смета','2026-09-01',132,32,10)").lastrowid
+    db.execute("INSERT INTO estimate_items(estimate_id,name,item_type,quantity,price,sum) VALUES(?, 'Труба','Материал',10,10,100)",(rid,));ctx,tables=reports.context(db,'estimates',rid);assert ctx['calculated_total']==110 and ctx['vat_total']==0;assert ctx['debt']==100;assert tables['items'][0]['quantity']==10
     src=tmp_path/'t.docx';doc=Document();doc.add_paragraph('{{title}} {{total}}');doc.save(src);tid=db.execute('INSERT INTO report_templates(kind,name,file_path) VALUES(?,?,?)',('estimates','Смета',str(src))).lastrowid
     db.execute('UPDATE estimates SET prepared_by=? WHERE id=?',('Иванов И.И.',rid))
     result=tmp_path/'result.docx';reports.export(db,'estimates',rid,tid,result);assert Document(result).paragraphs[0].text=='Смета 132.0'

@@ -47,9 +47,9 @@ class ReportTemplateDialog(QDialog):
         if rid and QMessageBox.question(self,'Шаблон','Убрать настройку шаблона для всех документов этого вида? Исходный файл останется на диске.')==QMessageBox.StandardButton.Yes:db.execute('DELETE FROM report_templates WHERE id=?',(rid,));self.reload()
     def load_tags(self):
         try:
-            ctx,tables=reports.context(db,self.kind,self.rid,self.filters);pairs=[('{{'+k+'}}',str(v)[:500]) for k,v in sorted(ctx.items())]
+            ctx,tables=reports.context(db,self.kind,self.rid,self.filters);from . import estimates_domain as ed;est=self.kind in ('estimates','estimate_breakdown');pairs=[('{{'+k+'}}',str(v)[:500]) for k,v in sorted(ctx.items()) if not (est and k in ed.HIDDEN_KEYS)]
             for key,values in tables.items():
-                columns=list(values[0]) if values else list(SCHEMAS.get(key,('index','c1','c2','c3','c4','c5','c6')))
+                columns=ed.TABLE_TAGS[key][1] if est and key in ed.TABLE_TAGS else (list(values[0]) if values else list(SCHEMAS.get(key,('index','c1','c2','c3','c4','c5','c6'))))
                 if self.kind=='balances' and key=='items':columns=['index','name','category','unit','balance','notes']
                 for column in columns:pairs.append(('{{'+key+'.'+column+'}}',f'Повторяющаяся строка · {len(values)} записей'))
             self.tags.setRowCount(len(pairs))

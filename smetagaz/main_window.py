@@ -34,6 +34,7 @@ from .executive_view import ExecutiveDocsView
 
 from .gsv_catalog import GsvCatalogView
 from .gsn_catalog import GsnCatalogView
+from .estimates_ui import EstimatesModule
 from .extra_views import GsnProjectsView, WeldersView, CalculatorsView, WriteoffView
 from .legal_entities_view import LegalEntitiesView
 from .counterparty_ui import SmrView
@@ -77,8 +78,9 @@ class GlobalSearchDialog(QDialog):
 NAV_SECTIONS = [
     ('Сегодня', ['tasks']),
     ('Услуги', ['gsv', 'contracts', 'gsn', 'smr']),
+    ('Сметы', ['estimates']),
     ('Контрагенты', ['clients', 'legal_entities']),
-    ('Дополнительно', ['welders', 'writeoff', 'calculators', 'stats', 'estimates', 'exec', 'workspace']),
+    ('Дополнительно', ['welders', 'writeoff', 'calculators', 'stats', 'exec', 'workspace']),
     ('Справочники', ['gsv_catalog', 'gsn_catalog', 'materials']),
     ('Настройки', ['settings']),
 ]
@@ -137,7 +139,7 @@ class MainWindow(QMainWindow):
             "workspace": WorkspaceView,
             "clients": lambda: WorkspaceView("crm.clients"),
             "tasks": TodayView,
-            "estimates": EstimatesView,
+            "estimates": EstimatesModule,
             "contracts": ContractsRegistryView,
             "gsv": GsvProjectsView,
             "gsn": GsnProjectsView,

@@ -1,5 +1,5 @@
 """
-Редактор сметы: таблица позиций, скидки/наценки, маржинальность, экспорт.
+Редактор сметы: таблица позиций, скидки/наценки, клиент и договор, окно «Расшифровка и маржа», экспорт. Начислений на работы в смете нет.
 """
 import re
 import os
@@ -27,6 +27,7 @@ from .workspace_view import ExportDialog
 from .widgets import ReorderTableWidget, SmartTableManager
 from .dialogs_common import PaymentDialog, CustomItemDialog, WorkSelectionDialog, MaterialSelectionDialog
 from .contract_card import ContractCardDialog
+from . import estimates_domain as ed
 
 
 class EstimateEditorDialog(QDialog):
@@ -75,15 +76,14 @@ class EstimateEditorDialog(QDialog):
         btn_pay.clicked.connect(self.open_payments)
         top_bar.addWidget(btn_pay)
 
-        btn_contract = QPushButton("Карточка договора")
-        btn_contract.clicked.connect(self.open_contract_card)
-        top_bar.addWidget(btn_contract)
+        self.btn_contract = QPushButton("Договор ▼")
+        self.contract_menu = QMenu(self)
+        self.btn_contract.setMenu(self.contract_menu)
+        self.contract_menu.aboutToShow.connect(self.fill_contract_menu)
+        top_bar.addWidget(self.btn_contract)
 
-        self.btn_show_profit = QPushButton("💰 Показать маржу")
-        self.btn_show_profit.clicked.connect(self.show_item_profits)
-        top_bar.addWidget(self.btn_show_profit)
-
-        btn_breakdown = QPushButton("Расшифровка работ")
+        btn_breakdown = QPushButton("Расшифровка и маржа")
+        btn_breakdown.setToolTip("Работы по статьям, материалы с маржой и итоги в одном окне; экспорт по шаблону")
         btn_breakdown.clicked.connect(self.show_work_breakdown)
         top_bar.addWidget(btn_breakdown)
 
@@ -123,13 +123,24 @@ class EstimateEditorDialog(QDialog):
         meta_layout = QVBoxLayout(meta_group)
 
         row1 = QHBoxLayout()
-        row1.addWidget(QLabel("ФИО Клиента:"))
+        row1.addWidget(QLabel("Клиент:"))
         self.inp_client = QLineEdit()
         row1.addWidget(self.inp_client)
         row1.addWidget(QLabel("Телефон:"))
         self.inp_phone = QLineEdit()
         row1.addWidget(self.inp_phone)
+        btn_legal = QPushButton("Юрлицо…")
+        btn_legal.setToolTip("Выбрать организацию из справочника «Юрлица»")
+        btn_legal.clicked.connect(self.choose_legal)
+        row1.addWidget(btn_legal)
+        btn_from_contract = QPushButton("Клиент из договора…")
+        btn_from_contract.setToolTip("Взять клиента из карточки договора (сам договор к смете не привязывается)")
+        btn_from_contract.clicked.connect(self.client_from_contract)
+        row1.addWidget(btn_from_contract)
         meta_layout.addLayout(row1)
+        self.lbl_contract = QLabel("")
+        self.lbl_contract.setWordWrap(True)
+        meta_layout.addWidget(self.lbl_contract)
 
         row2 = QHBoxLayout()
         row2.addWidget(QLabel("Текущие статусы:"))
@@ -200,18 +211,6 @@ class EstimateEditorDialog(QDialog):
         adj_layout.addWidget(self.spin_total_adj, 2, 1)
         right_panel.addWidget(adj_group)
 
-        surcharges_group = QGroupBox("Начисления на работы")
-        slayout = QVBoxLayout(surcharges_group)
-        self.chk_social = QCheckBox("СоцСтрах (34.6%)")
-        self.chk_overhead = QCheckBox("ОХР и ОПР (15%)")
-        self.chk_profit = QCheckBox("Пл. Прибыль (10%)")
-        self.chk_vat = QCheckBox("НДС (20%) - от итога")
-        for chk in [self.chk_social, self.chk_overhead, self.chk_profit, self.chk_vat]:
-            slayout.addWidget(chk)
-            chk.clicked.connect(self.save_meta)
-
-        right_panel.addWidget(surcharges_group)
-
         self.totals_lbl = QLabel()
         self.totals_lbl.setStyleSheet("font-size: 11pt; line-height: 1.5;")
         self.totals_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
@@ -259,51 +258,6 @@ class EstimateEditorDialog(QDialog):
     def show_work_breakdown(self):
         from .work_breakdown_view import WorkBreakdownDialog
         WorkBreakdownDialog(self.estimate_id, self).exec()
-
-    def show_item_profits(self):
-        mat_adj = self.spin_mat_adj.value()
-        work_adj = self.spin_work_adj.value()
-        tot_adj = self.spin_total_adj.value()
-
-        items = db.fetchall("SELECT item_type, quantity, price, purchase_price FROM estimate_items WHERE estimate_id=?", (self.estimate_id,))
-
-        total_purch_mat = 0.0
-        total_purch_work = 0.0
-        base_sales_mat = 0.0
-        base_sales_work = 0.0
-
-        for itype, qty, price, purch in items:
-            p = float(price or 0)
-            pu = float(purch or 0)
-            q = float(qty or 0)
-
-            if itype == "Работа":
-                total_purch_work += pu * q
-                base_sales_work += p * q
-            elif itype == "Раздел":
-                continue
-            else:
-                total_purch_mat += pu * q
-                base_sales_mat += p * q
-
-        adj_sales_mat = base_sales_mat * (1 + mat_adj / 100)
-        adj_sales_work = base_sales_work * (1 + work_adj / 100)
-
-        subtotal = adj_sales_mat + adj_sales_work
-        adj_subtotal = subtotal * (1 + tot_adj / 100)
-
-        total_margin = adj_subtotal - (total_purch_mat + total_purch_work)
-
-        msg = (f"Анализ маржинальности по смете:\n\n"
-               f"Себестоимость материалов (закупка): {total_purch_mat:,.2f} руб.\n"
-               f"Себестоимость работ (ЗП рабочим): {total_purch_work:,.2f} руб.\n"
-               f"Общая себестоимость: {(total_purch_mat + total_purch_work):,.2f} руб.\n\n"
-               f"Продажа (базовая): {subtotal:,.2f} руб.\n"
-               f"Продажа (со всеми скидками/наценками): {adj_subtotal:,.2f} руб.\n"
-               f"----------------------------------------\n"
-               f"ЧИСТАЯ МАРЖА: {total_margin:,.2f} руб.")
-
-        QMessageBox.information(self, "Заработок со сметы", msg.replace(",", " "))
 
     def load_files_combo(self):
         self.combo_files.clear()
@@ -366,17 +320,125 @@ class EstimateEditorDialog(QDialog):
         self.load_items()
 
     def open_contract_card(self):
+        """Создание (или открытие) договора «Монтаж ГСВ» на основе этой сметы — как и прежде."""
         dlg = ContractCardDialog(self.estimate_id, self.title, self)
         dlg.exec()
+        self.refresh_contract_info()
+
+    # --- клиент и договор ---
+    def refresh_contract_info(self):
+        info = ed.contract_of(db, self.estimate_id)
+        legal = db.fetchone("SELECT le_client_id,party_name FROM estimates WHERE id=?", (self.estimate_id,))
+        is_legal = bool(legal and legal[0])
+        self.inp_client.setReadOnly(is_legal)
+        self.inp_phone.setReadOnly(is_legal)
+        if is_legal:
+            self.inp_client.setText(legal[1] or "")
+        if info:
+            self.lbl_contract.setText(f"📎 Договор: {info['label']}  (смета привязана; клиент и оплаты ведутся вместе с договором)")
+            self.lbl_contract.setStyleSheet("color: #2563EB;")
+        else:
+            self.lbl_contract.setText("Смета без договора. Договор можно привязать позже — меню «Договор».")
+            self.lbl_contract.setStyleSheet("color: #65758b;")
+
+    def fill_contract_menu(self):
+        self.contract_menu.clear()
+        info = ed.contract_of(db, self.estimate_id)
+        if info:
+            self.contract_menu.addAction(f"Открыть: {info['label']}").triggered.connect(self.open_linked_contract)
+            self.contract_menu.addAction("Отвязать договор").triggered.connect(self.unlink_contract)
+        else:
+            self.contract_menu.addAction("Привязать существующий договор…").triggered.connect(self.link_contract)
+            self.contract_menu.addSeparator()
+            self.contract_menu.addAction("Создать договор «Монтаж ГСВ» из сметы…").triggered.connect(self.open_contract_card)
+
+    def pick_contract(self, with_estimate, title):
+        from .estimates_ui import pick_contract
+        return pick_contract(self, with_estimate, title)
+
+    def link_contract(self):
+        pick = self.pick_contract(False, "Привязать договор к смете")
+        if not pick:
+            return
+        try:
+            ed.link_contract(db, self.estimate_id, *pick)
+        except ValueError as e:
+            QMessageBox.warning(self, "Договор", str(e))
+            return
+        self.load_meta()
+        self.refresh_contract_info()
+        if self.parent() and hasattr(self.parent(), 'load_data'):
+            self.parent().load_data()
+
+    def unlink_contract(self):
+        if QMessageBox.question(self, "Договор", "Отвязать договор от сметы? Смета и договор останутся, связь между ними исчезнет.") != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            ed.unlink_contract(db, self.estimate_id)
+        except ValueError as e:
+            QMessageBox.warning(self, "Договор", str(e))
+            return
+        self.refresh_contract_info()
+        if self.parent() and hasattr(self.parent(), 'load_data'):
+            self.parent().load_data()
+
+    def open_linked_contract(self):
+        info = ed.contract_of(db, self.estimate_id)
+        if info:
+            from .workspace_view import open_record
+            open_record(info['table'], info['id'], self)
+            self.refresh_contract_info()
+
+    def choose_legal(self):
+        d = QDialog(self)
+        d.setWindowTitle("Юрлицо — клиент сметы")
+        d.resize(480, 420)
+        lay = QVBoxLayout(d)
+        from PyQt6.QtWidgets import QListWidget, QListWidgetItem
+        lst = QListWidget()
+        for lid, name in db.fetchall("SELECT id,name FROM le_clients ORDER BY name"):
+            it = QListWidgetItem(name)
+            it.setData(Qt.ItemDataRole.UserRole, lid)
+            lst.addItem(it)
+        lay.addWidget(lst, 1)
+        ok = QPushButton("Выбрать")
+        ok.setProperty("type", "primary")
+        lay.addWidget(ok)
+        ok.clicked.connect(lambda: d.accept() if lst.currentItem() else None)
+        lst.itemDoubleClicked.connect(lambda *_: d.accept())
+        if d.exec() and lst.currentItem():
+            try:
+                ed.set_client(db, self.estimate_id, "legal", lst.currentItem().data(Qt.ItemDataRole.UserRole))
+            except ValueError as e:
+                QMessageBox.warning(self, "Клиент", str(e))
+                return
+            self.load_meta()
+            self.refresh_contract_info()
+            if self.parent() and hasattr(self.parent(), 'load_data'):
+                self.parent().load_data()
+
+    def client_from_contract(self):
+        pick = self.pick_contract(True, "Клиент из карточки договора")
+        if not pick:
+            return
+        if ed.contract_of(db, self.estimate_id):
+            QMessageBox.information(self, "Клиент", "Смета привязана к договору — клиент задаётся в карточке договора.")
+            return
+        if not ed.apply_contract_client(db, self.estimate_id, *pick):
+            QMessageBox.warning(self, "Клиент", "В выбранном договоре клиент не указан.")
+            return
+        self.load_meta()
+        self.refresh_contract_info()
+        if self.parent() and hasattr(self.parent(), 'load_data'):
+            self.parent().load_data()
 
     def load_meta(self):
         self._updating = True
-        row = db.fetchone("""SELECT client_name, client_phone, statuses, has_overhead, overhead_pct, 
-                                    has_profit, profit_pct, has_vat, vat_pct, has_social, social_pct,
-                                    mat_adj_pct, work_adj_pct, total_adj_pct
+        row = db.fetchone("""SELECT coalesce(nullif(client_name,''),party_name), client_phone, statuses, mat_adj_pct, work_adj_pct, total_adj_pct
                              FROM estimates WHERE id=?""", (self.estimate_id,))
+        self.meta_cache = {'mat_adj': 0.0, 'work_adj': 0.0, 'tot_adj': 0.0}
         if row:
-            c_name, c_phone, statuses, h_ov, o_pct, h_pr, p_pct, h_vt, v_pct, h_so, s_pct, mat_adj, work_adj, tot_adj = row
+            c_name, c_phone, statuses, mat_adj, work_adj, tot_adj = row
             self.inp_client.setText(c_name or "")
             self.inp_phone.setText(c_phone or "")
             s_list = statuses or ""
@@ -385,24 +447,15 @@ class EstimateEditorDialog(QDialog):
             self.cb_status3.setChecked("Ожидает оплаты" in s_list)
             self.cb_status4.setChecked("Оплачено" in s_list)
 
-            self.chk_overhead.setChecked(bool(h_ov))
-            self.chk_overhead.setText(f"ОХР и ОПР ({o_pct}%)")
-            self.chk_profit.setChecked(bool(h_pr))
-            self.chk_profit.setText(f"Пл. Прибыль ({p_pct}%)")
-            self.chk_vat.setChecked(bool(h_vt))
-            self.chk_vat.setText(f"НДС ({v_pct}%)")
-            self.chk_social.setChecked(bool(h_so))
-            self.chk_social.setText(f"СоцСтрах ({s_pct}%)")
-
             self.spin_mat_adj.setValue(float(mat_adj or 0.0))
             self.spin_work_adj.setValue(float(work_adj or 0.0))
             self.spin_total_adj.setValue(float(tot_adj or 0.0))
 
             self.meta_cache = {
-                'o_pct': o_pct, 'p_pct': p_pct, 'v_pct': v_pct, 's_pct': s_pct,
                 'mat_adj': float(mat_adj or 0.0), 'work_adj': float(work_adj or 0.0), 'tot_adj': float(tot_adj or 0.0)
             }
         self._updating = False
+        self.refresh_contract_info()
 
     def save_meta(self):
         if self._updating: return
@@ -413,24 +466,23 @@ class EstimateEditorDialog(QDialog):
         if self.cb_status4.isChecked(): active.append("Оплачено")
         s_str = ", ".join(active)
 
-        db.execute("""UPDATE estimates SET client_name=?, client_phone=?, statuses=?, 
-                      has_overhead=?, has_profit=?, has_vat=?, has_social=?,
-                      mat_adj_pct=?, work_adj_pct=?, total_adj_pct=? WHERE id=?""",
-                   (self.inp_client.text(), self.inp_phone.text(), s_str,
-                    1 if self.chk_overhead.isChecked() else 0,
-                    1 if self.chk_profit.isChecked() else 0,
-                    1 if self.chk_vat.isChecked() else 0,
-                    1 if self.chk_social.isChecked() else 0,
-                    self.spin_mat_adj.value(), self.spin_work_adj.value(), self.spin_total_adj.value(),
-                    self.estimate_id))
+        legal = db.fetchone("SELECT le_client_id FROM estimates WHERE id=?", (self.estimate_id,))
+        if legal and legal[0]:      # клиент-юрлицо задаётся выбором из справочника, а не вводом текста
+            db.execute("UPDATE estimates SET statuses=?, mat_adj_pct=?, work_adj_pct=?, total_adj_pct=? WHERE id=?",
+                       (s_str, self.spin_mat_adj.value(), self.spin_work_adj.value(), self.spin_total_adj.value(), self.estimate_id))
+        else:
+            db.execute("""UPDATE estimates SET client_name=?, client_phone=?, statuses=?,
+                          mat_adj_pct=?, work_adj_pct=?, total_adj_pct=? WHERE id=?""",
+                       (self.inp_client.text(), self.inp_phone.text(), s_str,
+                        self.spin_mat_adj.value(), self.spin_work_adj.value(), self.spin_total_adj.value(),
+                        self.estimate_id))
 
-        if not self._updating:
-            self.meta_cache['mat_adj'] = self.spin_mat_adj.value()
-            self.meta_cache['work_adj'] = self.spin_work_adj.value()
-            self.meta_cache['tot_adj'] = self.spin_total_adj.value()
-            self.sync_total()
-            if self.parent() and hasattr(self.parent(), 'load_data'):
-                self.parent().load_data()
+        self.meta_cache['mat_adj'] = self.spin_mat_adj.value()
+        self.meta_cache['work_adj'] = self.spin_work_adj.value()
+        self.meta_cache['tot_adj'] = self.spin_total_adj.value()
+        self.sync_total()
+        if self.parent() and hasattr(self.parent(), 'load_data'):
+            self.parent().load_data()
 
     def load_items(self):
         self._updating = True
@@ -582,44 +634,23 @@ class EstimateEditorDialog(QDialog):
         ExportDialog('estimates',self.estimate_id,self).exec()
 
     def sync_total(self):
-        mat_adj = self.meta_cache.get('mat_adj', 0.0)
-        work_adj = self.meta_cache.get('work_adj', 0.0)
-        tot_adj = self.meta_cache.get('tot_adj', 0.0)
-
-        self.adj_mat_total = self.base_mat_total * (1 + mat_adj / 100)
-        self.adj_work_total = self.base_work_total * (1 + work_adj / 100)
-
-        self.social_val = self.adj_work_total * (self.meta_cache['s_pct'] / 100) if self.chk_social.isChecked() else 0.0
-        self.overhead_val = self.adj_work_total * (self.meta_cache['o_pct'] / 100) if self.chk_overhead.isChecked() else 0.0
-        self.profit_val = self.adj_work_total * (self.meta_cache['p_pct'] / 100) if self.chk_profit.isChecked() else 0.0
-
-        subtotal = self.adj_mat_total + self.adj_work_total + self.social_val + self.overhead_val + self.profit_val
-        self.adj_subtotal = subtotal * (1 + tot_adj / 100)
-
-        self.vat_val = self.adj_subtotal * (self.meta_cache['v_pct'] / 100) if self.chk_vat.isChecked() else 0.0
-        self.grand_total = self.adj_subtotal + self.vat_val
-
-        db.execute("UPDATE estimates SET total=? WHERE id=?", (self.grand_total, self.estimate_id))
+        t = ed.totals(db, self.estimate_id)
+        mat_adj, work_adj, tot_adj = float(t['mat_adj']), float(t['work_adj']), float(t['tot_adj'])
+        self.base_mat_total, self.base_work_total, self.base_dir_total = float(t['base_mat']), float(t['base_work']), float(t['base'])
+        self.adj_mat_total, self.adj_work_total = float(t['adj_mat']), float(t['adj_work'])
+        self.adj_subtotal = float(t['subtotal'])
+        self.grand_total = ed.recalc(db, self.estimate_id)
         if self.parent() and hasattr(self.parent(), 'load_data'):
             self.parent().load_data()
 
         t_text = f"Прямые затраты (базовые): {self.base_dir_total:,.2f} руб.<br>"
-
         m_str = f" (с учетом {mat_adj}%)" if mat_adj != 0 else ""
         t_text += f"<span style='color: #64748B;'>— Материалы{m_str}: {self.adj_mat_total:,.2f} руб.</span><br>"
-
         w_str = f" (с учетом {work_adj}%)" if work_adj != 0 else ""
-        t_text += f"<span style='color: #64748B;'>— Работы{w_str}: {self.adj_work_total:,.2f} руб.</span><br><br>"
-
-        if self.chk_social.isChecked(): t_text += f"СоцСтрах: {self.social_val:,.2f} руб.<br>"
-        if self.chk_overhead.isChecked(): t_text += f"ОХР и ОПР: {self.overhead_val:,.2f} руб.<br>"
-        if self.chk_profit.isChecked(): t_text += f"Пл. прибыль: {self.profit_val:,.2f} руб.<br>"
-
+        t_text += f"<span style='color: #64748B;'>— Работы{w_str}: {self.adj_work_total:,.2f} руб.</span><br>"
         if tot_adj != 0:
-            t_text += f"<br>Промежуточный итог: {subtotal:,.2f} руб.<br>"
-            t_text += f"Скидка/Надбавка ({tot_adj}%): {(self.adj_subtotal - subtotal):,.2f} руб.<br>"
-
-        if self.chk_vat.isChecked(): t_text += f"НДС: {self.vat_val:,.2f} руб.<br>"
+            t_text += f"<br>Промежуточный итог: {self.adj_subtotal:,.2f} руб.<br>"
+            t_text += f"Скидка/Надбавка ({tot_adj}%): {(self.grand_total - self.adj_subtotal):,.2f} руб.<br>"
 
         self.totals_lbl.setText(t_text.replace(",", " "))
         self.lbl_grand_total.setText(f"ВСЕГО: {self.grand_total:,.2f} руб.".replace(",", " "))
@@ -628,7 +659,7 @@ class EstimateEditorDialog(QDialog):
         safe_title = re.sub(r'[\\/*?:"<>|]', "_", self.title)
         path, _ = QFileDialog.getSaveFileName(self, "Экспорт сметы в PDF", f"Смета_{safe_title}.pdf", "PDF (*.pdf)")
         if path:
-            meta = db.fetchone("SELECT date, client_name, client_phone FROM estimates WHERE id=?", (self.estimate_id,))
+            meta = db.fetchone("SELECT date, coalesce(nullif(client_name,''),party_name), client_phone FROM estimates WHERE id=?", (self.estimate_id,))
             items = db.fetchall("SELECT item_type, name, unit, quantity, price, sum FROM estimate_items WHERE estimate_id=? ORDER BY sort_order ASC", (self.estimate_id,))
 
             accent = db.get_setting("accent_color", "#0284C7")
@@ -660,20 +691,9 @@ class EstimateEditorDialog(QDialog):
                 rows_html += f"<tr><td colspan='5' align='right' style='color: #64748b;'>В т.ч. работы (база):</td><td align='right' style='color: #64748b;'>{self.base_work_total:,.2f}</td></tr>"
                 rows_html += f"<tr><td colspan='5' align='right'>Скидка/Надбавка на работы ({work_adj}%):</td><td align='right'>{(self.adj_work_total - self.base_work_total):,.2f}</td></tr>"
 
-            if self.chk_social.isChecked():
-                rows_html += f"<tr><td colspan='5' align='right'>Отчисления на соц. нужды ({self.meta_cache['s_pct']}% от работ):</td><td align='right'>{self.social_val:,.2f}</td></tr>"
-            if self.chk_overhead.isChecked():
-                rows_html += f"<tr><td colspan='5' align='right'>ОХР и ОПР ({self.meta_cache['o_pct']}% от работ):</td><td align='right'>{self.overhead_val:,.2f}</td></tr>"
-            if self.chk_profit.isChecked():
-                rows_html += f"<tr><td colspan='5' align='right'>Плановая прибыль ({self.meta_cache['p_pct']}% от работ):</td><td align='right'>{self.profit_val:,.2f}</td></tr>"
-
             if tot_adj != 0:
-                subtotal = self.adj_mat_total + self.adj_work_total + self.social_val + self.overhead_val + self.profit_val
-                rows_html += f"<tr style='font-weight: bold;'><td colspan='5' align='right'>Промежуточный итог:</td><td align='right'>{subtotal:,.2f}</td></tr>"
-                rows_html += f"<tr><td colspan='5' align='right'>Итоговая скидка/надбавка ({tot_adj}%):</td><td align='right'>{(self.adj_subtotal - subtotal):,.2f}</td></tr>"
-
-            if self.chk_vat.isChecked():
-                rows_html += f"<tr><td colspan='5' align='right'>НДС ({self.meta_cache['v_pct']}%):</td><td align='right'>{self.vat_val:,.2f}</td></tr>"
+                rows_html += f"<tr style='font-weight: bold;'><td colspan='5' align='right'>Промежуточный итог:</td><td align='right'>{self.adj_subtotal:,.2f}</td></tr>"
+                rows_html += f"<tr><td colspan='5' align='right'>Итоговая скидка/надбавка ({tot_adj}%):</td><td align='right'>{(self.grand_total - self.adj_subtotal):,.2f}</td></tr>"
 
             rows_html += f"<tr style='font-weight: bold; font-size: {int(f_size)+1}px; background-color: #e2e8f0;'><td colspan='5' align='right'>ВСЕГО ПО СМЕТЕ:</td><td align='right'>{self.grand_total:,.2f}</td></tr>"
 
@@ -742,18 +762,10 @@ class EstimateEditorDialog(QDialog):
                     ws.append(["", "", "", "", "В т.ч. работы (база):", self.base_work_total])
                     ws.append(["", "", "", "", f"Скидка/Надбавка на работы ({work_adj}%):", self.adj_work_total - self.base_work_total])
 
-                if self.chk_social.isChecked(): ws.append(["", "", "", "", "СоцСтрах:", self.social_val])
-                if self.chk_overhead.isChecked(): ws.append(["", "", "", "", "ОХР и ОПР:", self.overhead_val])
-                if self.chk_profit.isChecked(): ws.append(["", "", "", "", "Пл. Прибыль:", self.profit_val])
-
                 tot_adj = self.meta_cache.get('tot_adj', 0.0)
                 if tot_adj != 0:
-                    subtotal = self.adj_mat_total + self.adj_work_total + self.social_val + self.overhead_val + self.profit_val
-                    ws.append(["", "", "", "", "Промежуточный итог:", subtotal])
-                    ws.append(["", "", "", "", f"Итоговая скидка/надбавка ({tot_adj}%):", self.adj_subtotal - subtotal])
-
-                if self.chk_vat.isChecked():
-                    ws.append(["", "", "", "", "НДС:", self.vat_val])
+                    ws.append(["", "", "", "", "Промежуточный итог:", self.adj_subtotal])
+                    ws.append(["", "", "", "", f"Итоговая скидка/надбавка ({tot_adj}%):", self.grand_total - self.adj_subtotal])
 
                 ws.append(["", "", "", "", "ВСЕГО ПО СМЕТЕ:", self.grand_total])
                 ws.cell(row=ws.max_row, column=5).font = font_bold
@@ -777,7 +789,7 @@ class EstimateEditorDialog(QDialog):
             except Exception as e:
                 QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить файл:\n{e}")
         else:
-            QMessageBox.warning(self, "Внимание", "Для экспорта по шаблону с надбавками требуется ручная настройка макросов в шаблоне.")
+            QMessageBox.warning(self, "Внимание", "Экспорт по шаблону: кнопка «Документ по шаблону» (теги сметы настраиваются в разделе «Сметы → Шаблоны и теги»).")
 
     def build_dossier_html(self):
         meta = db.fetchone("SELECT client_name, client_phone, statuses, total, paid FROM estimates WHERE id=?", (self.estimate_id,))

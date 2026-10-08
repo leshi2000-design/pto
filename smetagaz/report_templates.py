@@ -29,42 +29,17 @@ def context(db,kind,rid=None,filters=None):
             tables['payments']=rows(db,'SELECT date,amount FROM payments WHERE estimate_id=? ORDER BY date,id',(rid,))
             ctx['prepared_by']=data.get('prepared_by') or db.get_setting('estimate_prepared_by','')
             number=lambda k:Decimal(str(data.get(k) or 0))
-            mats=sum((Decimal(str(r['amount'] or 0)) for r in items if r['item_type']=='Материал'),Decimal(0));works=sum((Decimal(str(r['amount'] or 0)) for r in items if r['item_type']=='Работа'),Decimal(0))
+            mats=sum((Decimal(str(r['amount'] or 0)) for r in items if r['item_type'] not in ('Работа','Раздел')),Decimal(0));works=sum((Decimal(str(r['amount'] or 0)) for r in items if r['item_type']=='Работа'),Decimal(0))
             ctx['materials_total']=mats*(1+number('mat_adj_pct')/100);ctx['works_total']=works*(1+number('work_adj_pct')/100)
-            for name,flag,pct in [('social_total','has_social','social_pct'),('overhead_total','has_overhead','overhead_pct'),('profit_total','has_profit','profit_pct')]:ctx[name]=ctx['works_total']*number(pct)/100 if data.get(flag) else Decimal(0)
-            ctx['subtotal']=(ctx['materials_total']+ctx['works_total']+ctx['social_total']+ctx['overhead_total']+ctx['profit_total'])*(1+number('total_adj_pct')/100)
-            ctx['vat_total']=ctx['subtotal']*number('vat_pct')/100 if data.get('has_vat') else Decimal(0);ctx['calculated_total']=ctx['subtotal']+ctx['vat_total'];ctx['debt']=number('total')-number('paid')
+            # начислений на работы в смете больше нет; прежние ключи остаются нулями, чтобы подключённые шаблоны не ломались
+            for name in ('social_total','overhead_total','profit_total'):ctx[name]=Decimal(0)
+            ctx['subtotal']=(ctx['materials_total']+ctx['works_total'])*(1+number('total_adj_pct')/100)
+            ctx['vat_total']=Decimal(0);ctx['calculated_total']=ctx['subtotal'];ctx['debt']=number('total')-number('paid')
         elif kind=='estimate_breakdown':
             from .exports import record_data
-            from .work_pricing import compute_work_price,has_breakdown
+            from . import estimates_domain as ed
             data,_=record_data(db,'estimates',rid);ctx.update(data)
-            work_rows=rows(db,"""SELECT name,unit,quantity,price,sum amount,labor_hours,hourly_rate,overhead_pct,profit_pct,other_costs
-                                  FROM estimate_items WHERE estimate_id=? AND item_type='Работа' ORDER BY sort_order,id""",(rid,))
-            totals={k:Decimal(0) for k in ('wage','overhead','profit','social','other','tax')}
-            for r in work_rows:
-                qty=Decimal(str(r['quantity'] or 0))
-                if has_breakdown(r['labor_hours'],r['hourly_rate'],r['overhead_pct'],r['profit_pct'],r['other_costs']):
-                    b=compute_work_price(r['labor_hours'],r['hourly_rate'],r['overhead_pct'],r['profit_pct'],r['other_costs'])
-                    r['has_breakdown']='Да'
-                    for key in totals:
-                        r[key+'_unit']=b[key];line_total=b[key]*qty;r[key+'_sum']=line_total;totals[key]+=line_total
-                else:
-                    r['has_breakdown']='Нет данных'
-                    for key in totals:r[key+'_unit']='нет данных';r[key+'_sum']='нет данных'
-            tables['works']=work_rows
-            materials=rows(db,"SELECT name,unit,quantity,price,purchase_price,sum amount FROM estimate_items WHERE estimate_id=? AND item_type='Материал' ORDER BY sort_order,id",(rid,))
-            materials_margin_total=Decimal(0)
-            for r in materials:
-                qty=Decimal(str(r['quantity'] or 0));purch=Decimal(str(r['purchase_price'] or 0))
-                r['margin_unit']=Decimal(str(r['price'] or 0))-purch
-                r['margin_sum']=Decimal(str(r['amount'] or 0))-purch*qty
-                materials_margin_total+=r['margin_sum']
-            tables['materials']=materials
-            for key,val in totals.items():ctx['work_'+key+'_total']=val
-            ctx['works_total']=sum((Decimal(str(r['amount'] or 0)) for r in work_rows),Decimal(0))
-            ctx['materials_total']=sum((Decimal(str(r['amount'] or 0)) for r in materials),Decimal(0))
-            ctx['materials_margin_total']=materials_margin_total
-            ctx['grand_total']=ctx['works_total']+ctx['materials_total']
+            work_rows,materials,info=ed.breakdown(db,rid);tables['works']=work_rows;tables['materials']=materials;ctx.update(info)
         elif kind=='crm.clients':
             data=rows(db,'SELECT * FROM crm.clients WHERE id=?',(rid,))
             if not data:raise ValueError('Клиент не найден')
@@ -94,6 +69,9 @@ def context(db,kind,rid=None,filters=None):
             from .stock_exports import document_data
             title,notice,data,sections=document_data(db,kind,rid,'act');ctx.update(data);ctx['report_title']=title
             for i,(title,columns,data_rows) in enumerate(sections,1):tables['section_'+str(i)]=[{'c'+str(j+1):value for j,value in enumerate(row)} for row in data_rows]
+        if kind in ('estimates','estimate_breakdown'):
+            from . import estimates_domain as ed
+            ed.extend_context(db,kind,rid,ctx,tables)
         for name,items in tables.items():
             for i,row in enumerate(items,1):row['index']=i
             ctx[name+'_count']=len(items);ctx[name+'_text']='\n'.join(' | '.join(str(v if v is not None else '') for v in row.values()) for row in items)

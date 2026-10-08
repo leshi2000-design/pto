@@ -15,7 +15,8 @@ SOURCES = {
  'welders': ('Сварщик','name',['name','certificate','notes']),
  'writeoffs': ('Списание','title',['title','notes']),
  'gsv_pipelines': ('Трубопровод','name',['name','notes']),
- 'gsn_pipelines': ('Трубопровод ГСН','name',['name','notes']),
+ 'gsn_items': ('Справочник ГСН','name',['name','category','note']),
+ 'gsn_certificates': ('Сертификат ГСН','name',['name','number','issued_by','note']),
  'welding_documents': ('Документ сварки','title',['title','number','document_type','note']),
  'welding_jobs': ('Работа сварки','title',['title','object_text','welder_text','notes']),
  'stock_materials': ('Материал списания','name',['name','category','unit']),
@@ -83,6 +84,8 @@ def initialize(db):
         notes_migrate(db)
         from .gsn_catalog import migrate as gsn_catalog_migrate
         gsn_catalog_migrate(db)
+        from .estimates_domain import migrate as estimates_migrate
+        estimates_migrate(db)
         db.execute('CREATE INDEX IF NOT EXISTS idx_payments_est ON payments(estimate_id)')
         db.execute('CREATE INDEX IF NOT EXISTS idx_attachments_est ON attachments(estimate_id)')
         for table, phone in [('estimates','client_phone'),('gsv_projects','phone')]:
@@ -119,7 +122,7 @@ def initialize(db):
         END''')
         db.execute('CREATE TABLE IF NOT EXISTS export_profiles (record_key TEXT PRIMARY KEY, options TEXT NOT NULL)')
         db.execute('CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(kind UNINDEXED, record_id UNINDEXED, title, body, tokenize="unicode61")')
-        rebuild=db.get_setting('fts_version')!='9'
+        rebuild=db.get_setting('fts_version')!='10'
         for table_idx, (table, (_,title,fields)) in enumerate(SOURCES.items(), 1):
             body=" || ' ' || ".join(f"coalesce(new.{f},'')" for f in fields)
             for action in ['insert','update','delete']:
@@ -132,7 +135,7 @@ def initialize(db):
             for table_idx,(table,(_,title,fields)) in enumerate(SOURCES.items(),1):
                 body=" || ' ' || ".join(f"coalesce({f},'')" for f in fields)
                 db.execute(f"INSERT OR REPLACE INTO search_index(rowid,kind,record_id,title,body) SELECT {table_idx}*1000000000000+id,'{table}',id,{title},{body} FROM {table}")
-            db.set_setting('fts_version','9')
+            db.set_setting('fts_version','10')
 
 
 def search(db, query, limit=100, offset=0):

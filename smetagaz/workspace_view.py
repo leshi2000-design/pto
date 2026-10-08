@@ -234,9 +234,12 @@ def open_record(table,rid,parent=None):
     elif table=='welding_documents':
         from .welding_documents import DocumentDialog
         DocumentDialog(rid,parent=parent).exec()
-    elif table=='gsn_pipelines':
-        from .gsn_catalog import GsnPipelineDialog
-        GsnPipelineDialog(rid,parent).exec()
+    elif table=='gsn_items':
+        from .gsn_catalog import GsnItemDialog
+        GsnItemDialog(rid,parent).exec()
+    elif table=='gsn_certificates':
+        from .gsn_catalog import GsnCertDialog
+        GsnCertDialog(rid,parent).exec()
     elif table=='gsv_pipelines':
         from .gsv_catalog import PipelineDialog
         PipelineDialog(rid,parent).exec()

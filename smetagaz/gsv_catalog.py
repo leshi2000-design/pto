@@ -20,7 +20,6 @@ class CertificatePicker(QDialog):
         if r>=0:self.cert_id=self.table.item(r,0).data(Qt.ItemDataRole.UserRole);self.accept()
 
 class PipelineDialog(QDialog):
-    TABLE='gsv_pipelines'
     def __init__(self,pipeline_id=None,parent=None):
         super().__init__(parent);self.pipeline_id=pipeline_id;self.certificate_id=None;self.new_path=None;self.setWindowTitle('Трубопровод');self.resize(650,350)
         layout=QVBoxLayout(self);form=QFormLayout();layout.addLayout(form);self.name=QLineEdit();self.unit=QLineEdit('м');self.notes=QLineEdit();self.active=QCheckBox('Доступен для выбора');self.active.setChecked(True)
@@ -31,7 +30,7 @@ class PipelineDialog(QDialog):
         layout.addLayout(bar);self.number=QLineEdit();self.number.setPlaceholderText('Номер нового сертификата');layout.addWidget(self.number)
         buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Save|QDialogButtonBox.StandardButton.Cancel);buttons.accepted.connect(self.save);buttons.rejected.connect(self.reject);layout.addWidget(buttons)
         if pipeline_id:
-            row=db.fetchone(f'SELECT name,unit,notes,active,certificate_id FROM {self.TABLE} WHERE id=?',(pipeline_id,));self.name.setText(row[0]);self.unit.setText(row[1]);self.notes.setText(row[2] or '');self.active.setChecked(bool(row[3]));self.certificate_id=row[4];self.refresh()
+            row=db.fetchone('SELECT name,unit,notes,active,certificate_id FROM gsv_pipelines WHERE id=?',(pipeline_id,));self.name.setText(row[0]);self.unit.setText(row[1]);self.notes.setText(row[2] or '');self.active.setChecked(bool(row[3]));self.certificate_id=row[4];self.refresh()
     def refresh(self):
         if self.new_path:self.cert_label.setText('Новый файл: '+self.new_path)
         else:
@@ -52,18 +51,15 @@ class PipelineDialog(QDialog):
                 cid=self.certificate_id
                 if self.new_path:cid=db.execute('INSERT INTO certificates(name,cert_number,file_path) VALUES(?,?,?)',('Сертификат · '+name,self.number.text().strip(),self.new_path)).lastrowid
                 values=(name,self.unit.text().strip() or 'м',cid,self.notes.text(),int(self.active.isChecked()))
-                if self.pipeline_id:db.execute(f'UPDATE {self.TABLE} SET name=?,unit=?,certificate_id=?,notes=?,active=? WHERE id=?',(*values,self.pipeline_id))
-                else:self.pipeline_id=db.execute(f'INSERT INTO {self.TABLE}(name,unit,certificate_id,notes,active) VALUES(?,?,?,?,?)',values).lastrowid
+                if self.pipeline_id:db.execute('UPDATE gsv_pipelines SET name=?,unit=?,certificate_id=?,notes=?,active=? WHERE id=?',(*values,self.pipeline_id))
+                else:self.pipeline_id=db.execute('INSERT INTO gsv_pipelines(name,unit,certificate_id,notes,active) VALUES(?,?,?,?,?)',values).lastrowid
             self.accept()
         except Exception as e:QMessageBox.warning(self,'Не сохранено',str(e))
 
 class GsvCatalogView(QWidget):
-    TABLE='gsv_pipelines'
-    DIALOG=PipelineDialog
-    INTRO='Трубопроводы ГСВ и их сертификаты. Изменение связи с сертификатом отражается в документации всех объектов, использующих этот вид.'
     def __init__(self):
         super().__init__();self.pager=RegistryPager(self);layout=QVBoxLayout(self)
-        layout.addWidget(QLabel(self.INTRO))
+        layout.addWidget(QLabel('Трубопроводы ГСВ и их сертификаты. Изменение связи с сертификатом отражается в документации всех объектов, использующих этот вид.'))
         bar=QHBoxLayout();self.search=QLineEdit();self.search.setPlaceholderText('Поиск трубопровода…');bar.addWidget(self.search,1)
         for label,callback in [('Добавить',self.create),('Изменить',self.edit),('Открыть сертификат',self.open_file),('Зависимые сертификаты и по умолчанию…',self.open_rules)]:b=QPushButton(label);b.clicked.connect(callback);bar.addWidget(b)
         layout.addLayout(bar);self.table=QTableWidget(0,5);self.table.setHorizontalHeaderLabels(['Трубопровод','Ед.','Сертификат','Доступен','Путь']);self.table.setColumnWidth(0,250);self.table.horizontalHeader().setStretchLastSection(True);self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows);self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers);layout.addWidget(self.table,1)
@@ -71,19 +67,19 @@ class GsvCatalogView(QWidget):
     def selected(self):
         r=self.table.currentRow();return self.table.item(r,0).data(Qt.ItemDataRole.UserRole) if r>=0 else None
     def load_data(self,*_):
-        rows=self.pager.fetch('SELECT p.id,p.name,p.unit,c.cert_number,p.active,c.file_path FROM '+self.TABLE+' p LEFT JOIN certificates c ON c.id=p.certificate_id WHERE LOWER(p.name) LIKE ? ORDER BY p.id DESC',('%'+self.search.text().casefold()+'%',));self.table.setRowCount(len(rows))
+        rows=self.pager.fetch('SELECT p.id,p.name,p.unit,c.cert_number,p.active,c.file_path FROM gsv_pipelines p LEFT JOIN certificates c ON c.id=p.certificate_id WHERE LOWER(p.name) LIKE ? ORDER BY p.id DESC',('%'+self.search.text().casefold()+'%',));self.table.setRowCount(len(rows))
         for r,(rid,name,unit,number,active,path) in enumerate(rows):
             for c,value in enumerate([name,unit,number,'Да' if active else 'Архив',path]):item=QTableWidgetItem(str(value or ''));item.setData(Qt.ItemDataRole.UserRole,rid);self.table.setItem(r,c,item)
     def open_rules(self):
         from .gsvm_tabs import RulesDialog
         RulesDialog(self).exec()
-    def create(self):self.DIALOG(parent=self).exec();self.load_data()
+    def create(self):PipelineDialog(parent=self).exec();self.load_data()
     def edit(self):
-        if self.selected():self.DIALOG(self.selected(),self).exec();self.load_data()
+        if self.selected():PipelineDialog(self.selected(),self).exec();self.load_data()
     def open_file(self):
         if self.selected():
             from .platform_utils import open_local
             from pathlib import Path
-            row=db.fetchone('SELECT c.file_path FROM '+self.TABLE+' p JOIN certificates c ON c.id=p.certificate_id WHERE p.id=?',(self.selected(),))
+            row=db.fetchone('SELECT c.file_path FROM gsv_pipelines p JOIN certificates c ON c.id=p.certificate_id WHERE p.id=?',(self.selected(),))
             if row and row[0] and Path(row[0]).is_file():open_local(row[0])
             else:QMessageBox.warning(self,'Сертификат','Файл не указан или недоступен. Измените путь в справочнике сертификатов.')

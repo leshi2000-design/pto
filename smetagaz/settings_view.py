@@ -74,38 +74,6 @@ class SettingsView(QWidget):
 
         layout.addWidget(box_app)
 
-        # 2. Надбавки
-        box_sur = QGroupBox("Настройки надбавок по умолчанию (%)")
-        sur_layout = QGridLayout(box_sur)
-        sur_layout.addWidget(QLabel("ОХР и ОПР:"), 0, 0)
-        self.inp_ov = QDoubleSpinBox()
-        self.inp_ov.setRange(0, 100)
-        self.inp_ov.setValue(float(db.get_setting('def_overhead_pct', '15.0')))
-        sur_layout.addWidget(self.inp_ov, 0, 1)
-
-        sur_layout.addWidget(QLabel("Пл. Прибыль:"), 1, 0)
-        self.inp_pr = QDoubleSpinBox()
-        self.inp_pr.setRange(0, 100)
-        self.inp_pr.setValue(float(db.get_setting('def_profit_pct', '10.0')))
-        sur_layout.addWidget(self.inp_pr, 1, 1)
-
-        sur_layout.addWidget(QLabel("НДС:"), 0, 2)
-        self.inp_vat = QDoubleSpinBox()
-        self.inp_vat.setRange(0, 100)
-        self.inp_vat.setValue(float(db.get_setting('def_vat_pct', '20.0')))
-        sur_layout.addWidget(self.inp_vat, 0, 3)
-
-        sur_layout.addWidget(QLabel("СоцСтрах:"), 1, 2)
-        self.inp_soc = QDoubleSpinBox()
-        self.inp_soc.setRange(0, 100)
-        self.inp_soc.setValue(float(db.get_setting('def_social_pct', '34.6')))
-        sur_layout.addWidget(self.inp_soc, 1, 3)
-
-        btn_sur_save = QPushButton("Сохранить надбавки")
-        btn_sur_save.clicked.connect(self.save_surcharges)
-        sur_layout.addWidget(btn_sur_save, 2, 0, 1, 4)
-        layout.addWidget(box_sur)
-
         # 3. Настройки экспорта
         box_export = QGroupBox("Настройки экспорта документов (PDF, Excel, Word)")
         exp_layout = QGridLayout(box_export)
@@ -223,13 +191,6 @@ class SettingsView(QWidget):
 
         db.set_setting("tabs_config", json.dumps(tabs_data))
         QMessageBox.information(self, "Успех", "Настройки сохранены. Пожалуйста, закройте и запустите программу заново, чтобы изменения вступили в силу.")
-
-    def save_surcharges(self):
-        db.set_setting('def_overhead_pct', self.inp_ov.value())
-        db.set_setting('def_profit_pct', self.inp_pr.value())
-        db.set_setting('def_vat_pct', self.inp_vat.value())
-        db.set_setting('def_social_pct', self.inp_soc.value())
-        QMessageBox.information(self, "Успех", "Значения надбавок сохранены.")
 
     def save_export_settings(self):
         db.set_setting('estimate_prepared_by',self.inp_prepared_by.text().strip())
