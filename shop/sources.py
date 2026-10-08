@@ -8,6 +8,7 @@ import hashlib
 import json
 import re
 import time
+from datetime import date
 import requests
 from bs4 import BeautifulSoup
 from openpyxl import load_workbook
@@ -60,6 +61,12 @@ def import_price(store, path, mapping, supplier, currency='BYN'):
         raise ValueError('Укажите поставщика, валюту и непустой прайс')
     # One transaction: no partial catalog on malformed input.
     source = 'file:' + Path(path).name
+    return apply_imported_prices(store, prepared, supplier, currency, source)
+
+
+def apply_imported_prices(store, prepared, supplier, currency, source):
+    if getattr(store, 'remote', False):
+        return store.apply_imported_prices(prepared, supplier, currency, source)
     with store.conn:
         for sku, name, unit, cents in prepared:
             store.conn.execute('INSERT INTO products(sku,name,unit) VALUES(?,?,?) ON CONFLICT(sku) DO NOTHING', (sku, name, unit))
@@ -67,6 +74,7 @@ def import_price(store, path, mapping, supplier, currency='BYN'):
             store.conn.execute('''INSERT INTO offers(product_id,supplier,price,currency,source) VALUES(?,?,?,?,?)
                 ON CONFLICT(product_id,supplier,currency,source) DO UPDATE SET price=excluded.price,updated=CURRENT_TIMESTAMP''',
                 (pid, supplier, cents, currency, source))
+        store.event(date.today().isoformat(), 'price_import', details=f'{supplier} · {source} · {len(prepared)} строк')
     return len(prepared)
 
 
@@ -142,7 +150,9 @@ def crawl(config, progress=lambda text: None):
     seen = set()
     found = {}
     errors = []
-    max_pages = min(max(int(config.get('max_pages', 30)), 1), 300)
+    max_pages = int(config.get('max_pages', 300))
+    if not 1 <= max_pages <= 10000:
+        raise ValueError('Лимит обхода: от 1 до 10000 страниц')
     session = requests.Session()
     session.headers['User-Agent'] = 'MagazinPriceReader/1.0'
     try:
@@ -178,6 +188,27 @@ def crawl(config, progress=lambda text: None):
                 if config.get('card_selector'):
                     for card in soup.select(config['card_selector']):
                         product_links.update(urljoin(current, link['href']) for link in card.select('a[href]'))
+                def list_links(node):
+                    if isinstance(node, list):
+                        for child in node:
+                            list_links(child)
+                    elif isinstance(node, dict):
+                        if node.get('@type') == 'ListItem':
+                            item = node.get('item')
+                            address = item if isinstance(item, str) else item.get('url', '') if isinstance(item, dict) else node.get('url', '')
+                            if address:
+                                target = urljoin(current, address)
+                                product_links.add(target)
+                                if urlsplit(target).hostname == origin.hostname and target not in seen:
+                                    queue.append(target)
+                        for child in node.values():
+                            if isinstance(child, (dict, list)):
+                                list_links(child)
+                for script in soup.select('script[type="application/ld+json"]'):
+                    try:
+                        list_links(json.loads(script.string or script.get_text()))
+                    except (ValueError, TypeError):
+                        continue
                 for link in links:
                     if not link.get('href'):
                         continue
@@ -198,6 +229,8 @@ def crawl(config, progress=lambda text: None):
 
 
 def apply_web_prices(store, config, products):
+    if getattr(store, 'remote', False):
+        return store.apply_web_prices(config, products)
     count = 0
     with store.conn:
         for product in products:
@@ -216,4 +249,6 @@ def apply_web_prices(store, config, products):
                 ON CONFLICT(product_id,supplier,currency,source) DO UPDATE SET price=excluded.price,updated=CURRENT_TIMESTAMP''',
                 (pid, config['supplier'], cents, product['currency'], source))
             count += 1
+        if count:
+            store.event(date.today().isoformat(), 'web_update', details=f'{config["supplier"]} · {count} предложений')
     return count

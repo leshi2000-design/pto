@@ -34,12 +34,15 @@ def context(store, doc_id, require_posted=True):
                       'quantity': str(Decimal(line['quantity']) / 1000), 'price': money(line['price']),
                       'tax_rate': str(Decimal(line['tax_bp']) / 100), 'tax': money(tax),
                       'amount': money(amount), 'total': money(amount + tax)})
-    settings = dict((r['key'], r['value']) for r in store.rows('SELECT * FROM settings'))
+    settings = json.loads(doc['seller_snapshot']) if doc.get('seller_snapshot') else dict((r['key'], r['value']) for r in store.rows('SELECT * FROM settings'))
     values = {'title': TITLES[doc['kind']], 'number': doc['number'], 'date': doc['day'],
               'customer': doc['party_name'], 'customer_details': doc['party_details'],
               'seller': settings.get('seller', ''), 'seller_details': settings.get('seller_details', ''),
               'currency': doc['currency'], 'total': money(total), 'tax_total': money(tax_total),
               'subtotal': money(total - tax_total), 'reference': doc['reference']}
+    for key in ('seller_unp', 'seller_address', 'seller_bank', 'seller_bic', 'seller_iban', 'seller_director', 'seller_phone', 'seller_email'):
+        values[key] = settings.get(key, '')
+    values['due_date'] = doc.get('due_day', '')
     return doc, values, items
 
 
@@ -67,6 +70,21 @@ def ensure_templates(store):
         path = store.root / 'templates' / f'{kind}.html'
         if not path.exists():
             path.write_text(sample, encoding='utf-8')
+    report = store.root / 'templates/report.html'
+    if not report.exists():
+        report.write_text('''<!doctype html><meta charset="utf-8"><style>body{font:14px Arial;margin:40px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #bbb;padding:8px}pre{white-space:pre-wrap}</style><h1>{{title}}</h1><pre>{{summary}}</pre><table><thead>{{headers}}</thead><tbody>{{rows}}</tbody></table>''', encoding='utf-8')
+
+
+def export_report(template, destination, title, headers, rows, summary=''):
+    text = Path(template).read_text(encoding='utf-8')
+    if '{{rows}}' not in text:
+        raise ValueError('В шаблоне отчёта нужен тег {{rows}}')
+    values = {'title': html.escape(title), 'summary': html.escape(summary),
+        'headers': '<tr>' + ''.join('<th>' + html.escape(h) + '</th>' for h in headers) + '</tr>',
+        'rows': ''.join('<tr>' + ''.join('<td>' + html.escape(str(v)) + '</td>' for v in row) + '</tr>' for row in rows)}
+    if Path(template).resolve() == Path(destination).resolve():
+        raise ValueError('Нельзя перезаписать шаблон')
+    Path(destination).write_text(substitute(text, values), encoding='utf-8')
 
 
 def export(store, doc_id, template, destination):

@@ -29,10 +29,13 @@ with tempfile.TemporaryDirectory() as tmp:
     window.store.post(shipment)
     assert window.store.stock(pid) == 3000
     window.refresh()
+    assert window.tabs.count() == 13
     for index in range(window.tabs.count()):
         window.tabs.setCurrentIndex(index)
         app.processEvents()
-    assert window.tables['products'].item(0, 4).text() == '3'
+    assert window.tables['stock'].item(0, 3).text() == '3'
+    assert window.tables['invoices'].rowCount() == 1
+    assert window.tables['debts'].rowCount() == 1
     output = Path(tmp) / 'documents/test.html'
     documents.export(window.store, invoice, Path(tmp) / 'templates/invoice.html', output)
     assert '36.00' in output.read_text()
@@ -41,7 +44,11 @@ with tempfile.TemporaryDirectory() as tmp:
     assert window.isVisible()
     if os.environ.get('MAGAZIN_SCREENSHOT'):
         window.tabs.setCurrentIndex(0)
+        window.tables['stock'].selectRow(0)
         window.grab().save(os.environ['MAGAZIN_SCREENSHOT'])
     window.close()
+    assert not window.backup_timer.isActive()
+    window.close()  # Repeated close must not try to back up a closed database.
+    window.auto_backup()
     assert list((Path(tmp) / 'backups').glob('*.zip'))
-print('Магазин GUI OK: 6 tabs; invoice from UI; receipt/shipment; template; automatic backup')
+print('Магазин GUI OK: 13 modules; invoice from UI; stock/reserve/shipment; debts; calendar; template; automatic backup; repeated close')

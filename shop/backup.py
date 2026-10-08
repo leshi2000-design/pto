@@ -1,5 +1,6 @@
 """Verified SQLite snapshots and safe restore into a new directory."""
 from datetime import datetime, timezone
+from contextlib import closing
 from pathlib import Path
 import hashlib
 import json
@@ -18,11 +19,13 @@ def digest(path):
 
 
 def create(store, destination=None):
+    if getattr(store, 'remote', False):
+        return store.create_backup(destination)
     destination = Path(destination or store.root / 'backups' / (datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S_%f') + '.zip')).resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=destination.parent) as tmp:
         stage = Path(tmp)
-        with sqlite3.connect(stage / 'shop.db') as target:
+        with closing(sqlite3.connect(stage / 'shop.db')) as target:
             store.conn.backup(target)
         for folder in ('templates', 'documents', 'sources'):
             source = store.root / folder
@@ -68,7 +71,7 @@ def restore(archive, destination):
                     shutil.copyfileobj(source, target)
                 if digest(path) != expected:
                     raise ValueError('Контрольная сумма не совпала: ' + name)
-        with sqlite3.connect(stage / 'shop.db') as conn:
+        with closing(sqlite3.connect(stage / 'shop.db')) as conn:
             if conn.execute('PRAGMA integrity_check').fetchone()[0] != 'ok' or conn.execute('PRAGMA foreign_key_check').fetchone():
                 raise ValueError('Повреждена база данных')
         stage.rename(destination)

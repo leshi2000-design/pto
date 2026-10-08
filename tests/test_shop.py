@@ -50,6 +50,7 @@ def test_ledger_and_shortage_atomic(store):
     with pytest.raises(ValueError, match='уже отгружен'):
         store.cancel(receipt)
     store.cancel(shipment)
+    store.cancel(invoice)
     store.cancel(receipt)
     assert store.stock(pid) == 0
 
@@ -76,6 +77,7 @@ def test_invalid_quantities(value):
 
 def test_snapshot_and_tax(store):
     pid, party = setup(store)
+    store.post(doc(store, 'receipt', pid, party, '1'))
     invoice = doc(store, 'invoice', pid, party, '0.125', '10.01')
     store.post(invoice)
     store.offer(pid, 'Поставщик', '99', 'BYN', 'test')
@@ -125,6 +127,7 @@ def test_web_parse_and_update(store):
 
 def test_templates_html_docx_xlsx(store, tmp_path):
     pid, party = setup(store)
+    store.post(doc(store, 'receipt', pid, party, '2'))
     invoice = doc(store, 'invoice', pid, party)
     store.post(invoice)
     documents.ensure_templates(store)
@@ -224,6 +227,7 @@ def test_crawl_category_pages_and_product_links(monkeypatch):
 def test_multirow_templates_and_excel_formula_protection(store, tmp_path):
     pid, party = setup(store)
     second = store.product('B', '=HYPERLINK("https://example.org")')
+    store.post(store.document('receipt', party, [dict(product_id=pid, quantity='1', price='1'), dict(product_id=second, quantity='2', price='2')]))
     invoice = store.document('invoice', party, [dict(product_id=pid, quantity='1', price='1'),
                                               dict(product_id=second, quantity='2', price='2')])
     store.post(invoice)
