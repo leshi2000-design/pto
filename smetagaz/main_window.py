@@ -33,6 +33,7 @@ from .today_view import TodayView
 from .executive_view import ExecutiveDocsView
 
 from .gsv_catalog import GsvCatalogView
+from .gsn_catalog import GsnCatalogView
 from .extra_views import GsnProjectsView, WeldersView, CalculatorsView, WriteoffView
 from .legal_entities_view import LegalEntitiesView
 from .counterparty_ui import SmrView
@@ -70,6 +71,25 @@ class GlobalSearchDialog(QDialog):
         kind,rid=item.data(Qt.ItemDataRole.UserRole);open_record(kind,rid,self)
     def reject(self):
         self.timer.stop();self.poller.stop();self.pool.shutdown(wait=False,cancel_futures=True);super().reject()
+
+
+# Боковое меню по разделам: (название раздела, [модули]). Раздел из одного модуля показывается обычной кнопкой.
+NAV_SECTIONS = [
+    ('Сегодня', ['tasks']),
+    ('Услуги', ['gsv', 'contracts', 'gsn', 'smr']),
+    ('Контрагенты', ['clients', 'legal_entities']),
+    ('Дополнительно', ['welders', 'writeoff', 'calculators', 'stats', 'estimates', 'exec', 'workspace']),
+    ('Справочники', ['gsv_catalog', 'gsn_catalog', 'materials']),
+    ('Настройки', ['settings']),
+]
+KNOWN_TABS = [
+    ("tasks", "Сегодня"), ("gsv", "Проекты ГСВ"), ("contracts", "Монтаж ГСВ"), ("gsn", "Монтаж ГСН"), ("smr", "СМР"),
+    ("clients", "Клиенты"), ("legal_entities", "Юрлица"),
+    ("welders", "Сварщики"), ("writeoff", "Списание"), ("calculators", "Калькуляторы"), ("stats", "Статистика"),
+    ("estimates", "Реестр смет"), ("exec", "Исполнительная док."), ("workspace", "Все реестры · быстрый обзор"),
+    ("gsv_catalog", "Справочники ГСВ"), ("gsn_catalog", "Справочник ГСН"), ("materials", "Справочник"),
+    ("settings", "Настройки"),
+]
 
 
 class MainWindow(QMainWindow):
@@ -127,6 +147,7 @@ class MainWindow(QMainWindow):
             "materials": MaterialsView,
             "welders": WeldersView,
             "gsv_catalog": GsvCatalogView,
+            "gsn_catalog": GsnCatalogView,
             "calculators": CalculatorsView,
             "writeoff": WriteoffView,
             "stats": StatisticsView,
@@ -152,71 +173,82 @@ class MainWindow(QMainWindow):
             logging.warning(f"Некорректный tabs_config, сброшен: {e}")
             tabs_data = []
 
-        known_tabs = [
-            ("workspace", "Все реестры · быстрый обзор"),
-            ("clients", "Клиенты"),
-            ("tasks", "Сегодня"),
-            ("estimates", "Реестр смет"),
-            ("contracts", "Монтаж ГСВ"),
-            ("gsv", "Проекты ГСВ"),
-            ("gsn", "Монтаж ГСН"),
-            ("legal_entities", "Юрлица"),
-            ("smr", "СМР"),
-            ("exec", "Исполнительная док."),
-            ("materials", "Справочник"),
-            ("welders", "Сварщики"),
-            ("gsv_catalog", "Справочники ГСВ"),
-            ("calculators", "Калькуляторы"),
-            ("writeoff", "Списание"),
-            ("stats", "Статистика"),
-            ("settings", "Настройки")
-        ]
-
         existing_ids = {t["id"] for t in tabs_data}
         changed = False
-
-        for t_id, t_name in known_tabs:
+        for t_id, t_name in KNOWN_TABS:
             if t_id not in existing_ids:
-                insert_idx = len(tabs_data)
-                for i, tab in enumerate(tabs_data):
-                    if tab["id"] in ("stats", "settings"):
-                        insert_idx = i
-                        break
-                tabs_data.insert(insert_idx, {"id": t_id, "name": t_name, "visible": 1})
+                tabs_data.append({"id": t_id, "name": t_name, "visible": 1})
                 changed = True
-
         if changed:
             db.set_setting("tabs_config", json.dumps(tabs_data))
-
-        for tab_cfg in tabs_data:
-            if not tab_cfg.get("visible", 1): continue
-
-            tab_id = tab_cfg["id"]
-            if tab_id not in self.view_classes: continue
-
-            view_class = self.view_classes[tab_id]
-            view_instance = QWidget();view_instance._tab_id=tab_id
-            view_instance._factory = lambda c=view_class, t=tab_id: c(self) if t == "settings" else c()
-
-            btn = QPushButton(tab_cfg["name"])
-            from .icons import icon
-            btn.setIcon(icon(tab_id))
-            btn.setObjectName("navButton");btn.setToolTip(tab_cfg["name"])
-            btn.setCheckable(True)
-            btn.setMinimumHeight(32)
-
-            self.stack.addWidget(view_instance)
-            self.nav_layout.addWidget(btn)
-
-            self.tabs_buttons.append(btn)
-            self.views.append(view_instance)
-
-            btn.clicked.connect(lambda checked, idx=len(self.tabs_buttons)-1, b=btn: self.switch_tab(idx, b))
+        config = {t["id"]: t for t in tabs_data}
+        placed = {tab_id for _title, ids in NAV_SECTIONS for tab_id in ids}
+        sections = [(title, list(ids)) for title, ids in NAV_SECTIONS]
+        extra = [t["id"] for t in tabs_data if t["id"] not in placed and t["id"] in self.view_classes]
+        if extra:      # модули, которых нет в схеме меню, попадают в «Дополнительно»
+            for title, ids in sections:
+                if title == 'Дополнительно':
+                    ids.extend(extra)
+        try:
+            collapsed = set(json.loads(db.get_setting("nav_collapsed", "[]")))
+        except (ValueError, TypeError):
+            collapsed = set()
+        from .icons import icon
+        self.nav_groups = {}
+        for title, ids in sections:
+            visible = [i for i in ids if i in self.view_classes and config.get(i, {}).get("visible", 1)]
+            if not visible:
+                continue
+            target = self.nav_layout
+            if len(visible) > 1:
+                header = QPushButton(("▸  " if title in collapsed else "▾  ") + title.upper())
+                header.setObjectName("navGroup")
+                header.setToolTip("Свернуть или развернуть раздел")
+                box = QWidget()
+                box_layout = QVBoxLayout(box)
+                box_layout.setContentsMargins(0, 0, 0, 0)
+                box_layout.setSpacing(3)
+                box.setVisible(title not in collapsed)
+                header.clicked.connect(lambda _=False, t=title: self.toggle_group(t))
+                self.nav_layout.addWidget(header)
+                self.nav_layout.addWidget(box)
+                self.nav_groups[title] = (header, box)
+                target = box_layout
+            for tab_id in visible:
+                view_class = self.view_classes[tab_id]
+                view_instance = QWidget()
+                view_instance._tab_id = tab_id
+                view_instance._factory = lambda c=view_class, t=tab_id: c(self) if t == "settings" else c()
+                name = config.get(tab_id, {}).get("name") or dict(KNOWN_TABS).get(tab_id, tab_id)
+                btn = QPushButton(name)
+                btn.setIcon(icon(tab_id))
+                btn.setObjectName("navButton")
+                btn.setProperty("grouped", len(visible) > 1)
+                btn.setToolTip(name)
+                btn.setCheckable(True)
+                btn.setMinimumHeight(32)
+                btn._group = title if len(visible) > 1 else None
+                self.stack.addWidget(view_instance)
+                target.addWidget(btn)
+                self.tabs_buttons.append(btn)
+                self.views.append(view_instance)
+                btn.clicked.connect(lambda checked, idx=len(self.tabs_buttons) - 1, b=btn: self.switch_tab(idx, b))
 
         if self.tabs_buttons:
             self.switch_tab(0, self.tabs_buttons[0])
 
+    def toggle_group(self, title, expand=None):
+        header, box = self.nav_groups[title]
+        show = box.isHidden() if expand is None else expand
+        box.setVisible(show)
+        header.setText(("▾  " if show else "▸  ") + title.upper())
+        collapsed = [t for t, (_h, b) in self.nav_groups.items() if b.isHidden()]
+        db.set_setting("nav_collapsed", json.dumps(collapsed, ensure_ascii=False))
+
     def switch_tab(self, idx, target_btn):
+        group = getattr(target_btn, '_group', None)
+        if group and group in self.nav_groups and self.nav_groups[group][1].isHidden():
+            self.toggle_group(group, True)
         view = self.views[idx]
         if hasattr(view, '_factory'):
             replacement = view._factory()

@@ -19,9 +19,10 @@ KINDS = {
     'project': ('Проект / срок', '#0891B2', '📐'),
     'event': ('Событие', '#64748B', '🕒'),
     'recurring': ('Ежемесячная дата', '#DB2777', '🔁'),
+    'note': ('Заметка', '#CA8A04', '📝'),
 }
 # Порядок маркеров в ячейке календаря и в списке дня
-KIND_ORDER = ['overdue', 'task', 'contract', 'payment', 'work', 'act', 'project', 'recurring', 'event']
+KIND_ORDER = ['overdue', 'task', 'contract', 'payment', 'work', 'act', 'project', 'recurring', 'note', 'event']
 
 SHIFTS = [('none', 'Не переносить'), ('prev', 'Перенести на пятницу, если выходной'), ('next', 'Перенести на понедельник, если выходной')]
 RECURRING_PRESETS = ['Зарплата', 'Аванс', 'Сдача актов', 'Оплата аренды', 'Налоги и взносы', 'Другое']
@@ -259,6 +260,12 @@ def events_between(db, start, end, today=None):
             "JOIN welding_jobs j ON j.id=d.job_id LEFT JOIN welders w ON w.id=j.welder_id WHERE d.work_date BETWEEN ? AND ? ORDER BY j.title", (s, e)):
         out.append(_event(datetime.strptime(day, ISO).date(), 'work', f'Работы: {title}',
                           ' · '.join(x for x in (welder or 'Сварщик не назначен', place) if x), ('welding_jobs', jid)))
+    # --- заметки (независимые и привязанные к договорам, клиентам) ---
+    from . import notes_domain
+    for nid, day, title, body, ltable, lid in db.fetchall("SELECT id,note_date,title,body,link_table,link_id FROM notes WHERE note_date BETWEEN ? AND ?", (s, e)):
+        label = notes_domain.link_label(db, ltable, lid) if ltable else ''
+        detail = ' · '.join(x for x in (label, (body or '').replace('\n', ' ')[:80]) if x)
+        out.append(_event(datetime.strptime(day, ISO).date(), 'note', title or 'Заметка', detail, ('notes', nid)))
     # --- ручные события и ежемесячные даты ---
     for eid, day, time, title, desc in db.fetchall(
             "SELECT id,event_date,event_time,title,description FROM calendar_events WHERE event_date BETWEEN ? AND ?", (s, e)):

@@ -203,7 +203,7 @@ class ContractCardDialog(QDialog):
         bottom = QHBoxLayout()
         self.status = QLabel('')
         bottom.addWidget(self.status, 1)
-        for text, fn in (('Оплаты', self.open_payments), ('Создать задачу', self.create_task), ('Папка договора', self.open_folder), ('Расход материалов', self.open_consumption), ('График работ…', self.open_schedule)):
+        for text, fn in (('Оплаты', self.open_payments), ('Создать задачу', self.create_task), ('Заметки', self.open_notes), ('Папка договора', self.open_folder), ('Расход материалов', self.open_consumption), ('График работ…', self.open_schedule)):
             b = QPushButton(text)
             b.clicked.connect(fn)
             bottom.addWidget(b)
@@ -317,6 +317,12 @@ class ContractCardDialog(QDialog):
         self.refresh_docs()
 
     # --- сохранение ---
+    def open_notes(self):
+        if not self.ensure_saved():
+            return
+        from .notes_view import open_notes
+        open_notes(self, 'contracts', self.contract_id)
+
     def create_task(self):
         if not self.ensure_saved():
             return

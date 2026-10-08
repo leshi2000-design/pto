@@ -77,7 +77,9 @@ class RecordDialog(QDialog):
             # карточка клиента: его данные и файлы папок всех его договоров
             from PyQt6.QtWidgets import QTabWidget
             from .client_files import ClientFilesWidget
-            data=QWidget();data.setLayout(form);tabs=QTabWidget();self.tabs=tabs;tabs.addTab(data,'Данные клиента');tabs.addTab(ClientFilesWidget(rid),'Файлы договоров');layout.addWidget(tabs);self.resize(780,560)
+            data=QWidget();data.setLayout(form);tabs=QTabWidget();self.tabs=tabs;tabs.addTab(data,'Данные клиента');tabs.addTab(ClientFilesWidget(rid),'Файлы договоров')
+            from .notes_view import NotesPanel
+            tabs.addTab(NotesPanel(('crm.clients',rid)),'Заметки');layout.addWidget(tabs);self.resize(780,560)
         else:layout.addLayout(form)
         buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Save|QDialogButtonBox.StandardButton.Cancel);buttons.accepted.connect(self.save);buttons.rejected.connect(self.reject)
         if table=='crm.clients' and rid:
@@ -232,6 +234,9 @@ def open_record(table,rid,parent=None):
     elif table=='welding_documents':
         from .welding_documents import DocumentDialog
         DocumentDialog(rid,parent=parent).exec()
+    elif table=='gsn_pipelines':
+        from .gsn_catalog import GsnPipelineDialog
+        GsnPipelineDialog(rid,parent).exec()
     elif table=='gsv_pipelines':
         from .gsv_catalog import PipelineDialog
         PipelineDialog(rid,parent).exec()

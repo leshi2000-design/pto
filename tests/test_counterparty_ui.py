@@ -13,6 +13,13 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(gd, 'TEMPLATES_DIR', tmp_path / 't')
     d = DatabaseManager(tmp_path / 'smetagaz.db')
     d.init_db()
+    import importlib, sys
+    for name in ('notes_view', 'gsn_catalog', 'tasks_view', 'today_view', 'workspace_view', 'main_window', 'gsv_view', 'contract_card', 'payments_view', 'board_domain'):
+        importlib.import_module('smetagaz.' + name)
+    from smetagaz.database import db as singleton
+    for name, mod in list(sys.modules.items()):
+        if name.startswith('smetagaz') and getattr(mod, 'db', None) is singleton:
+            monkeypatch.setattr(mod, 'db', d)
     monkeypatch.setattr(ui, 'db', d)
     import smetagaz.legal_entities_view as lev
     monkeypatch.setattr(lev, 'db', d)
@@ -143,3 +150,51 @@ def test_board_ui(env, monkeypatch):
     assert db.fetchone("SELECT count(*) FROM kanban_tasks WHERE auto_key<>''")[0] >= 1
     monkeypatch.setattr(tv.TaskEditDialog, 'exec', lambda self: 1)
     tv.new_task_for(view, 'le_contracts', cid)
+
+
+def test_sidebar_sections_notes_and_gsn_catalog(env, monkeypatch):
+    db, ui = env
+    import sys
+    import smetagaz.main_window as mw, smetagaz.notes_view as nv, smetagaz.gsn_catalog as gn
+    from smetagaz.database import db as singleton
+    for name, mod in list(sys.modules.items()):
+        if name.startswith('smetagaz') and getattr(mod, 'db', None) is singleton:
+            monkeypatch.setattr(mod, 'db', db)
+    monkeypatch.setattr(QMessageBox, 'question', lambda *a, **k: QMessageBox.StandardButton.Yes)
+    # дерево меню
+    w = mw.MainWindow()
+    names = [b.text() for b in w.tabs_buttons]
+    assert names[0] == 'Сегодня' and names[-1] == 'Настройки'
+    order = ['Проекты ГСВ', 'Монтаж ГСВ', 'Монтаж ГСН', 'СМР', 'Клиенты', 'Юрлица', 'Сварщики', 'Списание', 'Калькуляторы', 'Статистика']
+    assert [n for n in names if n in order] == order
+    assert names[-4:] == ['Справочники ГСВ', 'Справочник ГСН', 'Справочник', 'Настройки']
+    assert set(w.nav_groups) == {'Услуги', 'Контрагенты', 'Дополнительно', 'Справочники'}
+    w.toggle_group('Услуги', False)
+    assert db.get_setting('nav_collapsed') == '["Услуги"]'
+    w.switch_tab(names.index('СМР'), w.tabs_buttons[names.index('СМР')])
+    assert not w.nav_groups['Услуги'][1].isHidden() and db.get_setting('nav_collapsed') == '[]'
+    for i, b in enumerate(w.tabs_buttons):
+        w.switch_tab(i, b)
+    # заметки в «Сегодня»
+    view = [v for v in w.views if getattr(v, '_tab_id', '') == 'tasks'][0]
+    panel = view.notes if hasattr(view, 'notes') else None
+    assert panel is not None
+    panel.title.setText('Позвонить прорабу')
+    panel.body.setPlainText('Уточнить сроки')
+    panel.save()
+    assert db.fetchone("SELECT count(*) FROM notes WHERE title='Позвонить прорабу'")[0] == 1
+    panel.new_note()
+    assert panel.current_link() == ('', None)
+    # справочник ГСН
+    cert = db.execute("INSERT INTO certificates(name,cert_number) VALUES('Сертификат ПЭ100','123')").lastrowid
+    cert2 = db.execute("INSERT INTO certificates(name,cert_number) VALUES('По умолчанию','9')").lastrowid
+    pid = db.execute("INSERT INTO gsn_pipelines(name,unit,certificate_id) VALUES('Труба ПЭ100 63','м',?)", (cert,)).lastrowid
+    gn.add_cert_rule(db, 'pipeline_text', 'ПЭ100', cert2)
+    db.execute('INSERT INTO gsn_default_certs(certificate_id) VALUES(?)', (cert2,))
+    got = gn.required_certificates(db, [pid], ['Кран шаровой'])
+    assert [c['id'] for c in got] == [cert, cert2]
+    with pytest.raises(ValueError):
+        gn.add_cert_rule(db, 'pipeline_text', 'ПЭ100', cert2)
+    catalog = gn.GsnCatalogView()
+    assert catalog.table.rowCount() == 1
+    gn.GsnRulesDialog()

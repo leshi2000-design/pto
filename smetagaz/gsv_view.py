@@ -708,6 +708,9 @@ class ProjectEditDialog(QDialog):
         self.btn_task.setToolTip("Задача на доске, связанная с этим проектом")
         self.btn_task.clicked.connect(self.create_task)
         btn_layout.addWidget(self.btn_task)
+        self.btn_notes = QPushButton("Заметки")
+        self.btn_notes.clicked.connect(self.open_notes)
+        btn_layout.addWidget(self.btn_notes)
         self.btn_folder = QPushButton("Папка договора")
         self.btn_folder.clicked.connect(self.open_folder)
         btn_layout.addWidget(self.btn_folder)
@@ -821,6 +824,12 @@ class ProjectEditDialog(QDialog):
         self.setWindowTitle(f"{row['pd_number']} | {row['object_name'] or 'Без объекта'} | {row['client_name'] or row.get('party_name') or 'Без заказчика'}")
         self.refresh_docs()
         self.refresh_folder()
+
+    def open_notes(self):
+        if not self.project_id and not self.save_data():
+            return
+        from .notes_view import open_notes
+        open_notes(self, 'gsv_projects', self.project_id)
 
     def create_task(self):
         if not self.project_id and not self.save_data():

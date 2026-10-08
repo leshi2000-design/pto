@@ -13,6 +13,8 @@ def apply(app,dark=False,family='Segoe UI',size=10):
     QLabel#brand {{font-size:18px;font-weight:700;color:#ffffff;}}
     QScrollArea#navigation {{background:transparent;border:0;}} QWidget#navContent {{background:#142238;}}
     QPushButton#navButton {{text-align:left;background:transparent;color:#b7c5dc;border:0;border-radius:7px;padding:8px 12px;min-height:20px;}}
+    QPushButton#navGroup {{text-align:left;background:transparent;color:#7f93b2;border:0;padding:9px 12px 4px 12px;font-size:11px;font-weight:700;letter-spacing:1px;}}
+    QPushButton#navGroup:hover {{color:#ffffff;}} QPushButton#navButton[grouped="true"] {{padding-left:22px;}}
     QPushButton#navButton:hover {{background:#20334f;color:white;}} QPushButton#navButton:checked {{background:#2563eb;color:white;font-weight:600;}}
     QLabel#pageTitle {{font-size:23px;font-weight:700;}} QLabel#pageSubtitle {{color:{muted};font-size:11px;}}
     QFrame#pageHeader {{background:{panel};border-bottom:1px solid {line};}}

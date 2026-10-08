@@ -57,7 +57,7 @@ class SettingsView(QWidget):
         self.btn_color.clicked.connect(self.choose_accent)
         l_app.addWidget(self.btn_color, 1, 0, 1, 3)
 
-        l_app.addWidget(QLabel("Порядок и названия вкладок (перетаскивайте строки мышкой):"), 2, 0, 1, 3)
+        l_app.addWidget(QLabel("Названия модулей и их видимость. Модули сгруппированы по разделам (Сегодня, Услуги, Контрагенты, Дополнительно, Справочники, Настройки); порядок и состав разделов задаёт программа."), 2, 0, 1, 3)
 
         self.table_tabs = ReorderTableWidget()
         self.table_tabs.setColumnCount(3)

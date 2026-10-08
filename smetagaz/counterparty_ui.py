@@ -104,6 +104,9 @@ class LegalClientDialog(QDialog):
         self.note = QTextEdit()
         pl.addWidget(self.note)
         tabs.addTab(page, 'Примечание')
+        if client_id:
+            from .notes_view import NotesPanel
+            tabs.addTab(NotesPanel(('le_clients', client_id)), 'Заметки')
         bar = QHBoxLayout()
         bar.addStretch()
         cancel = QPushButton('Отмена')
@@ -335,7 +338,7 @@ class ContractDialog(QDialog):
         self.status = QLabel('')
         layout.addWidget(self.status)
         bar = QHBoxLayout()
-        for text, fn in (('Оплаты', self.open_payments), ('Создать задачу', self.create_task), ('Папка договора', self.open_folder)):
+        for text, fn in (('Оплаты', self.open_payments), ('Создать задачу', self.create_task), ('Заметки', self.open_notes), ('Папка договора', self.open_folder)):
             b = QPushButton(text)
             b.clicked.connect(fn)
             bar.addWidget(b)
@@ -733,6 +736,12 @@ class ContractDialog(QDialog):
         if path:
             cc.link_doc(db, self.mod, kind, ref, path)
             self.refresh_all()
+
+    def open_notes(self):
+        if not self.ensure_saved():
+            return
+        from .notes_view import open_notes
+        open_notes(self, cc.cfg(self.mod)['contracts'], self.contract_id)
 
     def create_task(self):
         if not self.ensure_saved():

@@ -15,6 +15,7 @@ SOURCES = {
  'welders': ('Сварщик','name',['name','certificate','notes']),
  'writeoffs': ('Списание','title',['title','notes']),
  'gsv_pipelines': ('Трубопровод','name',['name','notes']),
+ 'gsn_pipelines': ('Трубопровод ГСН','name',['name','notes']),
  'welding_documents': ('Документ сварки','title',['title','number','document_type','note']),
  'welding_jobs': ('Работа сварки','title',['title','object_text','welder_text','notes']),
  'stock_materials': ('Материал списания','name',['name','category','unit']),
@@ -26,6 +27,7 @@ SOURCES = {
  'le_acts': ('Акт (юрлицо)','act_number',['act_number','description','note']),
  'smr_contracts': ('Договор СМР','contract_number',['contract_number','subject','object_name','object_address','status','note']),
  'smr_acts': ('Акт СМР','act_number',['act_number','description','note']),
+ 'notes': ('Заметка','title',['title','body']),
  'le_outgoing': ('Исходящий документ','reg_number',['reg_number','recipient','subject','note']),
 }
 
@@ -77,6 +79,10 @@ def initialize(db):
         contracts_core_migrate(db)
         from .board_domain import migrate as board_migrate
         board_migrate(db)
+        from .notes_domain import migrate as notes_migrate
+        notes_migrate(db)
+        from .gsn_catalog import migrate as gsn_catalog_migrate
+        gsn_catalog_migrate(db)
         db.execute('CREATE INDEX IF NOT EXISTS idx_payments_est ON payments(estimate_id)')
         db.execute('CREATE INDEX IF NOT EXISTS idx_attachments_est ON attachments(estimate_id)')
         for table, phone in [('estimates','client_phone'),('gsv_projects','phone')]:
@@ -113,7 +119,7 @@ def initialize(db):
         END''')
         db.execute('CREATE TABLE IF NOT EXISTS export_profiles (record_key TEXT PRIMARY KEY, options TEXT NOT NULL)')
         db.execute('CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(kind UNINDEXED, record_id UNINDEXED, title, body, tokenize="unicode61")')
-        rebuild=db.get_setting('fts_version')!='7'
+        rebuild=db.get_setting('fts_version')!='9'
         for table_idx, (table, (_,title,fields)) in enumerate(SOURCES.items(), 1):
             body=" || ' ' || ".join(f"coalesce(new.{f},'')" for f in fields)
             for action in ['insert','update','delete']:
@@ -126,7 +132,7 @@ def initialize(db):
             for table_idx,(table,(_,title,fields)) in enumerate(SOURCES.items(),1):
                 body=" || ' ' || ".join(f"coalesce({f},'')" for f in fields)
                 db.execute(f"INSERT OR REPLACE INTO search_index(rowid,kind,record_id,title,body) SELECT {table_idx}*1000000000000+id,'{table}',id,{title},{body} FROM {table}")
-            db.set_setting('fts_version','7')
+            db.set_setting('fts_version','9')
 
 
 def search(db, query, limit=100, offset=0):
@@ -185,6 +191,7 @@ def delete_client(db, cid):
             blank = ','.join(f"{c}=''" for c in cols if c in columns)
             db.execute(f'UPDATE {table} SET client_id=NULL' + (',' + blank if blank else '') + ' WHERE client_id=?', (cid,))
         db.execute('UPDATE smr_contracts SET person_id=NULL WHERE person_id=?', (cid,))
+        db.execute("DELETE FROM notes WHERE link_table='crm.clients' AND link_id=?", (cid,))
         db.execute('DELETE FROM crm.clients WHERE id=?', (cid,))
     try:
         db.execute('VACUUM crm')        # физически убирает удалённые данные из файла clients.db

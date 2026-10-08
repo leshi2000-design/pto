@@ -566,6 +566,10 @@ class TodayView(QWidget):
         self.tabs.addTab(self.board, '📋 Доска задач')
         self.tabs.addTab(self.day, '📅 Сегодня')
         self.tabs.addTab(self._table_tab(), '🗂 Реестр задач')
+        from .notes_view import NotesPanel
+        self.notes = NotesPanel()
+        self.notes.changed.connect(self.load_data)
+        self.tabs.addTab(self.notes, '📝 Заметки')
         split.addWidget(self.tabs)
         self.panel = CalendarPanel()
         self.panel.setMinimumWidth(440)
@@ -580,9 +584,9 @@ class TodayView(QWidget):
         self.btn_calendar.toggled.connect(self.on_calendar_toggle)
         self.tabs.setCornerWidget(self.btn_calendar, Qt.Corner.TopRightCorner)
         try:
-            self.calendar_pref = {**{'board': False, 'day': True, 'registry': False}, **json.loads(db.get_setting('today_calendar', '{}') or '{}')}
+            self.calendar_pref = {**{'board': False, 'day': True, 'registry': False, 'notes': False}, **json.loads(db.get_setting('today_calendar', '{}') or '{}')}
         except (ValueError, TypeError):
-            self.calendar_pref = {'board': False, 'day': True, 'registry': False}
+            self.calendar_pref = {'board': False, 'day': True, 'registry': False, 'notes': False}
 
         self.day.btn_today.clicked.connect(lambda: self.select_day(date.today()))
         self.day.btn_prev.clicked.connect(lambda: self.select_day(self.panel.selected() - timedelta(days=1)))
@@ -599,7 +603,7 @@ class TodayView(QWidget):
 
     def tab_key(self):
         widget = self.tabs.currentWidget()
-        return 'board' if widget is self.board else 'day' if widget is self.day else 'registry'
+        return 'board' if widget is self.board else 'day' if widget is self.day else 'notes' if widget is self.notes else 'registry'
 
     def apply_calendar_pref(self, *_):
         visible = self.calendar_pref.get(self.tab_key(), False)
@@ -624,6 +628,8 @@ class TodayView(QWidget):
     def on_tab(self, index):
         if index == 0:
             self.board.load_boards()
+        elif index == 3:
+            self.notes.load_list()
         elif index == 2:
             self.registry_table.reload_catalog()
             self.registry_table.load_data()
@@ -679,6 +685,11 @@ class TodayView(QWidget):
             EventEditDialog(ev['date'].strftime(ISO), rid, self).exec()
         elif table == 'recurring_dates':
             RecurringEditDialog(rid, self).exec()
+        elif table == 'notes':
+            self.tabs.setCurrentWidget(self.notes)
+            self.notes.show_note(rid)
+            self.notes.load_list()
+            return
         elif table == 'welding_jobs':
             from .welding_view import JobDialog
             JobDialog(rid, parent=self).exec()

@@ -9,6 +9,7 @@ PATHS={
 'contracts':'M5 2h10l4 4v16H5z M8 10h8 M8 14h5 M8 18l2-2 2 3 3-4',
 'gsv':'M3 6h11v5h7v7H10v-5H3z M6 3v13 M18 9v12',
 'gsn':'M3 11l9-8 9 8 M5 10v11h14V10 M9 21v-7h6v7',
+'gsn_catalog':'M4 4h16v16H4z M8 8h8 M8 12h8 M8 16h5',
 'smr':'M3 21h18 M5 21V9l7-5 7 5v12 M9 21v-6h6v6 M9 12h6',
 'legal_entities':'M4 21V4h9v17 M13 9h7v12h-7 M7 8h1 M7 12h1 M7 16h1 M16 13h1 M16 17h1',
 'exec':'M3 5h7l2 3h9v13H3z M7 14l3 3 6-6',
