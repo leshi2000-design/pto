@@ -211,6 +211,9 @@ def open_record(table,rid,parent=None):
     elif table=='gsv_projects':
         from .gsv_view import ProjectEditDialog
         ProjectEditDialog(rid,parent=parent).exec()
+    elif table in ('le_contracts','smr_contracts'):
+        from .counterparty_ui import ContractDialog
+        ContractDialog('le' if table=='le_contracts' else 'smr',rid,parent).exec()
     elif table=='materials':
         from .material_card import MaterialCardDialog
         MaterialCardDialog(rid,parent).exec()

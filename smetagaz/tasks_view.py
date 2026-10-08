@@ -2,7 +2,7 @@
 Доска задач: карточки со сроком выполнения, перетаскивание между статусами,
 сортировка, быстрые фильтры и архив. Календарь и стартовый экран — в today_view.py.
 """
-from datetime import datetime
+from datetime import datetime, date, timedelta
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
                               QListWidget, QListWidgetItem, QAbstractItemView, QDialog,
@@ -14,6 +14,7 @@ from PyQt6.QtGui import QColor, QAction
 from .database import db
 from .agenda_domain import due_state, due_label, norm_date
 from .task_catalog import status_rows, chip_html
+from . import board_domain as board
 
 URGENCY_COLORS = {'Критическая': '#DC2626', 'Высокая': '#D97706', 'Обычная': '#2563EB', 'Низкая': '#16A34A'}
 DUE_COLORS = {'overdue': '#DC2626', 'today': '#D97706', 'soon': '#D97706', 'later': '#65758B'}
@@ -31,7 +32,7 @@ def rgba(color, alpha):
 # --- ВИЗУАЛЬНАЯ КАРТОЧКА ЗАДАЧИ ---
 
 class TaskCardWidget(QFrame):
-    def __init__(self, title, desc, created_at, urgency, status, tags=None, due='', done=False):
+    def __init__(self, title, desc, created_at, urgency, status, tags=None, due='', done=False, link=None, on_link=None):
         super().__init__()
         self.setObjectName('taskCard')
         dark = is_dark()
@@ -76,6 +77,17 @@ class TaskCardWidget(QFrame):
             row.addWidget(badge)
             row.addStretch()
             layout.addLayout(row)
+
+        if link:
+            from html import escape
+            lbl_link = QLabel(f'<a href="open" style="color:#2563EB;text-decoration:none;">🔗 {escape(link)}</a>')
+            lbl_link.setTextFormat(Qt.TextFormat.RichText)
+            lbl_link.setWordWrap(True)
+            lbl_link.setToolTip('Открыть связанную карточку')
+            lbl_link.setStyleSheet('font-size: 11px;')
+            if on_link:
+                lbl_link.linkActivated.connect(lambda _=None: on_link())
+            layout.addWidget(lbl_link)
 
         footer = QHBoxLayout()
         footer.setContentsMargins(0, 2, 0, 0)
@@ -144,8 +156,9 @@ class KanbanListWidget(QListWidget):
 
 
 class TaskEditDialog(QDialog):
-    def __init__(self, task_id=None, parent=None, due=None):
+    def __init__(self, task_id=None, parent=None, due=None, title='', link=None):
         super().__init__(parent)
+        initial_title = title
         self.task_id = task_id
         self.setWindowTitle("Новая задача" if not task_id else "Редактирование задачи")
         self.resize(520, 520)
@@ -188,6 +201,21 @@ class TaskEditDialog(QDialog):
         self.chk_due.toggled.connect(self.refresh_due)
         self.dt_due.dateChanged.connect(self.refresh_due)
 
+        # связь с договором / проектом
+        row_link = QHBoxLayout()
+        row_link.addWidget(QLabel("Связать с:"))
+        self.cmb_link_section = QComboBox()
+        self.cmb_link_section.addItem("— без связи —", '')
+        for table, name in board.LINK_SECTIONS.items():
+            self.cmb_link_section.addItem(name, table)
+        row_link.addWidget(self.cmb_link_section)
+        self.cmb_link_record = QComboBox()
+        self.cmb_link_record.setMinimumWidth(260)
+        self.cmb_link_record.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        row_link.addWidget(self.cmb_link_record, 1)
+        layout.addLayout(row_link)
+        self.cmb_link_section.currentIndexChanged.connect(lambda *_: self.fill_link_records())
+
         layout.addWidget(QLabel("Описание:"))
         self.inp_desc = QTextEdit()
         layout.addWidget(self.inp_desc)
@@ -220,9 +248,41 @@ class TaskEditDialog(QDialog):
 
         if self.task_id:
             self.load_task()
-        elif due:
-            self.set_due(QDate.fromString(due, "yyyy-MM-dd"))
+        else:
+            if due:
+                self.set_due(QDate.fromString(due, "yyyy-MM-dd"))
+            if initial_title:
+                self.inp_title.setText(initial_title)
+            if link:
+                self.set_link(*link)
         self.refresh_due()
+
+    def fill_link_records(self, selected=None):
+        table = self.cmb_link_section.currentData()
+        self.cmb_link_record.clear()
+        self.cmb_link_record.setEnabled(bool(table))
+        if not table:
+            return
+        for rid, label in board.records(db, table):
+            self.cmb_link_record.addItem(label, rid)
+        if selected is not None:
+            index = self.cmb_link_record.findData(selected)
+            if index < 0:
+                label = board.link_label(db, table, selected)
+                if label:
+                    self.cmb_link_record.addItem(label, selected)
+                    index = self.cmb_link_record.count() - 1
+            self.cmb_link_record.setCurrentIndex(max(0, index))
+
+    def set_link(self, table, rid):
+        self.cmb_link_section.blockSignals(True)
+        self.cmb_link_section.setCurrentIndex(max(0, self.cmb_link_section.findData(table or '')))
+        self.cmb_link_section.blockSignals(False)
+        self.fill_link_records(rid)
+
+    def link_value(self):
+        table = self.cmb_link_section.currentData()
+        return (table, self.cmb_link_record.currentData()) if table and self.cmb_link_record.currentData() else ('', None)
 
     def set_due(self, qdate):
         self.dt_due.setDate(qdate)
@@ -239,8 +299,9 @@ class TaskEditDialog(QDialog):
         self.lbl_due.setStyleSheet(f"color: {DUE_COLORS.get(state, '#65758B')}; font-weight: bold;")
 
     def load_task(self):
-        row = db.fetchone("SELECT title, description, is_archived, urgency, due_date FROM kanban_tasks WHERE id=?", (self.task_id,))
+        row = db.fetchone("SELECT title, description, is_archived, urgency, due_date, link_table, link_id FROM kanban_tasks WHERE id=?", (self.task_id,))
         if row:
+            self.set_link(row[5], row[6])
             self.inp_title.setText(row[0] or "")
             self.inp_desc.setPlainText(row[1] or "")
             self.cmb_urgency.setCurrentText(row[3] or "Обычная")
@@ -258,13 +319,15 @@ class TaskEditDialog(QDialog):
         desc = self.inp_desc.toPlainText().strip()
         urgency = self.cmb_urgency.currentText()
         due = self.due_value()
+        link_table, link_id = self.link_value()
 
         with db.transaction():
             if self.task_id:
-                db.execute("UPDATE kanban_tasks SET title=?, description=?, urgency=?, due_date=? WHERE id=?", (title, desc, urgency, due, self.task_id))
+                db.execute("UPDATE kanban_tasks SET title=?, description=?, urgency=?, due_date=?, link_table=?, link_id=? WHERE id=?",
+                           (title, desc, urgency, due, link_table, link_id, self.task_id))
             else:
-                self.task_id = db.execute("INSERT INTO kanban_tasks(title,description,status,is_archived,created_at,urgency,due_date) VALUES(?,?,?,0,?,?,?)",
-                                          (title, desc, self.task_fields.status.currentData(), datetime.now().strftime('%Y-%m-%d %H:%M:%S'), urgency, due)).lastrowid
+                self.task_id = db.execute("INSERT INTO kanban_tasks(title,description,status,is_archived,created_at,urgency,due_date,link_table,link_id) VALUES(?,?,?,0,?,?,?,?,?)",
+                                          (title, desc, self.task_fields.status.currentData(), datetime.now().strftime('%Y-%m-%d %H:%M:%S'), urgency, due, link_table, link_id)).lastrowid
             self.task_fields.save(self.task_id)
         self.accept()
 
@@ -320,8 +383,16 @@ class KanbanTab(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
+        quick = QHBoxLayout()
+        self.quick = QLineEdit()
+        self.quick.setPlaceholderText("Новая задача… например: Сдать акт Иванова завтра #акт !   (Enter — добавить; срок: завтра, пт, 15.10, до 10-го; ! — важно)")
+        self.quick.setClearButtonEnabled(True)
+        self.quick.returnPressed.connect(self.quick_add)
+        quick.addWidget(self.quick, 1)
+        layout.addLayout(quick)
+
         top_bar = QHBoxLayout()
-        btn_add = QPushButton("➕ Добавить задачу")
+        btn_add = QPushButton("➕ Подробная задача")
         btn_add.setProperty("type", "primary")
         btn_add.clicked.connect(self.new_task)
         top_bar.addWidget(btn_add)
@@ -340,15 +411,32 @@ class KanbanTab(QWidget):
         layout.addLayout(top_bar)
 
         second = QHBoxLayout()
-        self.chk_overdue = QCheckBox("Только просроченные")
+        self.chk_overdue = QPushButton("⚠ Просроченные")
+        self.chk_overdue.setCheckable(True)
         self.chk_overdue.toggled.connect(self.load_boards)
         second.addWidget(self.chk_overdue)
+        self.chk_week = QPushButton("📅 На этой неделе")
+        self.chk_week.setCheckable(True)
+        self.chk_week.setToolTip("Срок в ближайшие 7 дней (просроченные тоже)")
+        self.chk_week.toggled.connect(self.load_boards)
+        second.addWidget(self.chk_week)
+        self.btn_tags = QPushButton("🏷 Мои теги")
+        self.btn_tags.setToolTip("Показывать только задачи с выбранными тегами")
+        self.tag_menu = QMenu(self)
+        self.tag_menu.aboutToShow.connect(self.fill_tag_menu)
+        self.btn_tags.setMenu(self.tag_menu)
+        self.selected_tags = set()
+        second.addWidget(self.btn_tags)
         from .filters import SqlFilters
         self.filters = SqlFilters(self)
         self.filters.set_columns(['id', 'title', 'description', 'status', 'created_at', 'urgency', 'due_date'])
         self.filters.changed.connect(self.load_boards)
         second.addWidget(self.filters)
         second.addStretch()
+        self.btn_suggest = QPushButton("💡 Предложения")
+        self.btn_suggest.setToolTip("Задачи, которые программа предлагает создать: неподписанные договоры и акты, ведомость, устаревшие сметы")
+        self.btn_suggest.clicked.connect(self.open_suggestions)
+        second.addWidget(self.btn_suggest)
         btn_columns = QPushButton("⚙️ Теги и статусы")
         btn_columns.clicked.connect(self.manage_columns)
         second.addWidget(btn_columns)
@@ -424,7 +512,7 @@ class KanbanTab(QWidget):
             3: "ORDER BY CASE WHEN coalesce(due_date,'')='' THEN 1 ELSE 0 END, due_date, id DESC",
         }[self.cmb_sort.currentIndex()]
 
-        base = ("SELECT id, title, description, status, created_at, urgency, coalesce(due_date,'') AS due_date FROM kanban_tasks WHERE is_archived=0")
+        base = ("SELECT id, title, description, status, created_at, urgency, coalesce(due_date,'') AS due_date, coalesce(link_table,''), link_id FROM kanban_tasks WHERE is_archived=0")
         params = []
         needle = self.search.text().strip().casefold()
         if needle:
@@ -448,16 +536,26 @@ class KanbanTab(QWidget):
         fallback_code = next(iter(self.columns), None)
         counts = {code: 0 for code in self.columns}
         only_overdue = self.chk_overdue.isChecked()
-        for t_id, title, desc, status, created, urgency, due in rows:
+        only_week = self.chk_week.isChecked()
+        week_end = date.today() + timedelta(days=6)
+        for t_id, title, desc, status, created, urgency, due, link_table, link_id in rows:
             col_code = status if status in self.columns else fallback_code
             done = self.status_info.get(col_code, ('', '', False))[2]
             if only_overdue and due_state(due, done=done)[0] != 'overdue':
                 continue
+            if only_week and (done or not norm_date(due) or norm_date(due) > week_end.isoformat()):
+                continue
+            if self.selected_tags and not self.selected_tags & {n.casefold() for n, _c in tags_by_task.get(t_id, [])}:
+                continue
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, t_id)
 
-            card = TaskCardWidget(title, desc, created, urgency or "Обычная", status, tags_by_task.get(t_id), due, done)
-            item.setSizeHint(card.sizeHint())
+            link = board.link_label(db, link_table, link_id)
+            card = TaskCardWidget(title, desc, created, urgency or "Обычная", status, tags_by_task.get(t_id), due, done, link,
+                                  (lambda t=link_table, i=link_id: self.open_linked(t, i)) if link else None)
+            hint = card.sizeHint()
+            hint.setHeight(hint.height() + 6)
+            item.setSizeHint(hint)
 
             if col_code is not None:
                 col = self.columns[col_code]
@@ -466,9 +564,66 @@ class KanbanTab(QWidget):
                 counts[col_code] += 1
         for code, lbl in self.titles.items():
             lbl.setText(f"{self.status_info[code][0].upper()}  ·  {counts[code]}")
+        self.update_suggest_button()
 
     def refresh_ui(self):
         self.load_boards()
+        self.update_suggest_button()
+
+    def quick_add(self):
+        text = self.quick.text().strip()
+        if not text:
+            return
+        try:
+            task = board.add_quick(db, text)
+        except ValueError as e:
+            QMessageBox.warning(self, "Задача", str(e))
+            return
+        self.quick.clear()
+        self.load_boards()
+        self.changed.emit()
+        bits = [f"срок {datetime.strptime(task['due'], '%Y-%m-%d').strftime('%d.%m.%Y')}" if task['due'] else '', ' '.join('#' + t for t in task['tags']),
+                task['urgency'] if task['urgency'] != 'Обычная' else '']
+        self.quick.setPlaceholderText("Добавлено: " + task['title'] + ' · ' + ' · '.join(b for b in bits if b))
+
+    def fill_tag_menu(self):
+        self.tag_menu.clear()
+        for (name,) in db.fetchall('SELECT name FROM task_tags ORDER BY name'):
+            act = self.tag_menu.addAction(name)
+            act.setCheckable(True)
+            act.setChecked(name.casefold() in self.selected_tags)
+            act.toggled.connect(lambda on, n=name.casefold(): self.toggle_tag(n, on))
+        if self.selected_tags:
+            self.tag_menu.addSeparator()
+            self.tag_menu.addAction("Сбросить выбор").triggered.connect(self.clear_tags)
+
+    def toggle_tag(self, name, on):
+        (self.selected_tags.add if on else self.selected_tags.discard)(name)
+        self.btn_tags.setText(f"🏷 Мои теги ({len(self.selected_tags)})" if self.selected_tags else "🏷 Мои теги")
+        self.load_boards()
+
+    def clear_tags(self):
+        self.selected_tags.clear()
+        self.btn_tags.setText("🏷 Мои теги")
+        self.load_boards()
+
+    def open_linked(self, table, rid):
+        from .workspace_view import open_record
+        open_record(table, rid, self)
+        self.load_boards()
+        self.changed.emit()
+
+    def update_suggest_button(self):
+        try:
+            n = len(board.suggestions(db))
+        except Exception:
+            n = 0
+        self.btn_suggest.setText(f"💡 Предложения ({n})" if n else "💡 Предложения")
+
+    def open_suggestions(self):
+        SuggestionsDialog(self).exec()
+        self.load_boards()
+        self.changed.emit()
 
     def new_task(self):
         if TaskEditDialog(parent=self).exec():
@@ -492,6 +647,69 @@ class KanbanTab(QWidget):
     def open_archive(self):
         ArchiveDialog(self).exec()
         self.changed.emit()
+
+
+class SuggestionsDialog(QDialog):
+    """Предложения автозадач: отметить нужные и создать, остальные — скрыть."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Предложения задач")
+        self.resize(760, 480)
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Программа заметила, что стоит сделать. Отметьте нужные и нажмите «Создать» — они появятся на доске. «Скрыть» убирает предложение насовсем."))
+        self.list = QListWidget()
+        layout.addWidget(self.list, 1)
+        bar = QHBoxLayout()
+        all_btn = QPushButton("Отметить все")
+        all_btn.clicked.connect(lambda: self.mark(Qt.CheckState.Checked))
+        bar.addWidget(all_btn)
+        bar.addStretch()
+        hide = QPushButton("Скрыть отмеченные")
+        hide.clicked.connect(self.hide_checked)
+        bar.addWidget(hide)
+        create = QPushButton("Создать отмеченные")
+        create.setProperty("type", "primary")
+        create.clicked.connect(self.create_checked)
+        bar.addWidget(create)
+        layout.addLayout(bar)
+        self.load()
+
+    def load(self):
+        self.list.clear()
+        self.items = board.suggestions(db)
+        for s in self.items:
+            text = s['title'] + (f"  —  {s['reason']}" if s.get('reason') else '') + (f"  (срок {datetime.strptime(s['due'], '%Y-%m-%d').strftime('%d.%m.%Y')})" if s.get('due') else '')
+            item = QListWidgetItem(text)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Unchecked)
+            item.setData(Qt.ItemDataRole.UserRole, s['key'])
+            self.list.addItem(item)
+        if not self.items:
+            self.list.addItem("Предложений нет — всё под контролем.")
+
+    def mark(self, state):
+        for i in range(self.list.count()):
+            self.list.item(i).setCheckState(state)
+
+    def checked(self):
+        keys = {self.list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.list.count()) if self.list.item(i).checkState() == Qt.CheckState.Checked}
+        return [s for s in self.items if s['key'] in keys]
+
+    def create_checked(self):
+        for s in self.checked():
+            board.create_from_suggestion(db, s)
+        self.load()
+
+    def hide_checked(self):
+        for s in self.checked():
+            board.dismiss(db, s['key'])
+        self.load()
+
+
+def new_task_for(parent, table, rid):
+    """Кнопка «Создать задачу» в карточках договоров и проектов: задача уже связана с карточкой."""
+    title, due = board.default_task_for(db, table, rid)
+    return TaskEditDialog(parent=parent, due=due, title=title, link=(table, rid)).exec()
 
 
 # --- КАЛЕНДАРЬ СОБЫТИЙ ---

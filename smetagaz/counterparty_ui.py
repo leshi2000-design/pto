@@ -335,7 +335,7 @@ class ContractDialog(QDialog):
         self.status = QLabel('')
         layout.addWidget(self.status)
         bar = QHBoxLayout()
-        for text, fn in (('Оплаты', self.open_payments), ('Папка договора', self.open_folder)):
+        for text, fn in (('Оплаты', self.open_payments), ('Создать задачу', self.create_task), ('Папка договора', self.open_folder)):
             b = QPushButton(text)
             b.clicked.connect(fn)
             bar.addWidget(b)
@@ -733,6 +733,12 @@ class ContractDialog(QDialog):
         if path:
             cc.link_doc(db, self.mod, kind, ref, path)
             self.refresh_all()
+
+    def create_task(self):
+        if not self.ensure_saved():
+            return
+        from .tasks_view import new_task_for
+        new_task_for(self, cc.cfg(self.mod)['contracts'], self.contract_id)
 
     # --- оплаты
     def open_payments(self):

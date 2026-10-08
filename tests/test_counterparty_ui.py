@@ -93,3 +93,53 @@ def test_legal_customer_in_gsv_cards(env, monkeypatch):
     assert db.fetchone('SELECT le_client_id,party_name,client_id FROM contracts WHERE id=?', (card.contract_id,)) == (lid, 'ООО Ромашка', None)
     assert db.fetchone('SELECT count(*) FROM crm.clients')[0] == before
     assert cc.contract_from_source(db, 'contracts', card.contract_id)[1] is True
+
+
+def test_board_ui(env, monkeypatch):
+    db, ui = env
+    import sys
+    import smetagaz.tasks_view as tv, smetagaz.today_view as today
+    from smetagaz.database import db as singleton
+    for name, mod in list(sys.modules.items()):
+        if name.startswith('smetagaz') and getattr(mod, 'db', None) is singleton:
+            monkeypatch.setattr(mod, 'db', db)
+    from smetagaz import board_domain as bd
+    monkeypatch.setattr(QMessageBox, 'question', lambda *a, **k: QMessageBox.StandardButton.Yes)
+    lid = cc.save_legal(db, dict(name='ООО Ромашка'))
+    cid = cc.save_contract(db, 'le', dict(client_id=lid, direction='Монтажные работы', contract_date='2026-09-01', amount=10))
+    view = today.TodayView()
+    assert view.tabs.currentWidget() is view.board and view.tabs.tabText(0).endswith('Доска задач')
+    assert not view.panel.isVisibleTo(view) and 'оплат на сегодня' in view.summary.text()
+    view.board.quick.setText('Позвонить завтра #звонок !')
+    view.board.quick_add()
+    assert db.fetchone("SELECT count(*) FROM kanban_tasks WHERE title='Позвонить'")[0] == 1
+    view.btn_calendar.setChecked(True)
+    assert view.panel.isVisibleTo(view)
+    view.tabs.setCurrentWidget(view.day)
+    assert view.panel.isVisibleTo(view)
+    view.tabs.setCurrentWidget(view.board)
+    assert view.panel.isVisibleTo(view)          # выбор запомнен для вкладки доски
+    view.btn_calendar.setChecked(False)
+    assert not view.panel.isVisibleTo(view)
+    # связь
+    d = tv.TaskEditDialog(parent=view, title='Сдать акт', link=('le_contracts', cid))
+    assert d.link_value() == ('le_contracts', cid)
+    d.save_task()
+    assert d.inp_title.text() == 'Сдать акт'
+    row = db.fetchone("SELECT link_table,link_id FROM kanban_tasks WHERE title='Сдать акт'")
+    assert row == ('le_contracts', cid)
+    view.board.load_boards()
+    # фильтры
+    view.board.chk_week.setChecked(True)
+    view.board.chk_week.setChecked(False)
+    view.board.selected_tags = {'звонок'}
+    view.board.load_boards()
+    view.board.clear_tags()
+    # предложения
+    sd = tv.SuggestionsDialog(view)
+    assert sd.items
+    sd.mark(tv.Qt.CheckState.Checked)
+    sd.create_checked()
+    assert db.fetchone("SELECT count(*) FROM kanban_tasks WHERE auto_key<>''")[0] >= 1
+    monkeypatch.setattr(tv.TaskEditDialog, 'exec', lambda self: 1)
+    tv.new_task_for(view, 'le_contracts', cid)

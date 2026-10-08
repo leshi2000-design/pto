@@ -3,6 +3,7 @@
 справа — календарь, в котором графически отмечены задачи со сроком, договоры,
 оплаты, работы, акты и ежемесячные даты.
 """
+import json
 from datetime import date, timedelta
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFrame, QTabWidget,
@@ -13,6 +14,7 @@ from PyQt6.QtCore import Qt, QDate, QLocale, QSize, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen, QBrush, QTextCharFormat, QFont
 
 from .database import db
+from . import board_domain as board
 from . import agenda_domain as agenda
 from .agenda_domain import KINDS, KIND_ORDER, ISO
 from .tasks_view import KanbanTab, TaskEditDialog, EventEditDialog, rgba, is_dark
@@ -551,15 +553,10 @@ class TodayView(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(16, 12, 16, 12)
 
-        stats = QHBoxLayout()
-        self.chip_today = StatChip('дел на сегодня', '#2563EB')
-        self.chip_overdue = StatChip('просроченных задач', '#DC2626')
-        self.chip_week = StatChip('событий за 7 дней', '#16A34A')
-        self.chip_open = StatChip('задач в работе', '#D97706')
-        for chip in (self.chip_today, self.chip_overdue, self.chip_week, self.chip_open):
-            stats.addWidget(chip)
-        stats.addStretch()
-        outer.addLayout(stats)
+        self.summary = QLabel('')
+        self.summary.setTextFormat(Qt.TextFormat.RichText)
+        self.summary.setStyleSheet('font-size: 14px; padding: 4px 2px;')
+        outer.addWidget(self.summary)
 
         split = QSplitter(Qt.Orientation.Horizontal)
         outer.addWidget(split, 1)
@@ -576,6 +573,16 @@ class TodayView(QWidget):
         split.setStretchFactor(0, 3)
         split.setStretchFactor(1, 2)
         split.setSizes([620, 520])
+        self.split = split
+        self.btn_calendar = QPushButton('📆 Календарь')
+        self.btn_calendar.setCheckable(True)
+        self.btn_calendar.setToolTip('Показать или скрыть календарь справа. Выбор запоминается для каждой вкладки.')
+        self.btn_calendar.toggled.connect(self.on_calendar_toggle)
+        self.tabs.setCornerWidget(self.btn_calendar, Qt.Corner.TopRightCorner)
+        try:
+            self.calendar_pref = {**{'board': False, 'day': True, 'registry': False}, **json.loads(db.get_setting('today_calendar', '{}') or '{}')}
+        except (ValueError, TypeError):
+            self.calendar_pref = {'board': False, 'day': True, 'registry': False}
 
         self.day.btn_today.clicked.connect(lambda: self.select_day(date.today()))
         self.day.btn_prev.clicked.connect(lambda: self.select_day(self.panel.selected() - timedelta(days=1)))
@@ -584,8 +591,30 @@ class TodayView(QWidget):
         self.panel.data_changed.connect(self.load_data)
         self.board.changed.connect(self.load_data)
         self.tabs.currentChanged.connect(self.on_tab)
+        self.tabs.currentChanged.connect(self.apply_calendar_pref)
+        self.apply_calendar_pref()
         self.tabs.setCurrentWidget(self.board)      # при открытии раздела — доска задач
         self.board.load_boards()
+        self.load_data()
+
+    def tab_key(self):
+        widget = self.tabs.currentWidget()
+        return 'board' if widget is self.board else 'day' if widget is self.day else 'registry'
+
+    def apply_calendar_pref(self, *_):
+        visible = self.calendar_pref.get(self.tab_key(), False)
+        self.btn_calendar.blockSignals(True)
+        self.btn_calendar.setChecked(visible)
+        self.btn_calendar.blockSignals(False)
+        self.panel.setVisible(visible)
+
+    def on_calendar_toggle(self, visible):
+        self.calendar_pref[self.tab_key()] = bool(visible)
+        self.panel.setVisible(bool(visible))
+        try:
+            db.set_setting('today_calendar', json.dumps(self.calendar_pref))
+        except Exception:
+            pass
 
     def _table_tab(self):
         from .task_catalog import TasksTable
@@ -616,14 +645,14 @@ class TodayView(QWidget):
         if self.tabs.currentWidget() is self.registry_table:
             self.registry_table.reload_catalog()
             self.registry_table.load_data()
-        today = date.today()
-        todays = [e for e in agenda.events_between(db, today, today)]
-        week = agenda.events_between(db, today, today + timedelta(days=6))
-        over = agenda.overdue_tasks(db)
-        self.chip_today.set(len(todays) + len(over))
-        self.chip_overdue.set(len(over))
-        self.chip_week.set(len(week))
-        self.chip_open.set(db.fetchone("SELECT count(*) FROM kanban_tasks k LEFT JOIN task_statuses s ON s.code=k.status WHERE k.is_archived=0 AND coalesce(s.is_done,0)=0")[0])
+        info = board.summary(db)
+        parts = []
+        for piece in info['text'].split(' · '):
+            red = 'просрочено' in piece
+            amber = 'к подписанию' in piece
+            color = '#DC2626' if red else '#D97706' if amber else '#475569'
+            parts.append(f'<span style="color:{color};{"font-weight:600;" if red or amber else ""}">{piece}</span>')
+        self.summary.setText(' &nbsp;·&nbsp; '.join(parts))
 
     def load_day(self, *_):
         day = self.panel.selected()
@@ -662,7 +691,7 @@ class TodayView(QWidget):
                     open_record('estimates', eid or oid, self)
                 elif owner:
                     open_record(owner, oid, self)
-        elif table in ('contracts', 'gsv_projects', 'gsn_projects'):
+        elif table in ('contracts', 'gsv_projects', 'gsn_projects', 'le_contracts', 'smr_contracts'):
             from .workspace_view import open_record
             open_record(table, rid, self)
         self.load_data()

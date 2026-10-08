@@ -75,6 +75,8 @@ def initialize(db):
         legal_entities_migrate(db)
         from .contracts_core import migrate as contracts_core_migrate
         contracts_core_migrate(db)
+        from .board_domain import migrate as board_migrate
+        board_migrate(db)
         db.execute('CREATE INDEX IF NOT EXISTS idx_payments_est ON payments(estimate_id)')
         db.execute('CREATE INDEX IF NOT EXISTS idx_attachments_est ON attachments(estimate_id)')
         for table, phone in [('estimates','client_phone'),('gsv_projects','phone')]:
