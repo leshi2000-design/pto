@@ -566,8 +566,8 @@ class TodayView(QWidget):
         self.tabs = QTabWidget()
         self.day = DayTab(self)
         self.board = KanbanTab()
-        self.tabs.addTab(self.day, '📅 Сегодня')
         self.tabs.addTab(self.board, '📋 Доска задач')
+        self.tabs.addTab(self.day, '📅 Сегодня')
         self.tabs.addTab(self._table_tab(), '🗂 Реестр задач')
         split.addWidget(self.tabs)
         self.panel = CalendarPanel()
@@ -584,6 +584,8 @@ class TodayView(QWidget):
         self.panel.data_changed.connect(self.load_data)
         self.board.changed.connect(self.load_data)
         self.tabs.currentChanged.connect(self.on_tab)
+        self.tabs.setCurrentWidget(self.board)      # при открытии раздела — доска задач
+        self.board.load_boards()
 
     def _table_tab(self):
         from .task_catalog import TasksTable
@@ -591,7 +593,7 @@ class TodayView(QWidget):
         return self.registry_table
 
     def on_tab(self, index):
-        if index == 1:
+        if index == 0:
             self.board.load_boards()
         elif index == 2:
             self.registry_table.reload_catalog()
@@ -603,7 +605,7 @@ class TodayView(QWidget):
 
     def select_day(self, day):
         self.panel.go_to(day)
-        self.tabs.setCurrentIndex(0)
+        self.tabs.setCurrentWidget(self.day)
         self.load_day()
 
     def load_data(self):
@@ -611,7 +613,7 @@ class TodayView(QWidget):
         self.panel.reload_marks()
         self.load_day()
         self.board.load_boards()
-        if self.tabs.currentIndex() == 2:
+        if self.tabs.currentWidget() is self.registry_table:
             self.registry_table.reload_catalog()
             self.registry_table.load_data()
         today = date.today()
