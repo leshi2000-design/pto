@@ -16,6 +16,7 @@ class AutoBackupService(QObject):
         self.future=None
         self.contracts_future=None
         self.projects_future=None
+        self.offsite_future=None
         self.timer=QTimer(self);self.timer.timeout.connect(self.run_checks);self.timer.start(60000)
         QTimer.singleShot(5000,self.run_checks)
     def run_checks(self):
@@ -31,6 +32,16 @@ class AutoBackupService(QObject):
             try:last=datetime.fromisoformat(db.get_setting('last_projects_excel',''))
             except ValueError:last=datetime.min
             if (datetime.now()-last).total_seconds()>CONTRACTS_EXPORT_INTERVAL:self.projects_future=self.pool.submit(self.export_projects_excel,datetime.now())
+        if not (self.offsite_future and not self.offsite_future.done()):
+            from . import offsite_backup
+            if any(offsite_backup.due(db)):self.offsite_future=self.pool.submit(self.offsite_backup,datetime.now())
+    def offsite_backup(self,now):
+        try:
+            from . import offsite_backup
+            offsite_backup.run_scheduled(db,now)
+        except Exception as e:
+            logging.exception('Offsite backup failed')
+            db.set_setting('offsite_status',f'{now:%d.%m.%Y %H:%M}: ошибка — {e}')
     def export_projects_excel(self,now):
         try:
             from .gsv_project_domain import export_cards,EXPORT_FILENAME

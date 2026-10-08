@@ -86,6 +86,8 @@ def initialize(db):
         gsn_catalog_migrate(db)
         from .estimates_domain import migrate as estimates_migrate
         estimates_migrate(db)
+        from .cache_domain import migrate as perf_migrate
+        perf_migrate(db)
         db.execute('CREATE INDEX IF NOT EXISTS idx_payments_est ON payments(estimate_id)')
         db.execute('CREATE INDEX IF NOT EXISTS idx_attachments_est ON attachments(estimate_id)')
         for table, phone in [('estimates','client_phone'),('gsv_projects','phone')]:

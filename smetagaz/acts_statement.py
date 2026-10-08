@@ -48,6 +48,12 @@ def _paid(db, section, rid):
 
 
 def statement(db, section, year, month):
+    """Кэшируемая обёртка: пересчёт только при изменении данных."""
+    from .cache_domain import cached
+    return cached(db, ('statement', section, year, month), lambda: _statement(db, section, year, month))
+
+
+def _statement(db, section, year, month):
     """{'signed': [...], 'unsigned': [...]} — акты, датированные выбранным месяцем; сначала по дате акта."""
     if section not in SQL and section not in COUNTERPARTY:
         raise ValueError('Неизвестный раздел для ведомости')

@@ -45,3 +45,26 @@ def test_quick_add_link_and_suggestions(db):
     assert s['acts'] == 1 and '1 акт к подписанию' in s['text']
     with pytest.raises(ValueError):
         bd.add_task(db, 'x', link=('bad', 1))
+
+
+def test_cache_invalidates_on_change(db):
+    from smetagaz import cache_domain
+    calls = []
+    compute = lambda: calls.append(1) or {'v': len(calls)}
+    first = cache_domain.cached(db, 'k', compute)
+    assert cache_domain.cached(db, 'k', compute) == first and len(calls) == 1
+    first['v'] = 99                                   # изменение копии не портит кэш
+    assert cache_domain.cached(db, 'k', compute) == {'v': 1}
+    db.execute("INSERT INTO notes(title,body,note_date) VALUES('x','y','2026-10-01')")
+    assert cache_domain.cached(db, 'k', compute) == {'v': 2} and len(calls) == 2
+    cache_domain.invalidate()
+    assert cache_domain.cached(db, 'k', compute) == {'v': 3}
+    assert db.fetchone("SELECT 1 FROM sqlite_master WHERE name='idx_perf_le_acts_date'")
+
+
+def test_summary_updates_after_change(db):
+    from datetime import date
+    s1 = bd.summary(db, date(2026, 10, 8))
+    bd.add_quick(db, 'Просрочено давно 01.10.2026')
+    s2 = bd.summary(db, date(2026, 10, 8))
+    assert s2['overdue'] == s1['overdue'] + 1

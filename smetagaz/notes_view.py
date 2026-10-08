@@ -7,6 +7,7 @@ from PyQt6.QtCore import Qt, QDate, pyqtSignal
 
 from .database import db
 from . import notes_domain as nd
+from .pagebar import PageBar
 
 
 class NotesPanel(QWidget):
@@ -23,13 +24,13 @@ class NotesPanel(QWidget):
         self.scope = QComboBox()
         for key, text in (('all', 'Все заметки'), ('free', 'Независимые'), ('linked', 'Привязанные')):
             self.scope.addItem(text, key)
-        self.scope.currentIndexChanged.connect(self.load_list)
+        self.scope.currentIndexChanged.connect(self.search_changed)
         self.scope.setVisible(not link)
         bar.addWidget(self.scope)
         self.search = QLineEdit()
         self.search.setPlaceholderText('Поиск по заметкам…')
         self.search.setClearButtonEnabled(True)
-        self.search.textChanged.connect(self.load_list)
+        self.search.textChanged.connect(self.search_changed)
         bar.addWidget(self.search, 1)
         new = QPushButton('➕ Новая заметка')
         new.setProperty('type', 'primary')
@@ -39,9 +40,16 @@ class NotesPanel(QWidget):
 
         split = QSplitter(Qt.Orientation.Horizontal)
         layout.addWidget(split, 1)
+        left = QWidget()
+        ll = QVBoxLayout(left)
+        ll.setContentsMargins(0, 0, 0, 0)
         self.list = QListWidget()
         self.list.currentItemChanged.connect(self.on_select)
-        split.addWidget(self.list)
+        ll.addWidget(self.list, 1)
+        self.pager = PageBar(60)
+        self.pager.changed.connect(self.load_list)
+        ll.addWidget(self.pager)
+        split.addWidget(left)
         editor = QWidget()
         el = QVBoxLayout(editor)
         self.title = QLineEdit()
@@ -96,11 +104,20 @@ class NotesPanel(QWidget):
         self.load_list()
 
     # --- список
+    def search_changed(self, *_):
+        self.pager.reset()
+        self.load_list()
+
     def load_list(self, *_):
         keep = self.note_id
         self.list.blockSignals(True)
         self.list.clear()
-        for n in nd.list_notes(db, self.scope.currentData() or 'all', self.search.text(), self.fixed_link):
+        rows, total = nd.page_notes(db, self.scope.currentData() or 'all', self.search.text(), self.fixed_link, limit=self.pager.size, offset=self.pager.offset)
+        before = self.pager.offset
+        self.pager.set_total(total)
+        if self.pager.offset != before:          # последнюю страницу опустошили — показываем новую последнюю
+            rows, _ = nd.page_notes(db, self.scope.currentData() or 'all', self.search.text(), self.fixed_link, limit=self.pager.size, offset=self.pager.offset)
+        for n in rows:
             day = date.fromisoformat(n['date']).strftime('%d.%m.%Y') if n['date'] else ''
             text = f"{day}  {n['title']}" + (f"\n🔗 {n['link']}" if n['link'] and not self.fixed_link else '')
             item = QListWidgetItem(('📌 ' if n['link_table'] else '📝 ') + text)

@@ -133,7 +133,8 @@ class KanbanListWidget(QListWidget):
         super().dropEvent(event)
         for i in range(self.count()):
             task_id = self.item(i).data(Qt.ItemDataRole.UserRole)
-            db.execute("UPDATE kanban_tasks SET status=? WHERE id=?", (self.status_code, task_id))
+            if task_id is not None:
+                db.execute("UPDATE kanban_tasks SET status=? WHERE id=?", (self.status_code, task_id))
         self.status_changed.emit()
 
     def contextMenuEvent(self, event):
@@ -377,6 +378,7 @@ class ArchiveDialog(QDialog):
 
 class KanbanTab(QWidget):
     changed = pyqtSignal()
+    COLUMN_LIMIT = 50      # карточек в колонке; остальные открываются кнопкой «Показать ещё», иначе доска на тысячи задач открывается минутами
 
     def __init__(self):
         super().__init__()
@@ -455,6 +457,7 @@ class KanbanTab(QWidget):
 
         self.columns = {}
         self.titles = {}
+        self.expanded = set()
         self.rebuild_columns()
 
     def make_col(self, title, widget, color):
@@ -483,12 +486,18 @@ class KanbanTab(QWidget):
             col = KanbanListWidget(code)
             col.status_changed.connect(self.on_moved)
             col.doubleClicked.connect(self.edit_task)
+            col.itemClicked.connect(self.on_item_clicked)
             col.delete_requested.connect(self.delete_task_from_menu)
             self.columns[code] = col
             self.status_info[code] = (name, color, bool(done))
             frame, lbl = self.make_col(name, col, color)
             self.titles[code] = lbl
             self.boards_layout.addWidget(frame)
+
+    def on_item_clicked(self, item):
+        if item.data(Qt.ItemDataRole.UserRole + 1) == 'more':
+            self.expanded.add(self.sender().status_code)
+            self.load_boards()
 
     def on_moved(self):
         self.load_boards()
@@ -537,6 +546,7 @@ class KanbanTab(QWidget):
         counts = {code: 0 for code in self.columns}
         only_overdue = self.chk_overdue.isChecked()
         only_week = self.chk_week.isChecked()
+        hidden = {}
         week_end = date.today() + timedelta(days=6)
         for t_id, title, desc, status, created, urgency, due, link_table, link_id in rows:
             col_code = status if status in self.columns else fallback_code
@@ -546,6 +556,9 @@ class KanbanTab(QWidget):
             if only_week and (done or not norm_date(due) or norm_date(due) > week_end.isoformat()):
                 continue
             if self.selected_tags and not self.selected_tags & {n.casefold() for n, _c in tags_by_task.get(t_id, [])}:
+                continue
+            if counts[col_code] >= self.COLUMN_LIMIT and col_code not in self.expanded:
+                hidden[col_code] = hidden.get(col_code, 0) + 1
                 continue
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, t_id)
@@ -562,6 +575,14 @@ class KanbanTab(QWidget):
                 col.addItem(item)
                 col.setItemWidget(item, card)
                 counts[col_code] += 1
+        for code, extra in hidden.items():
+            more = QListWidgetItem(f"▼ Показать ещё {extra} (всего {counts[code] + extra})")
+            more.setData(Qt.ItemDataRole.UserRole, None)
+            more.setData(Qt.ItemDataRole.UserRole + 1, 'more')
+            more.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            more.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            self.columns[code].addItem(more)
+            counts[code] += extra
         for code, lbl in self.titles.items():
             lbl.setText(f"{self.status_info[code][0].upper()}  ·  {counts[code]}")
         self.update_suggest_button()

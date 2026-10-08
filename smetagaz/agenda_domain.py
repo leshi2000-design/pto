@@ -66,6 +66,11 @@ def norm_date(value):
     text = str(value or '').strip()
     if not text:
         return ''
+    if len(text) == 10 and text[4] == '-' and text[7] == '-':
+        try:
+            return date.fromisoformat(text).isoformat()
+        except ValueError:
+            return ''
     match = re.match(r'^(\d{4})-(\d{2})-(\d{2})', text)
     if match:
         y, m, d = map(int, match.groups())
@@ -86,7 +91,7 @@ def due_state(due, today=None, done=False):
     if not due:
         return 'none', None
     today = today or date.today()
-    days = (datetime.strptime(due, ISO).date() - today).days
+    days = (date.fromisoformat(due) - today).days
     if done:
         return 'done', days
     if days < 0:
@@ -186,7 +191,7 @@ def events_between(db, start, end, today=None):
         if not due:
             continue
         state, days = due_state(due, today, bool(done))
-        day = datetime.strptime(due, ISO).date()
+        day = date.fromisoformat(due)
         if start <= day <= end:
             out.append(_event(day, 'overdue' if state == 'overdue' else 'task', title,
                               (due_label(due, today, bool(done)) + (f' · {urgency}' if urgency else '')), ('kanban_tasks', tid)))
@@ -219,33 +224,34 @@ def events_between(db, start, end, today=None):
             else:
                 title = f'{section} {number}'
                 detail = ' · '.join(x for x in (name, short) if x)
-            out.append(_event(datetime.strptime(day, ISO).date(), kind, title.strip(), detail, (table, rid)))
-    # --- договоры и акты «Юрлиц» и «СМР» ---
+            out.append(_event(date.fromisoformat(day), kind, title.strip(), detail, (table, rid)))
+    # --- договоры и акты «Юрлиц» и «СМР» (названия контрагентов берутся одним запросом) ---
     from . import contracts_core as cc
     for mod, section in (('le', 'Юрлица'), ('smr', 'СМР')):
         c = cc.cfg(mod)
-        for table, day_col, kind, num_col in ((c['contracts'], 'contract_date', 'contract', 'contract_number'), (c['contracts'], 'end_date', 'work', 'contract_number')):
-            for rid, day, number, name in db.fetchall(f"SELECT id,{day_col},{num_col},coalesce(nullif(object_address,''),object_name) FROM {table} WHERE coalesce({day_col},'')<>''"):
+        join, label = cc.party_join(mod)
+        for kind, col in (('contract', 'contract_date'), ('work', 'end_date')):
+            sql = (f"SELECT c.id,c.{col},c.contract_number,coalesce(nullif(c.object_address,''),c.object_name),{label},coalesce(c.signed,0) "
+                   f"FROM {c['contracts']} c {join} WHERE coalesce(c.{col},'')<>''")
+            for rid, day, number, name, short, signed in db.fetchall(sql):
                 day = norm_date(day)
                 if not day or not s <= day <= e:
                     continue
-                ct = cc.contract(db, mod, rid)
-                short = cc.party_label(db, mod, ct)
                 number = f'№{number}' if number else 'без номера'
                 if kind == 'contract':
-                    title = f'Заключение договора {short}'.strip() + ('' if ct['signed'] else ' (не подписан)')
+                    title = f'Заключение договора {short}'.strip() + ('' if signed else ' (не подписан)')
                     detail = f'{section} · {number} · {name or "без названия"}'
                 else:
                     title, detail = f'{section} · окончание работ {number}', ' · '.join(x for x in (name, short) if x)
-                out.append(_event(datetime.strptime(day, ISO).date(), kind, title.strip(), detail, (table, rid)))
-        for aid, day, number, signed, cid in db.fetchall(f"SELECT id,act_date,act_number,coalesce(signed,0),contract_id FROM {c['acts']} WHERE coalesce(act_date,'')<>''"):
+                out.append(_event(date.fromisoformat(day), kind, title.strip(), detail, (c['contracts'], rid)))
+        sql = (f"SELECT a.id,a.act_date,a.act_number,coalesce(a.signed,0),a.contract_id,c.contract_number,{label} FROM {c['acts']} a "
+               f"JOIN {c['contracts']} c ON c.id=a.contract_id {join} WHERE coalesce(a.act_date,'')<>''")
+        for aid, day, number, signed, cid, cnum, short in db.fetchall(sql):
             day = norm_date(day)
             if not day or not s <= day <= e:
                 continue
-            ct = cc.contract(db, mod, cid)
-            short = cc.party_label(db, mod, ct)
-            out.append(_event(datetime.strptime(day, ISO).date(), 'act', ('Подписан акт ' if signed else 'Акт (не подписан) ') + short,
-                              f'{section} · акт №{number or "б/н"} · договор {ct["contract_number"] or "без номера"}', (c['contracts'], cid)))
+            out.append(_event(date.fromisoformat(day), 'act', ('Подписан акт ' if signed else 'Акт (не подписан) ') + short,
+                              f'{section} · акт №{number or "б/н"} · договор {cnum or "без номера"}', (c['contracts'], cid)))
     # --- оплаты (единая книга платежей) ---
     from .payments_domain import report
     try:
@@ -258,18 +264,18 @@ def events_between(db, start, end, today=None):
     for jid, day, title, welder, place in db.fetchall(
             "SELECT j.id,d.work_date,j.title,coalesce(nullif(j.welder_text,''),w.name),j.object_text FROM welding_days d "
             "JOIN welding_jobs j ON j.id=d.job_id LEFT JOIN welders w ON w.id=j.welder_id WHERE d.work_date BETWEEN ? AND ? ORDER BY j.title", (s, e)):
-        out.append(_event(datetime.strptime(day, ISO).date(), 'work', f'Работы: {title}',
+        out.append(_event(date.fromisoformat(day), 'work', f'Работы: {title}',
                           ' · '.join(x for x in (welder or 'Сварщик не назначен', place) if x), ('welding_jobs', jid)))
     # --- заметки (независимые и привязанные к договорам, клиентам) ---
     from . import notes_domain
     for nid, day, title, body, ltable, lid in db.fetchall("SELECT id,note_date,title,body,link_table,link_id FROM notes WHERE note_date BETWEEN ? AND ?", (s, e)):
         label = notes_domain.link_label(db, ltable, lid) if ltable else ''
         detail = ' · '.join(x for x in (label, (body or '').replace('\n', ' ')[:80]) if x)
-        out.append(_event(datetime.strptime(day, ISO).date(), 'note', title or 'Заметка', detail, ('notes', nid)))
+        out.append(_event(date.fromisoformat(day), 'note', title or 'Заметка', detail, ('notes', nid)))
     # --- ручные события и ежемесячные даты ---
     for eid, day, time, title, desc in db.fetchall(
             "SELECT id,event_date,event_time,title,description FROM calendar_events WHERE event_date BETWEEN ? AND ?", (s, e)):
-        out.append(_event(datetime.strptime(day, ISO).date(), 'event', title or 'Событие', (desc or '').replace('\n', ' '), ('calendar_events', eid), time=time or ''))
+        out.append(_event(date.fromisoformat(day), 'event', title or 'Событие', (desc or '').replace('\n', ' '), ('calendar_events', eid), time=time or ''))
     for day, rid, title, color, note in recurring_between(db, start, end):
         out.append(_event(day, 'recurring', title, ('Каждый месяц' + (f' · {note}' if note else '')), ('recurring_dates', rid), color=color))
     order = {k: i for i, k in enumerate(KIND_ORDER)}

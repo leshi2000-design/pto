@@ -183,6 +183,14 @@ def party(db, mod, c):
     return p
 
 
+def party_join(mod, c='c'):
+    """(JOIN-фрагмент, SQL-выражение названия контрагента) — для реестров и сводок без запроса на каждую строку."""
+    if mod == 'le':
+        return f"LEFT JOIN le_clients lc ON lc.id={c}.client_id", "coalesce(lc.name,'')"
+    return (f"LEFT JOIN le_clients lc ON lc.id={c}.legal_id LEFT JOIN crm.clients pc ON pc.id={c}.person_id",
+            f"CASE WHEN {c}.party_type='legal' THEN coalesce(lc.name,'') ELSE coalesce(pc.name,'') END")
+
+
 def party_label(db, mod, c):
     p = party(db, mod, c)
     return p['name'] or '(контрагент не выбран)'

@@ -112,6 +112,19 @@ def check(db):
         path = db.get_setting(key, '')
         if path and not os.path.isfile(path):
             found.append(_finding('warn', 'Шаблоны', f'Шаблон ({key}) не найден: {path}'))
+    # --- копия вне компьютера ---
+    from . import offsite_backup as ob
+    has_data = any(db.fetchone(f'SELECT 1 FROM {t} LIMIT 1') for t in ('estimates', 'contracts', 'gsv_projects', 'le_contracts', 'smr_contracts') if _table_exists(db, t))
+    if not ob.configured(db):
+        if has_data:
+            found.append(_finding('info', 'Копии', 'Копия вне компьютера не настроена (Настройки → «Копия вне компьютера»): локальные копии не спасут при поломке диска'))
+    else:
+        from datetime import datetime, timedelta
+        last = ob._parse(db.get_setting('last_offsite_backup', ''))
+        if datetime.now() - last > timedelta(days=3):
+            found.append(_finding('warn', 'Копии', 'Копия вне компьютера давно не создавалась: ' + db.get_setting('offsite_status', 'нет данных')))
+        if db.get_setting('last_offsite_verify', '') and db.get_setting('offsite_verify_ok', '1') == '0':
+            found.append(_finding('error', 'Копии', 'Проверка восстановлением не пройдена: ' + db.get_setting('offsite_verify_status', '')))
     order = {'error': 0, 'warn': 1, 'info': 2}
     found.sort(key=lambda f: order[f['level']])
     return found

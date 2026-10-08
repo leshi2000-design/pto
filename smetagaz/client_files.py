@@ -8,7 +8,7 @@ from PyQt6.QtCore import Qt
 from .database import db
 from .platform_utils import open_local
 
-SECTIONS = {'gsv_projects': 'Проекты ГСВ', 'contracts': 'Монтаж ГСВ', 'gsn_projects': 'Монтаж ГСН'}
+SECTIONS = {'gsv_projects': 'Проекты ГСВ', 'contracts': 'Монтаж ГСВ', 'gsn_projects': 'Монтаж ГСН', 'smr_contracts': 'СМР', 'le_contracts': 'Юрлица'}
 MAX_FILES = 500
 
 
@@ -23,6 +23,22 @@ def client_folders(db, cid):
     for rid, number, title in db.fetchall('SELECT id,contract_number,title FROM gsn_projects WHERE client_id=? ORDER BY id DESC', (cid,)):
         row = db.fetchone("SELECT folder_path FROM executive_objects WHERE owner_type='gsn_projects' AND owner_id=?", (rid,))
         result.append((SECTIONS['gsn_projects'], f'№{number or rid} · {title or ""}'.strip(' ·'), row[0] if row else ''))
+    for number, obj, folder in db.fetchall('SELECT contract_number,coalesce(nullif(object_address,\'\'),object_name),folder FROM smr_contracts WHERE person_id=? ORDER BY id DESC', (cid,)):
+        result.append((SECTIONS['smr_contracts'], f'№{number} · {obj or ""}'.strip(' ·'), folder or ''))
+    return result
+
+
+def legal_folders(db, lid):
+    """[(раздел, подпись договора, папка)] по договорам юрлица в «Юрлицах», «СМР» и карточках ГСВ, где оно заказчик."""
+    result = []
+    for number, obj, folder in db.fetchall('SELECT contract_number,coalesce(nullif(object_address,\'\'),object_name),folder FROM le_contracts WHERE client_id=? ORDER BY id DESC', (lid,)):
+        result.append((SECTIONS['le_contracts'], f'№{number} · {obj or ""}'.strip(' ·'), folder or ''))
+    for number, obj, folder in db.fetchall('SELECT contract_number,coalesce(nullif(object_address,\'\'),object_name),folder FROM smr_contracts WHERE legal_id=? ORDER BY id DESC', (lid,)):
+        result.append((SECTIONS['smr_contracts'], f'№{number} · {obj or ""}'.strip(' ·'), folder or ''))
+    for number, obj, folder in db.fetchall('SELECT pd_number,object_name,project_folder FROM gsv_projects WHERE le_client_id=? ORDER BY id DESC', (lid,)):
+        result.append((SECTIONS['gsv_projects'], f'{number} · {obj or ""}'.strip(' ·'), folder or ''))
+    for number, obj, folder in db.fetchall('SELECT contract_number,object_name,contract_folder FROM contracts WHERE le_client_id=? ORDER BY id DESC', (lid,)):
+        result.append((SECTIONS['contracts'], f'№{number} · {obj or ""}'.strip(' ·'), folder or ''))
     return result
 
 
@@ -39,9 +55,10 @@ def list_files(folder, limit=MAX_FILES):
 
 class ClientFilesWidget(QWidget):
     """Дерево «раздел → договор → файлы»; двойной щелчок открывает файл или папку."""
-    def __init__(self, cid, parent=None):
+    def __init__(self, cid, parent=None, kind='person'):
         super().__init__(parent)
         self.cid = cid
+        self.kind = kind
         layout = QVBoxLayout(self)
         self.info = QLabel()
         self.info.setWordWrap(True)
@@ -64,7 +81,7 @@ class ClientFilesWidget(QWidget):
         if not self.cid:
             self.info.setText('Файлы появятся после сохранения клиента.')
             return
-        folders = client_folders(db, self.cid)
+        folders = legal_folders(db, self.cid) if self.kind == 'legal' else client_folders(db, self.cid)
         total = 0
         for section, label, folder in folders:
             top = QTreeWidgetItem([f'{section} · {label}', '', folder])

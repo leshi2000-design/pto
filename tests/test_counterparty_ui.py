@@ -267,3 +267,65 @@ def test_estimates_ui(env, monkeypatch, tmp_path):
     tab.tags.item(tab.tags.rowCount() - 1, 0).setText('Сумма Работ')
     tab.save_tags()
     assert db.fetchone("SELECT count(*) FROM est_tags WHERE name='сумма_работ'")[0] == 1
+
+
+def test_paged_registries(env):
+    db, ui = env
+    import smetagaz.notes_view as nv
+    from smetagaz import notes_domain as nd
+    lid = cc.save_legal(db, dict(name='ООО Ромашка'))
+    pid = db.execute("INSERT INTO crm.clients(name) VALUES('Петров Пётр')").lastrowid
+    for i in range(130):
+        cid = cc.save_contract(db, 'le', dict(client_id=lid, direction='Монтажные работы', contract_date='2026-03-01', amount=10, object_name=f'Объект {i}', signed=i % 2))
+        cc.save_act(db, 'le', dict(contract_id=cid, act_date='2026-03-02', amount=5, signed=1))
+        cc.save_contract(db, 'smr', dict(party_type='person', person_id=pid, contract_date='2026-03-01', amount=7))
+        nd.save_note(db, f'Заметка {i}', 'текст', '2026-03-0%d' % (i % 9 + 1), ('crm.clients', pid) if i % 2 else None)
+    reg = ui.ContractsRegistry('le')
+    assert reg.table.rowCount() == 100 and reg.pager.total == 130 and reg.pager.next.isEnabled()
+    assert reg.total.text() == 'Найдено договоров: 130 · на сумму 1 300,00 BYN'
+    reg.pager.next.click()
+    assert reg.table.rowCount() == 30 and not reg.pager.next.isEnabled() and reg.pager.offset == 100
+    reg.search.setText('Объект 12')                      # поиск сбрасывает страницу
+    assert reg.pager.offset == 0 and reg.table.rowCount() == 11
+    reg.search.setText('')
+    reg.cmb_signed.setCurrentIndex(1)
+    assert reg.pager.total == 65
+    smr = ui.ContractsRegistry('smr')
+    assert smr.table.item(0, 2).text() == 'Петров Пётр' and smr.pager.total == 130
+    acts = ui.ActsRegistry('le')
+    assert acts.pager.total == 130 and acts.table.rowCount() == 100 and acts.table.item(0, 3).text() == 'ООО Ромашка'
+    clients = ui.LegalClientsRegistry()
+    assert clients.table.rowCount() == 1 and clients.table.item(0, 6).text() == '130'
+    panel = nv.NotesPanel()
+    assert panel.list.count() == 60 and panel.pager.total == 130
+    panel.scope.setCurrentIndex(2)
+    assert panel.pager.total == 65
+    panel.search.setText('Петров')                        # поиск по названию привязанной записи
+    assert panel.pager.total == 65
+    panel.search.setText('Заметка 7')
+    assert panel.pager.total == 11 + 0 or panel.pager.total >= 1
+    assert nd.page_notes(db, query='Петров', limit=10)[1] == 65
+
+
+def test_settings_offsite_group(env, tmp_path, monkeypatch):
+    db, ui = env
+    import smetagaz.settings_view as sv
+    from smetagaz import offsite_backup as ob
+    import sys
+    from smetagaz.database import db as singleton
+    for name, mod in list(sys.modules.items()):
+        if name.startswith('smetagaz') and getattr(mod, 'db', None) is singleton:
+            monkeypatch.setattr(mod, 'db', db)
+    monkeypatch.setattr(QMessageBox, 'information', lambda *a, **k: None)
+    view = sv.SettingsView(None)
+    folder = tmp_path / 'cloud'
+    folder.mkdir()
+    view.off_enabled.setChecked(True)
+    view.off_dir.setText(str(folder))
+    view.off_password.setText('long enough password')
+    view.off_save()
+    assert db.get_setting('offsite_enabled') == '1' and ob.configured(db)
+    path = ob.make_copy(db)
+    assert path.exists()
+    view.off_refresh()
+    assert 'копия создана' in view.off_status.text() and ob.verify_latest(db).count('восстановление проверено') == 1

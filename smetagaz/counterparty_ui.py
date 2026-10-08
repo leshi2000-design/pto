@@ -14,6 +14,7 @@ from .domain_widgets import OptionalDate
 from .gsvm_docs import FORMATS
 from .gsvm_tabs import STATE_TEXT, make_table, open_file, print_files, read_item
 from .legal_entities_domain import DIRECTIONS
+from .pagebar import PageBar
 from .gsv_project_domain import date_short
 
 
@@ -48,11 +49,14 @@ class LegalClientDialog(QDialog):
         super().__init__(parent)
         self.client_id = client_id
         self.setWindowTitle('Карточка юрлица' if client_id else 'Новое юрлицо')
-        self.resize(760, 640)
+        self.resize(980, 680)
         layout = QVBoxLayout(self)
         tabs = QTabWidget()
         layout.addWidget(tabs, 1)
         self.f = {}
+        if client_id:
+            from .dossier_client_view import DossierWidget
+            tabs.addTab(DossierWidget('legal', client_id), 'Досье')
 
         def line(key, label, form, placeholder=''):
             w = QLineEdit()
@@ -212,7 +216,7 @@ class LegalClientsRegistry(QWidget):
         bar = QHBoxLayout()
         self.search = QLineEdit()
         self.search.setPlaceholderText('Наименование, УНП, контактное лицо, телефон, адрес…')
-        self.search.textChanged.connect(self.load_data)
+        self.search.textChanged.connect(self.search_changed)
         bar.addWidget(self.search, 1)
         for text, fn, kind in (('Добавить юрлицо', self.add_client, 'primary'), ('Изменить', self.edit_client, ''), ('Удалить', self.delete_client, 'danger')):
             b = QPushButton(text)
@@ -225,18 +229,27 @@ class LegalClientsRegistry(QWidget):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.doubleClicked.connect(self.edit_client)
         layout.addWidget(self.table, 1)
+        self.pager = PageBar(100)
+        self.pager.changed.connect(self.load_data)
+        layout.addWidget(self.pager)
         self.load_data()
 
     def load_data(self, *_):
         q = '%' + self.search.text().strip().casefold() + '%'
-        rows = db.fetchall("""SELECT c.id,c.name,c.unp,c.head_name,c.contact_person,c.phone,c.email,
+        where = """LOWER(c.name||' '||coalesce(c.full_name,'')||' '||coalesce(c.unp,'')||' '||coalesce(c.contact_person,'')||' '||coalesce(c.phone,'')||' '||
+            coalesce(c.legal_address,'')||' '||coalesce(c.address,'')) LIKE ?"""
+        self.pager.set_total(db.fetchone(f'SELECT count(*) FROM le_clients c WHERE {where}', (q,))[0])
+        rows = db.fetchall(f"""SELECT c.id,c.name,c.unp,c.head_name,c.contact_person,c.phone,c.email,
             (SELECT count(*) FROM le_contracts WHERE client_id=c.id)+(SELECT count(*) FROM smr_contracts WHERE legal_id=c.id)
-            FROM le_clients c WHERE LOWER(c.name||' '||coalesce(c.full_name,'')||' '||coalesce(c.unp,'')||' '||coalesce(c.contact_person,'')||' '||coalesce(c.phone,'')||' '||
-            coalesce(c.legal_address,'')||' '||coalesce(c.address,'')) LIKE ? ORDER BY c.name""", (q,))
+            FROM le_clients c WHERE {where} ORDER BY c.name LIMIT ? OFFSET ?""", (q, self.pager.size, self.pager.offset))
         self.table.setRowCount(len(rows))
         for r, row in enumerate(rows):
             for c, v in enumerate(row[1:]):
                 self.table.setItem(r, c, item(v, row[0] if c == 0 else None, right=(c == 6)))
+
+    def search_changed(self, *_):
+        self.pager.reset()
+        self.load_data()
 
     def add_client(self):
         if LegalClientDialog(parent=self).exec():
@@ -911,17 +924,17 @@ class ContractsRegistry(QWidget):
         self.cmb_status.addItem('Все статусы', None)
         for s in cc.STATUSES:
             self.cmb_status.addItem(s, s)
-        self.cmb_status.currentIndexChanged.connect(self.load_data)
+        self.cmb_status.currentIndexChanged.connect(self.search_changed)
         bar.addWidget(self.cmb_status)
         self.cmb_signed = QComboBox()
         self.cmb_signed.addItem('Все', None)
         self.cmb_signed.addItem('Подписанные', 1)
         self.cmb_signed.addItem('Неподписанные', 0)
-        self.cmb_signed.currentIndexChanged.connect(self.load_data)
+        self.cmb_signed.currentIndexChanged.connect(self.search_changed)
         bar.addWidget(self.cmb_signed)
         self.search = QLineEdit()
         self.search.setPlaceholderText('Номер, контрагент, объект…')
-        self.search.textChanged.connect(self.load_data)
+        self.search.textChanged.connect(self.search_changed)
         bar.addWidget(self.search, 1)
         for text, fn, kind in (('Создать договор', self.add, 'primary'), ('Открыть', self.edit, ''), ('Оплаты', self.payments, ''), ('Ведомость актов за месяц…', self.statement, ''),
                                ('Удалить', self.delete, 'danger')):
@@ -937,35 +950,45 @@ class ContractsRegistry(QWidget):
         layout.addWidget(self.table, 1)
         self.total = QLabel('')
         layout.addWidget(self.total)
+        self.pager = PageBar(100)
+        self.pager.changed.connect(self.load_data)
+        layout.addWidget(self.pager)
+        self.load_data()
+
+    def search_changed(self, *_):
+        self.pager.reset()
         self.load_data()
 
     def load_data(self, *_):
         c = cc.cfg(self.mod)
+        join, label = cc.party_join(self.mod)
+        where, params = ['1=1'], []
         q = self.search.text().strip().casefold()
-        rows = db.fetchall(f"SELECT * FROM {c['contracts']} ORDER BY id DESC")
-        cols = [r[1] for r in db.fetchall(f"PRAGMA table_info({c['contracts']})")]
-        shown, total = [], 0.0
-        for row in rows:
-            rec = dict(zip(cols, row))
-            label = cc.party_label(db, self.mod, rec)
-            if q and q not in f"{rec['contract_number']} {label} {rec['object_name']} {rec['object_address']}".casefold():
-                continue
-            if self.cmb_status.currentData() and rec['status'] != self.cmb_status.currentData():
-                continue
-            signed = self.cmb_signed.currentData()
-            if signed is not None and bool(rec['signed']) != bool(signed):
-                continue
-            shown.append((rec, label))
-        self.table.setRowCount(len(shown))
-        for r, (rec, label) in enumerate(shown):
-            paid = sum(a for _d, a, _n in cc.payments(db, self.mod, rec['id']))
-            total += float(rec['amount'] or 0)
-            n_acts = db.fetchone(f"SELECT count(*) FROM {c['acts']} WHERE contract_id=?", (rec['id'],))[0]
-            vals = [rec['contract_number'] or 'Б/Н', date_short(rec['contract_date']).rstrip('г.'), label, rec['object_address'] or rec['object_name'], money(rec['amount']), money(paid),
-                    n_acts, 'да' if rec['signed'] else 'нет', rec['status']]
+        if q:
+            where.append(f"LOWER(coalesce(c.contract_number,'')||' '||{label}||' '||coalesce(c.object_name,'')||' '||coalesce(c.object_address,'')) LIKE ?")
+            params.append('%' + q + '%')
+        if self.cmb_status.currentData():
+            where.append('c.status=?')
+            params.append(self.cmb_status.currentData())
+        signed = self.cmb_signed.currentData()
+        if signed is not None:
+            where.append('coalesce(c.signed,0)=?')
+            params.append(int(signed))
+        cond = ' AND '.join(where)
+        total, amount = db.fetchone(f"SELECT count(*),coalesce(sum(c.amount),0) FROM {c['contracts']} c {join} WHERE {cond}", params)
+        self.pager.set_total(total)
+        paid_sql = ("(SELECT coalesce(sum(p.amount),0) FROM payments p WHERE (c.estimate_id IS NOT NULL AND p.estimate_id=c.estimate_id) OR "
+                    "(c.estimate_id IS NULL AND p.estimate_id IS NULL AND p.owner_type=? AND p.owner_id=c.id))") if self.mod == 'smr' else \
+                   "(SELECT coalesce(sum(p.amount),0) FROM payments p WHERE p.estimate_id IS NULL AND p.owner_type=? AND p.owner_id=c.id)"
+        rows = db.fetchall(f"""SELECT c.id,c.contract_number,c.contract_date,{label},coalesce(nullif(c.object_address,''),c.object_name),c.amount,{paid_sql},
+            (SELECT count(*) FROM {c['acts']} WHERE contract_id=c.id),coalesce(c.signed,0),c.status
+            FROM {c['contracts']} c {join} WHERE {cond} ORDER BY c.id DESC LIMIT ? OFFSET ?""", (c['contracts'], *params, self.pager.size, self.pager.offset))
+        self.table.setRowCount(len(rows))
+        for r, (rid, number, day, who, obj, amount_c, paid, n_acts, signed_c, status) in enumerate(rows):
+            vals = [number or 'Б/Н', date_short(day).rstrip('г.'), who, obj, money(amount_c), money(paid), n_acts, 'да' if signed_c else 'нет', status]
             for col, v in enumerate(vals):
-                self.table.setItem(r, col, item(v, rec['id'] if col == 0 else None, right=col in (4, 5, 6)))
-        self.total.setText(f'Договоров: {len(shown)} · на сумму {money(total)}')
+                self.table.setItem(r, col, item(v, rid if col == 0 else None, right=col in (4, 5, 6)))
+        self.total.setText(f'Найдено договоров: {total} · на сумму {money(amount)}')
 
     def add(self):
         if ContractDialog(self.mod, parent=self).exec() is not None:
@@ -1013,7 +1036,7 @@ class ActsRegistry(QWidget):
         bar = QHBoxLayout()
         self.search = QLineEdit()
         self.search.setPlaceholderText('Номер акта, договор, контрагент…')
-        self.search.textChanged.connect(self.load_data)
+        self.search.textChanged.connect(self.search_changed)
         bar.addWidget(self.search, 1)
         b = QPushButton('Открыть договор')
         b.clicked.connect(self.open_contract)
@@ -1023,21 +1046,30 @@ class ActsRegistry(QWidget):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.doubleClicked.connect(self.open_contract)
         layout.addWidget(self.table, 1)
+        self.pager = PageBar(100)
+        self.pager.changed.connect(self.load_data)
+        layout.addWidget(self.pager)
+        self.load_data()
+
+    def search_changed(self, *_):
+        self.pager.reset()
         self.load_data()
 
     def load_data(self, *_):
         c = cc.cfg(self.mod)
+        join, label = cc.party_join(self.mod, 'k')
+        where, params = '1=1', []
         q = self.search.text().strip().casefold()
-        rows = db.fetchall(f"SELECT a.id,a.act_number,a.act_date,a.amount,a.signed,a.description,a.contract_id FROM {c['acts']} a ORDER BY a.act_date DESC,a.id DESC")
-        out = []
-        for aid, num, day, amount, signed, desc, cid in rows:
-            ct = cc.contract(db, self.mod, cid)
-            label = cc.party_label(db, self.mod, ct)
-            if q and q not in f"{num} {ct['contract_number']} {label} {desc}".casefold():
-                continue
-            out.append((cid, [num, date_short(day).rstrip('г.'), ct['contract_number'], label, money(amount), 'да' if signed else 'нет', desc]))
-        self.table.setRowCount(len(out))
-        for r, (cid, vals) in enumerate(out):
+        if q:
+            where = f"LOWER(coalesce(a.act_number,'')||' '||coalesce(k.contract_number,'')||' '||{label}||' '||coalesce(a.description,'')) LIKE ?"
+            params.append('%' + q + '%')
+        frm = f"{c['acts']} a JOIN {c['contracts']} k ON k.id=a.contract_id {join}"
+        self.pager.set_total(db.fetchone(f'SELECT count(*) FROM {frm} WHERE {where}', params)[0])
+        rows = db.fetchall(f"SELECT a.contract_id,a.act_number,a.act_date,k.contract_number,{label},a.amount,coalesce(a.signed,0),a.description FROM {frm} WHERE {where} "
+                           f"ORDER BY a.act_date DESC,a.id DESC LIMIT ? OFFSET ?", (*params, self.pager.size, self.pager.offset))
+        self.table.setRowCount(len(rows))
+        for r, (cid, num, day, cnum, who, amount, signed, desc) in enumerate(rows):
+            vals = [num, date_short(day).rstrip('г.'), cnum, who, money(amount), 'да' if signed else 'нет', desc]
             for col, v in enumerate(vals):
                 self.table.setItem(r, col, item(v, cid if col == 0 else None, right=col == 4))
 

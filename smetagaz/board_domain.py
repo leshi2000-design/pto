@@ -215,7 +215,13 @@ def _suggestion(key, title, link, urgency='Обычная', due='', reason=''):
 
 
 def suggestions(db, today=None):
-    """Задачи, которые программа предлагает создать. Уже созданные и скрытые пользователем не повторяются."""
+    """Задачи, которые программа предлагает создать. Уже созданные и скрытые пользователем не повторяются (результат кэшируется до изменения данных)."""
+    from .cache_domain import cached
+    day = today or date.today()
+    return cached(db, ('suggestions', day.isoformat()), lambda: _suggestions(db, day))
+
+
+def _suggestions(db, today):
     from . import contracts_core as cc, acts_statement, gsvm_domain as md
     today = today or date.today()
     found = []
@@ -226,13 +232,12 @@ def suggestions(db, today=None):
         found.append(_suggestion(f'sign_contract:gsv_projects:{rid}', f'Подписать договор {num} · {who}', ('gsv_projects', rid), 'Высокая', reason='договор не подписан'))
     for mod in ('le', 'smr'):
         c = cc.cfg(mod)
-        for rid, num in rows(f"SELECT id,contract_number FROM {c['contracts']} WHERE coalesce(contract_date,'')<>'' AND coalesce(signed,0)=0 AND status='Действует'"):
-            who = cc.party_label(db, mod, cc.contract(db, mod, rid))
+        join, label = cc.party_join(mod)
+        for rid, num, who in rows(f"SELECT c.id,c.contract_number,{label} FROM {c['contracts']} c {join} WHERE coalesce(c.contract_date,'')<>'' AND coalesce(c.signed,0)=0 AND c.status='Действует'"):
             found.append(_suggestion(f'sign_contract:{c["contracts"]}:{rid}', f'Подписать договор {num} · {who}', (c['contracts'], rid), 'Высокая', reason='договор не подписан'))
-        for aid, anum, cid in rows(f"SELECT id,act_number,contract_id FROM {c['acts']} WHERE coalesce(act_date,'')<>'' AND coalesce(signed,0)=0"):
-            ct = cc.contract(db, mod, cid)
-            found.append(_suggestion(f'sign_act:{c["acts"]}:{aid}', f'Получить подпись акта {anum} · договор {ct["contract_number"]} · {cc.party_label(db, mod, ct)}',
-                                     (c['contracts'], cid), 'Высокая', reason='акт не подписан'))
+        for aid, anum, cid, cnum, who in rows(f"SELECT a.id,a.act_number,a.contract_id,c.contract_number,{label} FROM {c['acts']} a JOIN {c['contracts']} c ON c.id=a.contract_id {join} "
+                                              f"WHERE coalesce(a.act_date,'')<>'' AND coalesce(a.signed,0)=0"):
+            found.append(_suggestion(f'sign_act:{c["acts"]}:{aid}', f'Получить подпись акта {anum} · договор {cnum} · {who}', (c['contracts'], cid), 'Высокая', reason='акт не подписан'))
     for rid, num, who in rows("SELECT id,contract_number,coalesce(nullif(client_name,''),party_name) FROM contracts WHERE coalesce(acceptance_act_date,'')<>'' AND coalesce(act_signed,1)=0"):
         found.append(_suggestion(f'sign_act:contracts:{rid}', f'Получить подпись акта · договор {num} · {who}', ('contracts', rid), 'Высокая', reason='акт не подписан'))
     for rid, num, who in rows("SELECT id,pd_number,coalesce(nullif(client_name,''),party_name) FROM gsv_projects WHERE coalesce(act_date,'')<>'' AND coalesce(act_signed,1)=0"):
@@ -278,8 +283,13 @@ def plural(n, forms):
 
 
 def summary(db, today=None):
-    """{'overdue','acts','payments','today','text'} для строки итогов вверху экрана."""
-    today = today or date.today()
+    """{'overdue','acts','payments','today','text'} для строки итогов вверху экрана (кэшируется до изменения данных)."""
+    from .cache_domain import cached
+    day = today or date.today()
+    return cached(db, ('summary', day.isoformat()), lambda: _summary(db, day))
+
+
+def _summary(db, today):
     overdue = len(agenda.overdue_tasks(db, today))
     acts = 0
     for sql in ("SELECT count(*) FROM contracts WHERE coalesce(acceptance_act_date,'')<>'' AND coalesce(act_signed,1)=0",

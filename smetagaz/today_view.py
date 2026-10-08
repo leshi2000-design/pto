@@ -482,6 +482,8 @@ class DayTab(QWidget):
         self.list.addItem(item)
         self.list.setItemWidget(item, row)
 
+    OVERDUE_LIMIT = 60
+
     def show_day(self, day, events, overdue):
         today = date.today()
         self.title.setText(('Сегодня · ' if day == today else 'Завтра · ' if day == today + timedelta(days=1) else 'Вчера · ' if day == today - timedelta(days=1) else '') + long_date(day))
@@ -489,8 +491,10 @@ class DayTab(QWidget):
         self.list.clear()
         if overdue:
             self.section(f'⚠ Просроченные задачи ({len(overdue)})', '#DC2626')
-            for ev in overdue:
+            for ev in overdue[:self.OVERDUE_LIMIT]:
                 self.add_event(ev)
+            if len(overdue) > self.OVERDUE_LIMIT:
+                self.section(f'… и ещё {len(overdue) - self.OVERDUE_LIMIT} просроченных — полный список на доске задач (фильтр «Просроченные»)', '#65758b')
         if events:
             if overdue:
                 self.section('Дела этого дня', '#2563EB')
@@ -598,7 +602,6 @@ class TodayView(QWidget):
         self.tabs.currentChanged.connect(self.apply_calendar_pref)
         self.apply_calendar_pref()
         self.tabs.setCurrentWidget(self.board)      # при открытии раздела — доска задач
-        self.board.load_boards()
         self.load_data()
 
     def tab_key(self):

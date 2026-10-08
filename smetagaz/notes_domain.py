@@ -66,28 +66,50 @@ def delete_note(db, note_id):
     db.execute('DELETE FROM notes WHERE id=?', (note_id,))
 
 
-def list_notes(db, scope='all', query='', link=None, day=None):
-    """scope: all | free (независимые) | linked (привязанные). link=(таблица, id) — заметки одной карточки."""
-    sql, params = 'SELECT id,title,body,note_date,link_table,link_id FROM notes WHERE 1=1', []
+def _search_clause(q):
+    """SQL-условие поиска: заголовок, текст и название привязанной записи (клиент, юрлицо, номер договора)."""
+    like = '%' + q + '%'
+    parts = ["lower(n.title||' '||n.body) LIKE ?"]
+    params = [like]
+    for table, expr in (('crm.clients', 'name'), ('le_clients', 'name'), ('le_contracts', "contract_number||' '||object_name"), ('smr_contracts', "contract_number||' '||object_name"),
+                        ('contracts', "contract_number||' '||object_name"), ('gsv_projects', "pd_number||' '||object_name"), ('gsn_projects', "contract_number||' '||title")):
+        parts.append(f"(n.link_table='{table}' AND n.link_id IN (SELECT id FROM {table} WHERE lower(coalesce({expr},'')) LIKE ?))")
+        params.append(like)
+    return '(' + ' OR '.join(parts) + ')', params
+
+
+def page_notes(db, scope='all', query='', link=None, day=None, limit=100, offset=0):
+    """Страница заметок и общее число найденных: ([{id,title,body,date,link_table,link_id,link}], total). scope: all | free | linked."""
+    where, params = ['1=1'], []
     if link:
-        sql += ' AND link_table=? AND link_id=?'
+        where.append('n.link_table=? AND n.link_id=?')
         params += [link[0], link[1]]
     elif scope == 'free':
-        sql += " AND link_table=''"
+        where.append("n.link_table=''")
     elif scope == 'linked':
-        sql += " AND link_table<>''"
+        where.append("n.link_table<>''")
     if day:
-        sql += ' AND note_date=?'
+        where.append('n.note_date=?')
         params.append(day)
-    sql += ' ORDER BY note_date DESC,id DESC'
-    q = str(query or '').casefold()
+    q = str(query or '').strip().casefold()
+    if q:
+        clause, qp = _search_clause(q)
+        where.append(clause)
+        params += qp
+    cond = ' AND '.join(where)
+    total = db.fetchone(f'SELECT count(*) FROM notes n WHERE {cond}', params)[0]
+    rows = db.fetchall(f'SELECT n.id,n.title,n.body,n.note_date,n.link_table,n.link_id FROM notes n WHERE {cond} ORDER BY n.note_date DESC,n.id DESC LIMIT ? OFFSET ?',
+                       (*params, limit, offset))
     out = []
-    for row in db.fetchall(sql, tuple(params)):
+    for row in rows:
         label = link_label(db, row[4], row[5]) if row[4] else ''
-        if q and q not in f'{row[1]} {row[2]} {label or ""}'.casefold():
-            continue
         out.append(dict(id=row[0], title=row[1], body=row[2], date=row[3], link_table=row[4], link_id=row[5], link=label or ('(запись удалена)' if row[4] else '')))
-    return out
+    return out, total
+
+
+def list_notes(db, scope='all', query='', link=None, day=None):
+    """Все подходящие заметки (без постраничности) — для небольших выборок, например заметок одной карточки."""
+    return page_notes(db, scope, query, link, day, limit=1_000_000)[0]
 
 
 def count_for(db, table, rid):

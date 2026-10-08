@@ -719,7 +719,7 @@ class OutgoingLogRegistry(QWidget):
         bar = QHBoxLayout()
         self.search = QLineEdit()
         self.search.setPlaceholderText("Номер, адресат, содержание…")
-        self.search.textChanged.connect(self.load_data)
+        self.search.textChanged.connect(self.search_changed)
         bar.addWidget(self.search, 1)
         btn_add = QPushButton("Зарегистрировать документ")
         btn_add.setProperty("type", "primary")
@@ -741,16 +741,25 @@ class OutgoingLogRegistry(QWidget):
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.doubleClicked.connect(self.edit_doc)
         layout.addWidget(self.table, 1)
+        from .pagebar import PageBar
+        self.pager = PageBar(100)
+        self.pager.changed.connect(self.load_data)
+        layout.addWidget(self.pager)
 
+        self.load_data()
+
+    def search_changed(self, *_):
+        self.pager.reset()
         self.load_data()
 
     def load_data(self, *_):
         q = "%" + self.search.text().strip().casefold() + "%"
+        where = "LOWER(coalesce(o.reg_number,'')||' '||coalesce(o.recipient,'')||' '||coalesce(o.subject,'')) LIKE ?"
+        self.pager.set_total(db.fetchone(f"SELECT count(*) FROM le_outgoing o WHERE {where}", (q,))[0])
         rows = db.fetchall(
-            """SELECT o.id, o.reg_number, o.reg_date, o.recipient, o.subject, coalesce(cl.name,'')
+            f"""SELECT o.id, o.reg_number, o.reg_date, o.recipient, o.subject, coalesce(cl.name,'')
                FROM le_outgoing o LEFT JOIN le_clients cl ON cl.id=o.client_id
-               WHERE LOWER(coalesce(o.reg_number,'')||' '||coalesce(o.recipient,'')||' '||coalesce(o.subject,'')) LIKE ?
-               ORDER BY o.id DESC""", (q,))
+               WHERE {where} ORDER BY o.id DESC LIMIT ? OFFSET ?""", (q, self.pager.size, self.pager.offset))
         self.table.setRowCount(len(rows))
         for r, (oid, number, date_str, recipient, subject, client) in enumerate(rows):
             item = QTableWidgetItem(number or "")

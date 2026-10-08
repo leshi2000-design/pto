@@ -111,6 +111,60 @@ class SettingsView(QWidget):
         box_db_layout.addWidget(btn_restore)
         layout.addWidget(box_db)
 
+        # 4a. Копия вне компьютера
+        box_off = QGroupBox("Копия вне компьютера (второй диск или облачная папка)")
+        off = QGridLayout(box_off)
+        from . import offsite_backup as ob
+        cfg = ob.settings(db)
+        self.off_enabled = QCheckBox("Автоматически делать зашифрованную копию")
+        self.off_enabled.setChecked(cfg['enabled'])
+        off.addWidget(self.off_enabled, 0, 0, 1, 3)
+        off.addWidget(QLabel("Папка:"), 1, 0)
+        self.off_dir = QLineEdit(cfg['folder'])
+        self.off_dir.setPlaceholderText("Например: D:\\Резерв или папка Яндекс.Диска / Google Drive / OneDrive")
+        off.addWidget(self.off_dir, 1, 1)
+        pick = QPushButton("Выбрать…")
+        pick.clicked.connect(self.off_pick_dir)
+        off.addWidget(pick, 1, 2)
+        off.addWidget(QLabel("Пароль копий:"), 2, 0)
+        self.off_password = QLineEdit(cfg['password'])
+        self.off_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.off_password.setPlaceholderText("минимум 10 символов — запишите его отдельно!")
+        off.addWidget(self.off_password, 2, 1)
+        show = QCheckBox("показать")
+        show.toggled.connect(lambda on: self.off_password.setEchoMode(QLineEdit.EchoMode.Normal if on else QLineEdit.EchoMode.Password))
+        off.addWidget(show, 2, 2)
+        off.addWidget(QLabel("Как часто (часов):"), 3, 0)
+        self.off_interval = QSpinBox()
+        self.off_interval.setRange(1, 720)
+        self.off_interval.setValue(cfg['interval_h'])
+        off.addWidget(self.off_interval, 3, 1)
+        off.addWidget(QLabel("Хранить копий:"), 4, 0)
+        self.off_keep = QSpinBox()
+        self.off_keep.setRange(1, 200)
+        self.off_keep.setValue(cfg['keep'])
+        off.addWidget(self.off_keep, 4, 1)
+        self.off_warn = QLabel("")
+        self.off_warn.setWordWrap(True)
+        self.off_warn.setStyleSheet("color: #D97706;")
+        off.addWidget(self.off_warn, 5, 0, 1, 3)
+        bar = QHBoxLayout()
+        for text, fn in (("Сохранить настройки", self.off_save), ("Сделать копию сейчас", self.off_now), ("Проверить восстановлением сейчас", self.off_verify_now)):
+            b = QPushButton(text)
+            if text.startswith("Сохранить"):
+                b.setProperty("type", "primary")
+            b.clicked.connect(fn)
+            bar.addWidget(b)
+        bar.addStretch()
+        off.addLayout(bar, 6, 0, 1, 3)
+        self.off_status = QLabel("")
+        self.off_status.setWordWrap(True)
+        off.addWidget(self.off_status, 7, 0, 1, 3)
+        off.addWidget(QLabel("Раз в месяц программа сама расшифровывает самую свежую копию, восстанавливает её во временную папку и проверяет базы. Пароль хранится в настройках: "
+                             "он защищает копию в облаке и на чужом диске, но не от человека с доступом к этому компьютеру."), 8, 0, 1, 3)
+        layout.addWidget(box_off)
+        self.off_refresh()
+
         # 5. Excel-снимок реестров договоров, отдельно от обычных бэкапов.
         box_excel = QFrame()
         box_excel_layout = QVBoxLayout(box_excel)
@@ -251,6 +305,44 @@ class SettingsView(QWidget):
             message=f'Копия сохранена. Отсутствующих исходных файлов: {len(result["missing"])}.'
             self.backup_status.setText(message);QMessageBox.information(self,'Копия',message)
         self.start_job(work,done)
+
+    # --- копия вне компьютера
+    def off_refresh(self):
+        from . import offsite_backup as ob
+        problems = ob.check_settings(db) if (self.off_dir.text() or self.off_enabled.isChecked()) else []
+        self.off_warn.setText('\n'.join('⚠ ' + p for p in problems))
+        made, verified = ob.status_text(db)
+        self.off_status.setText(f'Копия: {made}\nПроверка: {verified}')
+
+    def off_pick_dir(self):
+        path = QFileDialog.getExistingDirectory(self, 'Папка для копий вне компьютера', self.off_dir.text() or '')
+        if path:
+            self.off_dir.setText(path)
+            self.off_refresh()
+
+    def off_save(self):
+        db.set_setting('offsite_enabled', '1' if self.off_enabled.isChecked() else '0')
+        db.set_setting('offsite_dir', self.off_dir.text().strip())
+        db.set_setting('offsite_password', self.off_password.text())
+        db.set_setting('offsite_interval_h', self.off_interval.value())
+        db.set_setting('offsite_keep', self.off_keep.value())
+        self.off_refresh()
+        if not self.off_warn.text():
+            QMessageBox.information(self, 'Копия вне компьютера', 'Настройки сохранены. Первая копия будет создана автоматически в течение минуты, а затем проверена восстановлением.')
+
+    def off_now(self):
+        self.off_save_silent()
+        from . import offsite_backup as ob
+        self.start_job(lambda: str(ob.make_copy(db)), lambda path: (self.off_refresh(), QMessageBox.information(self, 'Копия', 'Копия создана:\n' + path)))
+
+    def off_verify_now(self):
+        self.off_save_silent()
+        from . import offsite_backup as ob
+        self.start_job(lambda: ob.verify_latest(db), lambda message: (self.off_refresh(), QMessageBox.information(self, 'Проверка восстановлением', message)))
+
+    def off_save_silent(self):
+        db.set_setting('offsite_dir', self.off_dir.text().strip())
+        db.set_setting('offsite_password', self.off_password.text())
 
     def contracts_excel_path(self):
         return Path(db.db_name).parent / 'excel_reports' / EXPORT_FILENAME

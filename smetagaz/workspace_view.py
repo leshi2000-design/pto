@@ -77,9 +77,11 @@ class RecordDialog(QDialog):
             # карточка клиента: его данные и файлы папок всех его договоров
             from PyQt6.QtWidgets import QTabWidget
             from .client_files import ClientFilesWidget
-            data=QWidget();data.setLayout(form);tabs=QTabWidget();self.tabs=tabs;tabs.addTab(data,'Данные клиента');tabs.addTab(ClientFilesWidget(rid),'Файлы договоров')
+            data=QWidget();data.setLayout(form);tabs=QTabWidget();self.tabs=tabs
+            from .dossier_client_view import DossierWidget
+            tabs.addTab(DossierWidget('person',rid),'Досье');tabs.addTab(data,'Данные клиента');tabs.addTab(ClientFilesWidget(rid),'Файлы договоров')
             from .notes_view import NotesPanel
-            tabs.addTab(NotesPanel(('crm.clients',rid)),'Заметки');layout.addWidget(tabs);self.resize(780,560)
+            tabs.addTab(NotesPanel(('crm.clients',rid)),'Заметки');layout.addWidget(tabs);self.resize(980,640)
         else:layout.addLayout(form)
         buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Save|QDialogButtonBox.StandardButton.Cancel);buttons.accepted.connect(self.save);buttons.rejected.connect(self.reject)
         if table=='crm.clients' and rid:
