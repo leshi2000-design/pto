@@ -6,7 +6,8 @@ import os
 import logging
 from datetime import datetime, date
 
-import openpyxl
+from .lazy import LazyModule
+openpyxl = LazyModule("openpyxl")
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,

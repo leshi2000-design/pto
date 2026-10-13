@@ -7,8 +7,9 @@ import os
 import tempfile
 from pathlib import Path
 
-import openpyxl
-from openpyxl.styles import Font
+from .lazy import LazyModule
+openpyxl = LazyModule("openpyxl")
+_xl_styles = LazyModule("openpyxl.styles")
 
 EXPORT_FILENAME = "Реестры_договоров.xlsx"
 
@@ -17,7 +18,7 @@ def _write_sheet(wb, title, headers, rows):
     ws = wb.create_sheet(title)
     ws.append(headers)
     for cell in ws[1]:
-        cell.font = Font(bold=True)
+        cell.font = _xl_styles.Font(bold=True)
     for row in rows:
         ws.append(row)
     for col in ws.columns:

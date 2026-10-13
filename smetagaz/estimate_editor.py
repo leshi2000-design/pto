@@ -5,10 +5,12 @@ import re
 import os
 import logging
 
-import pandas as pd
-import openpyxl
-from openpyxl.styles import Font, Border, Side
-from openpyxl.utils import get_column_letter
+from .lazy import LazyModule
+pd = LazyModule("pandas")
+from .lazy import LazyModule
+openpyxl = LazyModule("openpyxl")
+_xl_styles = LazyModule("openpyxl.styles")
+_xl_utils = LazyModule("openpyxl.utils")
 
 import docx
 
@@ -729,12 +731,12 @@ class EstimateEditorDialog(QDialog):
                 ws = wb.active
                 ws.title = "Смета"
 
-                font_bold = Font(name="Segoe UI", size=11, bold=True)
-                border_thin = Border(
-                    left=Side(style='thin', color='CBD5E1'),
-                    right=Side(style='thin', color='CBD5E1'),
-                    top=Side(style='thin', color='CBD5E1'),
-                    bottom=Side(style='thin', color='CBD5E1')
+                font_bold = _xl_styles.Font(name="Segoe UI", size=11, bold=True)
+                border_thin = _xl_styles.Border(
+                    left=_xl_styles.Side(style='thin', color='CBD5E1'),
+                    right=_xl_styles.Side(style='thin', color='CBD5E1'),
+                    top=_xl_styles.Side(style='thin', color='CBD5E1'),
+                    bottom=_xl_styles.Side(style='thin', color='CBD5E1')
                 )
 
                 ws.append([f"СМЕТА НА ОБЪЕКТ: {self.title}"])
@@ -773,7 +775,7 @@ class EstimateEditorDialog(QDialog):
 
                 for col in ws.columns:
                     max_len = max(len(str(cell.value or '')) for cell in col)
-                    col_letter = get_column_letter(col[0].column)
+                    col_letter = _xl_utils.get_column_letter(col[0].column)
                     ws.column_dimensions[col_letter].width = max(max_len + 4, 15)
 
                 for sheet in wb.worksheets:

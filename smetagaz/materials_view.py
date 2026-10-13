@@ -3,7 +3,8 @@
 Поддерживает drag&drop материалов в разделы, парсинг цен с сайтов, импорт из
 Excel и удаление дубликатов.
 """
-import pandas as pd
+from .lazy import LazyModule
+pd = LazyModule("pandas")
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                               QTableWidget, QTableWidgetItem, QInputDialog, QMessageBox,

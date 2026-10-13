@@ -1131,7 +1131,7 @@ class TemplatesTab(QWidget):
         bar.addWidget(self.status, 1)
         pl.addLayout(bar)
         tabs.addTab(page, 'Редактор тегов')
-        self.load_tags()
+        self._tags_loaded = False      # таблица тегов тяжёлая — строится при первом показе вкладки
 
     def current_kind(self):
         return selected_data(self.tpl)
@@ -1156,7 +1156,13 @@ class TemplatesTab(QWidget):
             db.set_setting(cc.template_setting(self.mod, kind), '')
             self.tpl.item(self.tpl.currentRow(), 1).setText('')
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._tags_loaded:
+            self.load_tags()
+
     def load_tags(self):
+        self._tags_loaded = True
         self.sources = cc.available_sources(db, self.mod)
         self.tags.setRowCount(0)
         for row in cc.list_tags(db, self.mod):

@@ -5,8 +5,9 @@
 """
 import re
 
-import requests
-from bs4 import BeautifulSoup
+from .lazy import LazyModule
+requests = LazyModule("requests")
+_bs4 = LazyModule("bs4")
 
 from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
                               QFrame, QMessageBox, QDialog, QLineEdit)
@@ -33,7 +34,7 @@ class ScraperWorker(QThread):
             headers = {'User-Agent': 'Mozilla/5.0'}
             res = requests.get(self.url, headers=headers, timeout=6)
             res.raise_for_status()
-            soup = BeautifulSoup(res.text, 'html.parser')
+            soup = _bs4.BeautifulSoup(res.text, 'html.parser')
             name_elem = soup.select_one(self.name_sel)
             parsed_name = name_elem.get_text(strip=True) if name_elem else ""
             parsed_price = 0.0

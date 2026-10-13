@@ -8,7 +8,8 @@ import json
 import logging
 from datetime import datetime
 
-import pandas as pd
+from .lazy import LazyModule
+pd = LazyModule("pandas")
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
                               QTableWidget, QTableWidgetItem, QInputDialog, QMessageBox,

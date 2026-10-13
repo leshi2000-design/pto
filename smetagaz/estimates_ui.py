@@ -233,7 +233,7 @@ class EstimateTemplatesTab(QWidget):
         tabs.addTab(page, "Таблицы")
         self.sample = None
         self.load_templates()
-        self.load_tags()
+        self._tags_loaded = False      # таблица тегов тяжёлая — строится при первом показе вкладки
         self.load_table_tags()
 
     # --- шаблоны
@@ -330,7 +330,13 @@ class EstimateTemplatesTab(QWidget):
                 self.sample = {}
         return self.sample
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._tags_loaded:
+            self.load_tags()
+
     def load_tags(self):
+        self._tags_loaded = True
         self.sample = None
         ctx = self.sample_context()
         self.sources = ed.source_choices(ctx.keys())

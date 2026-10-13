@@ -262,6 +262,7 @@ def test_estimates_ui(env, monkeypatch, tmp_path):
     tab.templates.selectRow(0)
     tab.check_template()
     assert tab.status.text().startswith('Проверка пройдена')
+    tab.load_tags()
     assert tab.tags.rowCount() >= 30 and tab.table_tags.rowCount() > 20
     tab.new_tag()
     tab.tags.item(tab.tags.rowCount() - 1, 0).setText('Сумма Работ')

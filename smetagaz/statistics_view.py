@@ -3,7 +3,8 @@
 график по месяцам (pyqtgraph) и таблица расхода позиций с фильтром по разделу
 справочника и поиском.
 """
-import pyqtgraph as pg
+from .lazy import LazyModule
+pg = LazyModule("pyqtgraph")
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
                               QFrame, QTableWidget, QTableWidgetItem, QAbstractItemView,
