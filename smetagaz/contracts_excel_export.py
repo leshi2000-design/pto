@@ -26,6 +26,25 @@ def _write_sheet(wb, title, headers, rows):
         ws.column_dimensions[col[0].column_letter].width = min(max(width + 2, 10), 60)
 
 
+def keep_version(destination, keep=7):
+    """Перед перезаписью сохраняет прежний файл в подпапку history (одна версия за день, хранятся последние `keep` дней)."""
+    import shutil
+    from datetime import datetime
+    destination = Path(destination)
+    if not destination.is_file():
+        return None
+    folder = destination.parent / 'history'
+    folder.mkdir(exist_ok=True)
+    today = datetime.now().strftime('%Y%m%d')
+    if list(folder.glob(f'{destination.stem}_{today}_*{destination.suffix}')):
+        return None
+    saved = folder / f'{destination.stem}_{today}_{datetime.now():%H%M%S}{destination.suffix}'
+    shutil.copy2(destination, saved)
+    for old in sorted(folder.glob(f'{destination.stem}_*{destination.suffix}'))[:-keep]:
+        old.unlink(missing_ok=True)
+    return saved
+
+
 def export_registries(db, destination):
     """Overwrite `destination` with a fresh snapshot (ГСВ, ГСН, Юрлица, СМР)."""
     destination = Path(destination)
@@ -95,6 +114,7 @@ def export_registries(db, destination):
     os.close(fd)
     try:
         wb.save(tmp)
+        keep_version(destination)
         os.replace(tmp, destination)
     except Exception:
         Path(tmp).unlink(missing_ok=True)

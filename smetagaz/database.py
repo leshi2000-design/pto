@@ -239,7 +239,7 @@ class DatabaseManager:
                 ('export_font', 'Segoe UI'), ('export_font_size', '13'),
                 ('export_company_name', 'ООО "ГазМонтаж"'),
                 ('export_excel_template', ''), ('export_word_template', ''),
-                ('app_name', 'ПТО 3.4.2'), ('tabs_config', json.dumps(default_tabs))
+                ('app_name', 'ПТО 3.5.0'), ('tabs_config', json.dumps(default_tabs))
             ]
             c.executemany("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", defaults)
 
@@ -254,11 +254,12 @@ class DatabaseManager:
         folder=root/(f'before_{reason}_'+datetime.now().strftime('%Y%m%d_%H%M%S_%f'))
         folder.mkdir(parents=True)
         with self._lock:
-            with sqlite3.connect(folder/'smetagaz.db') as target:
+            from .sqlite_util import connect
+            with connect(folder/'smetagaz.db') as target:
                 self.conn.backup(target)
             clients=Path(self.db_name).with_name('clients.db')
             if clients.exists():
-                with sqlite3.connect(clients) as source, sqlite3.connect(folder/'clients.db') as target:source.backup(target)
+                with connect(clients) as source, connect(folder/'clients.db') as target:source.backup(target)
         old=sorted(root.glob(f'before_{reason}_*'))
         for stale in old[:-keep] if keep else []:
             for f in stale.iterdir():f.unlink()

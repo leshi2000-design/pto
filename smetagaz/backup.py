@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import sqlite3
+from .sqlite_util import connect
 import tempfile
 import zipfile
 from pathlib import Path
@@ -28,7 +29,7 @@ def create_backup(db, destination):
         with db._lock:
             # No application writes between these two snapshots or attachment enumeration.
             for schema,name in [('main','smetagaz.db'),('crm','clients.db')]:
-                with sqlite3.connect(stage/name) as target: db.conn.backup(target,name=schema)
+                with connect(stage/name) as target: db.conn.backup(target,name=schema)
         data_root=Path(db.db_name).parent.resolve()
         # Include generated and not-yet-linked managed documents as well.
         for dirname in ['projects','templates','attachments','certificates_storage']:
@@ -38,7 +39,7 @@ def create_backup(db, destination):
                     if item.is_symlink():raise ValueError('Символическая ссылка в папке данных: '+str(item))
                     if item.is_file() and not item.name.endswith('.part'):
                         target=stage/item.relative_to(data_root);target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(item,target)
-        with sqlite3.connect(stage/'smetagaz.db') as snapshot:
+        with connect(stage/'smetagaz.db') as snapshot:
             # пароль внешних копий и их автозапуск не должны попадать в обычный архив; после восстановления их настраивают заново
             snapshot.execute("UPDATE settings SET value='' WHERE key='offsite_password'")
             snapshot.execute("UPDATE settings SET value='0' WHERE key='offsite_enabled'")
@@ -110,7 +111,7 @@ def restore_backup(archive, destination):
             target=(stage/name).resolve()
             if not target.is_relative_to(stage.resolve()) or digest(target)!=expected:raise ValueError('Контрольная сумма не совпадает')
         for name in ['smetagaz.db','clients.db']:
-            with sqlite3.connect(stage/name) as c:
+            with connect(stage/name) as c:
                 if c.execute('PRAGMA integrity_check').fetchone()[0]!='ok':raise ValueError('Повреждена база '+name)
         os.replace(stage,destination)
         destination.chmod(0o700)

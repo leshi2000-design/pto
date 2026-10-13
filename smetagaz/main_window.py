@@ -104,6 +104,9 @@ class MainWindow(QMainWindow):
         self.resize(1350, 820)
         self.backup_service = AutoBackupService()
         QShortcut(QKeySequence("Ctrl+K"), self).activated.connect(lambda: GlobalSearchDialog(self).exec())
+        for keys, handler in (("Ctrl+N", self.shortcut_new), ("Ctrl+S", self.shortcut_save), ("Ctrl+F", self.shortcut_find), ("F1", self.show_help)):
+            QShortcut(QKeySequence(keys), self).activated.connect(handler)
+        QTimer.singleShot(8000, self.check_updates_quietly)
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -131,7 +134,9 @@ class MainWindow(QMainWindow):
         root_layout.addWidget(sidebar)
         content=QWidget();content_layout=QVBoxLayout(content);content_layout.setContentsMargins(0,0,0,0);content_layout.setSpacing(0)
         header=QFrame();header.setObjectName('pageHeader');head=QVBoxLayout(header);head.setContentsMargins(24,17,24,16)
-        self.page_title=QLabel();self.page_title.setObjectName('pageTitle');head.addWidget(self.page_title)
+        title_row=QHBoxLayout();self.page_title=QLabel();self.page_title.setObjectName('pageTitle');title_row.addWidget(self.page_title,1)
+        self.btn_help=QPushButton('?  Справка · F1');self.btn_help.setToolTip('Справка по разделу, горячие клавиши, проверка обновлений');self.btn_help.clicked.connect(self.show_help);title_row.addWidget(self.btn_help)
+        head.addLayout(title_row)
         self.page_subtitle=QLabel('Данные, документы и отчёты в одном рабочем пространстве');self.page_subtitle.setObjectName('pageSubtitle');head.addWidget(self.page_subtitle)
         content_layout.addWidget(header);content_layout.addWidget(self.stack,1);root_layout.addWidget(content,1)
         nav=QScrollArea();nav.setObjectName('navigation');nav.setWidgetResizable(True);nav.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -232,6 +237,56 @@ class MainWindow(QMainWindow):
         if self.tabs_buttons:
             self.switch_tab(0, self.tabs_buttons[0])
 
+    def _current_view(self):
+        idx = self.stack.currentIndex()
+        return self.views[idx] if 0 <= idx < len(self.views) else None
+
+    @staticmethod
+    def _click_button(root, starts=(), contains=()):
+        from PyQt6.QtWidgets import QPushButton as _B
+        for button in root.findChildren(_B):
+            text = button.text().replace('＋', '').replace('+', '').strip().casefold()
+            if button.isVisible() and button.isEnabled() and (any(text.startswith(p.casefold()) for p in starts) or any(c.casefold() in text for c in contains)):
+                button.click()
+                return True
+        return False
+
+    def shortcut_new(self):
+        if QApplication.activeModalWidget():
+            return
+        view = self._current_view()
+        if view is not None and not self._click_button(view, starts=('Создать договор', 'Создать смету', 'Новый проект', 'Новый клиент', 'Новый', 'Добавить юрлицо', 'Добавить')):
+            self.statusBar().showMessage('В этом разделе нет создания записи.', 3000)
+
+    def shortcut_save(self):
+        target = QApplication.activeModalWidget() or self._current_view()
+        if target is not None:
+            self._click_button(target, starts=('Сохранить',))
+
+    def shortcut_find(self):
+        from PyQt6.QtWidgets import QLineEdit as _L
+        view = self._current_view()
+        for edit in (view.findChildren(_L) if view is not None else []):
+            if edit.isVisible() and edit.isEnabled() and not edit.isReadOnly():
+                edit.setFocus();edit.selectAll();return
+
+    def show_help(self):
+        from .help_view import HelpDialog
+        view = self._current_view()
+        HelpDialog(getattr(view, '_tab_id', ''), self).exec()
+
+    def check_updates_quietly(self):
+        """Раз в неделю, если задан адрес: сообщает о новой версии в подзаголовке страницы."""
+        try:
+            from . import updater
+            if not db.get_setting('update_url', '').strip():
+                return
+            newer, info, message = updater.check(db)
+            if newer:
+                self.page_subtitle.setText(message + ' Справка → «Проверить обновления».')
+        except Exception:
+            logging.info('Проверка обновлений не удалась', exc_info=True)
+
     def switch_tab(self, idx, target_btn):
         view = self.views[idx]
         if hasattr(view, '_factory'):
@@ -256,7 +311,12 @@ class MainWindow(QMainWindow):
         elif hasattr(view, 'calculate'): view.calculate()
 
     def closeEvent(self, event):
-        self.backup_service.close()
+        from PyQt6.QtWidgets import QApplication as _A
+        _A.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            self.backup_service.backup_on_exit()
+        finally:
+            _A.restoreOverrideCursor()
         event.accept()
 
     def toggle_theme(self):

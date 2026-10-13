@@ -71,5 +71,20 @@ class AutoBackupService(QObject):
         except Exception as e:
             logging.exception('Contracts Excel export failed')
             db.set_setting('contracts_excel_status',f'{now:%d.%m.%Y %H:%M}: ошибка экспорта — {e}')
+    def backup_on_exit(self,min_age=300):
+        """При закрытии программы: свежая копия, если последней больше `min_age` секунд (закрыли раньше часового срока)."""
+        self.timer.stop();self.pool.shutdown(wait=True)       # дожидаемся уже идущих копий
+        now=datetime.now()
+        try:last=datetime.fromisoformat(db.get_setting('last_db_backup',''))
+        except ValueError:last=datetime.min
+        if (now-last).total_seconds()>min_age:self.backup_db(now)
+        try:
+            from . import offsite_backup
+            if offsite_backup.configured(db):
+                try:age=(now-datetime.fromisoformat(db.get_setting('last_offsite_backup',''))).total_seconds()
+                except ValueError:age=1e9
+                if age>min_age:self.offsite_backup(now)
+        except Exception:
+            logging.exception('Exit offsite backup failed')
     def close(self):
         self.timer.stop();self.pool.shutdown(wait=True)

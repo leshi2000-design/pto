@@ -58,3 +58,48 @@ def test_dark_theme_fix_is_reversible():
     assert label.styleSheet() == 'color: #605E5C;'
     a, b = theme._arrow_files('#123456'), theme._arrow_files('#123456')
     assert a == b and 'smetagaz-theme-' in a['down']
+
+
+def test_backup_leaves_no_open_database_files(tmp_path):
+    """Windows не удаляет открытые файлы (WinError 32): после копирования не должно остаться открытых временных баз."""
+    from smetagaz import sqlite_util
+    with sqlite_util.connect(tmp_path / 'x.db') as con:
+        con.execute('CREATE TABLE t(a)')
+    with pytest.raises(Exception):
+        con.execute('SELECT 1')              # соединение закрыто
+    d = DatabaseManager(tmp_path / 'smetagaz.db'); d.init_db()
+    backup.create_backup(d, tmp_path / 'b.zip')
+    backup.restore_backup(tmp_path / 'b.zip', tmp_path / 'restored')
+    d.safety_backup('test')
+    held = [os.readlink(f'/proc/self/fd/{n}') for n in os.listdir('/proc/self/fd') if os.path.exists(f'/proc/self/fd/{n}')]
+    assert not [p for p in held if p.endswith(('.db', '.db (deleted)')) and 'restored' in p or '(deleted)' in p and '.db' in p]
+    d.close()
+
+
+def test_excel_history_one_version_per_day(tmp_path):
+    from smetagaz.contracts_excel_export import keep_version
+    f = tmp_path / 'excel_reports' / 'Реестры.xlsx'; f.parent.mkdir()
+    f.write_bytes(b'v1')
+    assert keep_version(f) is not None and keep_version(f) is None      # в тот же день вторая версия не создаётся
+    assert len(list((f.parent / 'history').glob('Реестры_*.xlsx'))) == 1
+    for day in range(10):
+        (f.parent / 'history' / f'Реестры_2020010{day % 10}_000000.xlsx').write_bytes(b'x')
+    (f.parent / 'history' / 'Реестры_20200109_000001.xlsx').write_bytes(b'x')
+    for p in (f.parent / 'history').glob('*_00000*.xlsx'): pass
+    f2 = tmp_path / 'excel_reports' / 'Другой.xlsx'; f2.write_bytes(b'v1')
+    assert keep_version(f2) is not None
+
+
+def test_backup_on_exit_runs_when_last_copy_is_old(tmp_path, monkeypatch):
+    from PyQt6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from smetagaz import services
+    d = DatabaseManager(tmp_path / 'smetagaz.db'); d.init_db()
+    monkeypatch.setattr(services, 'db', d)
+    svc = services.AutoBackupService()
+    svc.backup_on_exit()
+    assert list((tmp_path / 'backups').glob('auto_*.zip')) and d.get_setting('last_db_backup')
+    before = len(list((tmp_path / 'backups').glob('auto_*.zip')))
+    svc2 = services.AutoBackupService(); svc2.backup_on_exit()       # свежая копия уже есть — повторно не создаётся
+    assert len(list((tmp_path / 'backups').glob('auto_*.zip'))) == before
+    d.close()

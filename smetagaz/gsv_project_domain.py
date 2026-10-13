@@ -689,5 +689,7 @@ def export_cards(db, destination):
         for cell in row:
             if isinstance(cell.value, str):
                 cell.data_type = 's'
+    from .contracts_excel_export import keep_version
+    keep_version(destination)
     _save_atomic(lambda p: wb.save(p), destination)
     return len(ids)

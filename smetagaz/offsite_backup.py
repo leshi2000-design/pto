@@ -7,6 +7,7 @@
 import os
 import shutil
 import sqlite3
+from .sqlite_util import connect
 import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -103,11 +104,11 @@ def verify_copy(path, password, live_db=None):
             decrypt_backup(path, archive, password)
             restored = Path(tmp) / 'restored'
             restore_backup(archive, restored)
-            with sqlite3.connect(restored / 'smetagaz.db') as con:
+            with connect(restored / 'smetagaz.db') as con:
                 for table in KEY_TABLES:
                     if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
                         result['tables'][table] = con.execute(f'SELECT count(*) FROM {table}').fetchone()[0]
-            with sqlite3.connect(restored / 'clients.db') as con:
+            with connect(restored / 'clients.db') as con:
                 result['tables']['clients'] = con.execute('SELECT count(*) FROM clients').fetchone()[0]
         if not result['tables'].get('settings'):
             raise ValueError('В восстановленной базе нет настроек — копия неполная')
