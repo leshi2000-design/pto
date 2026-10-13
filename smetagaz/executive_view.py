@@ -571,10 +571,10 @@ class ExecDocsBuilderTab(QWidget):
                 cert_file = db.fetchone("SELECT file_path FROM certificates WHERE id=?", (linked_id,))
                 if cert_file and cert_file[0] and os.path.exists(cert_file[0]):
                     i_status = QTableWidgetItem("✅ Файл привязан")
-                    i_status.setForeground(QColor("#16A34A"))
+                    i_status.setForeground(QColor("#15803D"))
                 else:
                     i_status = QTableWidgetItem("⚠️ Файл потерян")
-                    i_status.setForeground(QColor("#D97706"))
+                    i_status.setForeground(QColor("#B45309"))
             else:
                 i_status = QTableWidgetItem("❌ Нет файла")
                 i_status.setForeground(QColor("#DC2626"))

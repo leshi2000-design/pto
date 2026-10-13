@@ -85,11 +85,11 @@ class DossierWidget(QWidget):
         d = dc.client_dossier(db, self.kind, self.cid)
         self.data = d
         info, t = d['info'], d['totals']
-        self.header.setText(f"<h3 style='margin:0'>{info['name']}</h3><span style='color:#65758b'>{' · '.join(info['lines'])}</span>")
+        self.header.setText(f"<h3 style='margin:0'>{info['name']}</h3><span style='color:#605E5C'>{' · '.join(info['lines'])}</span>")
         debt_color = '#DC2626' if t['debt'] > 0 else '#16A34A'
         self.summary.setText(f"Договоров: <b>{t['contracts']}</b> · смет: <b>{t['estimates']}</b> · на сумму <b>{money(t['amount'])}</b> · оплачено <b>{money(t['paid'])}</b> · "
                              f"<span style='color:{debt_color}'>долг <b>{money(t['debt'])}</b></span>"
-                             + (f" · <span style='color:#D97706'>неподписанных договоров: <b>{t['unsigned']}</b></span>" if t['unsigned'] else ''))
+                             + (f" · <span style='color:#B45309'>неподписанных договоров: <b>{t['unsigned']}</b></span>" if t['unsigned'] else ''))
         fill(self.t_contracts, [(c['section'], c['number'], day(c['date']), c['object'], money(c['amount']), money(c['paid']), money(c['debt']), 'да' if c['signed'] else 'нет')
                                 for c in d['contracts']], right=(4, 5, 6), data=[(c['table'], c['id']) for c in d['contracts']], red=(6,))
         fill(self.t_estimates, [(e['title'], day(e['date']), money(e['total']), money(e['paid']), money(e['debt']), e['contract'] or '— без договора —') for e in d['estimates']],

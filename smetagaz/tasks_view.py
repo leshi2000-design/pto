@@ -51,7 +51,7 @@ class TaskCardWidget(QFrame):
         layout.setSpacing(5)
 
         lbl_title = QLabel(title)
-        title_color = '#94A3B8' if done else ('#E5EDF8' if dark else '#0F172A')
+        title_color = ('#A8B5C8' if dark else '#605E5C') if done else ('#E5EDF8' if dark else '#0F172A')
         lbl_title.setStyleSheet(f"font-weight: bold; font-size: 13px; color: {title_color};" + (' text-decoration: line-through;' if done else ''))
         lbl_title.setWordWrap(True)
         layout.addWidget(lbl_title)
@@ -59,7 +59,7 @@ class TaskCardWidget(QFrame):
         if desc:
             short_desc = desc.replace('\n', ' ')
             lbl_desc = QLabel(short_desc if len(short_desc) <= 65 else short_desc[:62] + '...')
-            lbl_desc.setStyleSheet('color: #64748B; font-size: 11px;')
+            lbl_desc.setStyleSheet('color: #605E5C; font-size: 12px;')
             lbl_desc.setWordWrap(True)
             layout.addWidget(lbl_desc)
 
@@ -68,10 +68,11 @@ class TaskCardWidget(QFrame):
             badge = QLabel(('⚠ ' if state == 'overdue' else '📅 ') + label)
             color = DUE_COLORS.get(state, '#65758B')
             if state == 'overdue':
-                badge.setStyleSheet('color: #FFFFFF; background-color: #DC2626; border-radius: 6px; padding: 2px 8px; font-weight: bold; font-size: 11px;')
+                badge.setStyleSheet('color: #FFFFFF; background-color: #DC2626; border-radius: 6px; padding: 2px 8px; font-weight: bold; font-size: 12px;')
             else:
-                badge.setStyleSheet(f'color: {color}; font-weight: 600; font-size: 11px;')
-            badge.setAlignment(Qt.AlignmentFlag.AlignLeft)
+                badge.setStyleSheet(f'color: {color}; font-weight: 600; font-size: 12px;')
+            badge.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            badge.setMinimumHeight(24)
             row = QHBoxLayout()
             row.setContentsMargins(0, 0, 0, 0)
             row.addWidget(badge)
@@ -84,7 +85,7 @@ class TaskCardWidget(QFrame):
             lbl_link.setTextFormat(Qt.TextFormat.RichText)
             lbl_link.setWordWrap(True)
             lbl_link.setToolTip('Открыть связанную карточку')
-            lbl_link.setStyleSheet('font-size: 11px;')
+            lbl_link.setStyleSheet('font-size: 12px;')
             if on_link:
                 lbl_link.linkActivated.connect(lambda _=None: on_link())
             layout.addWidget(lbl_link)
@@ -96,9 +97,9 @@ class TaskCardWidget(QFrame):
         except (ValueError, TypeError):
             date_str = created_at or ''
         lbl_date = QLabel(f'🕒 {date_str}')
-        lbl_date.setStyleSheet('color: #94A3B8; font-size: 10px;')
+        lbl_date.setStyleSheet('color: #605E5C; font-size: 12px;')
         lbl_urgency = QLabel(urgency)
-        lbl_urgency.setStyleSheet(f"color: {'#94A3B8' if done else URGENCY_COLORS.get(urgency, '#2563EB')}; font-weight: bold; font-size: 10px;")
+        lbl_urgency.setStyleSheet(f"color: {('#A8B5C8' if dark else '#605E5C') if done else URGENCY_COLORS.get(urgency, '#2563EB')}; font-weight: bold; font-size: 12px;")
         footer.addWidget(lbl_date)
         footer.addStretch()
         footer.addWidget(lbl_urgency)

@@ -199,7 +199,7 @@ class PipesTab(QWidget):
             b.clicked.connect(fn)
             bar.addWidget(b)
         self.estimate_note = QLabel('')
-        self.estimate_note.setStyleSheet('color: #65758b;')
+        self.estimate_note.setStyleSheet('color: #605E5C;')
         bar.addWidget(self.estimate_note, 1)
         layout.addLayout(bar)
 

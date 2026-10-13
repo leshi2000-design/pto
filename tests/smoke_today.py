@@ -23,7 +23,7 @@ edit=RecurringEditDialog();edit.title.setText('Зарплата');edit.day.setVa
 assert RecurringDialog().table.rowCount()==1
 # сам экран
 view=TodayView();view.show();view.load_data();app.processEvents()
-assert view.chip_overdue.value.text()=='1' and any('Просрочено' in t for t in view.day.texts())
+assert '1 просрочено' in view.summary.text() and any('Просрочено' in t for t in view.day.texts())
 marks=view.panel.calendar.marks;assert (today-timedelta(days=2)).isoformat() in marks and 'overdue' in marks[(today-timedelta(days=2)).isoformat()]
 assert any('Зарплата' in e['title'] for e in __import__('smetagaz.agenda_domain',fromlist=['x']).events_between(db,today.replace(day=1),today.replace(day=1)+timedelta(days=40)))
 # выбор другого дня и скрытие вида событий через легенду

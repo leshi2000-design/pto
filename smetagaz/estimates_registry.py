@@ -159,7 +159,7 @@ class EstimatesView(QWidget):
 
         actions.addStretch()
 
-        self.btn_cols = QPushButton("Настройка колонок ▼")
+        self.btn_cols = QPushButton("Настройка колонок")
         self.cols_menu = QMenu(self)
         self.col_actions = []
         self.headers = ["Шифр / Объект", "Клиент", "Телефон", "Статусы", "Дата", "Сумма (руб)", "Оплачено", "Долг", "Договор"]
@@ -382,17 +382,17 @@ class EstimatesView(QWidget):
 
             item_paid = QTableWidgetItem(f"{paid:,.2f}".replace(",", " "))
             item_paid.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            item_paid.setForeground(QColor("#16A34A") if paid > 0 else QColor("#94A3B8"))
+            item_paid.setForeground(QColor("#15803D") if paid > 0 else QColor("#605E5C"))
             self.table.setItem(row_idx, 6, item_paid)
 
             item_debt = QTableWidgetItem(f"{debt:,.2f}".replace(",", " "))
             item_debt.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            item_debt.setForeground(QColor("#DC2626") if debt > 0 else QColor("#16A34A"))
+            item_debt.setForeground(QColor("#DC2626") if debt > 0 else QColor("#15803D"))
             self.table.setItem(row_idx, 7, item_debt)
 
             info = ed.contract_of(db, est_id)
             item_contract = QTableWidgetItem(info['label'] if info else "— без договора —")
-            item_contract.setForeground(QColor("#2563EB") if info else QColor("#94A3B8"))
+            item_contract.setForeground(QColor("#2563EB") if info else QColor("#605E5C"))
             self.table.setItem(row_idx, 8, item_contract)
 
         self.table.setUpdatesEnabled(True)

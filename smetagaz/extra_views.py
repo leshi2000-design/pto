@@ -87,7 +87,7 @@ class ConverterDialog(QDialog):
         grid.addWidget(self.cmb_len_to, 0, 4)
 
         self.lbl_len_res = QLabel("0.000")
-        self.lbl_len_res.setStyleSheet("font-weight: bold; color: #16A34A;")
+        self.lbl_len_res.setStyleSheet("font-weight: bold; color: #15803D;")
         grid.addWidget(self.lbl_len_res, 0, 5)
 
         grid.addWidget(QLabel("Масса:"), 1, 0)
@@ -110,7 +110,7 @@ class ConverterDialog(QDialog):
         grid.addWidget(self.cmb_mass_to, 1, 4)
 
         self.lbl_mass_res = QLabel("0.000")
-        self.lbl_mass_res.setStyleSheet("font-weight: bold; color: #16A34A;")
+        self.lbl_mass_res.setStyleSheet("font-weight: bold; color: #15803D;")
         grid.addWidget(self.lbl_mass_res, 1, 5)
 
         layout.addLayout(grid)
@@ -155,7 +155,7 @@ class EarthworksCalcDialog(QDialog):
 
         grid.addWidget(QLabel("Объем грунта:"), 4, 0)
         self.lbl_res = QLabel("0.00 м³")
-        self.lbl_res.setStyleSheet("font-weight: bold; color: #D97706; font-size: 14pt;")
+        self.lbl_res.setStyleSheet("font-weight: bold; color: #B45309; font-size: 14pt;")
         grid.addWidget(self.lbl_res, 4, 1)
 
         layout.addLayout(grid)
@@ -260,7 +260,7 @@ class ProfitCalcDialog(QDialog):
 
         res_grid.addWidget(QLabel("ПЛАНОВАЯ ПРИБЫЛЬ:"), 4, 0)
         self.lbl_profit = QLabel("0.00 руб.")
-        self.lbl_profit.setStyleSheet("font-weight: bold; color: #16A34A; font-size: 14pt;")
+        self.lbl_profit.setStyleSheet("font-weight: bold; color: #15803D; font-size: 14pt;")
         res_grid.addWidget(self.lbl_profit, 4, 1)
 
         layout.addLayout(res_grid)

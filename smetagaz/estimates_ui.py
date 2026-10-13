@@ -86,7 +86,7 @@ class NewEstimateDialog(QDialog):
         for lid, name in db.fetchall("SELECT id,name FROM le_clients ORDER BY name"):
             self.cmb_legal.addItem(name, lid)
         self.lbl_contract = QLabel("Договор не выбран")
-        self.lbl_contract.setStyleSheet("color:#65758b;")
+        self.lbl_contract.setStyleSheet("color:#605E5C;")
         pick = QPushButton("Выбрать договор…")
         pick.clicked.connect(self.choose_contract)
         self.chk_link = QCheckBox("Сразу привязать смету к этому договору (по умолчанию смета создаётся без договора)")
@@ -169,7 +169,7 @@ class EstimateTemplatesTab(QWidget):
         top.addWidget(self.kind, 1)
         pl.addLayout(top)
         self.hint = QLabel("")
-        self.hint.setStyleSheet("color:#65758b;")
+        self.hint.setStyleSheet("color:#605E5C;")
         pl.addWidget(self.hint)
         self.templates = QTableWidget(0, 2)
         self.templates.setHorizontalHeaderLabels(["Шаблон", "Файл"])

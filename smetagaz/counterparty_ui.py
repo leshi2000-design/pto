@@ -426,7 +426,7 @@ class ContractDialog(QDialog):
         r += 1
         self.party_info = QLabel('')
         self.party_info.setWordWrap(True)
-        self.party_info.setStyleSheet('color:#65758b;')
+        self.party_info.setStyleSheet('color:#605E5C;')
         g.addWidget(self.party_info, r, 0, 1, 4)
         self.cmb_legal.currentIndexChanged.connect(self.refresh_party_info)
         self.cmb_person.currentIndexChanged.connect(self.refresh_party_info)
@@ -1268,7 +1268,7 @@ class CustomerSwitch(QGroupBox):
         layout.addWidget(new, 1, 2)
         self.info = QLabel('')
         self.info.setWordWrap(True)
-        self.info.setStyleSheet('color:#65758b;')
+        self.info.setStyleSheet('color:#605E5C;')
         layout.addWidget(self.info, 2, 0, 1, 3)
         self.btn_contract = QPushButton('Договор в «Юрлицах»…')
         self.btn_contract.clicked.connect(self.open_contract)

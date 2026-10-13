@@ -192,7 +192,7 @@ class StatusPage(QWidget):
         self.preview.setTextFormat(Qt.TextFormat.RichText)
         fl.addWidget(self.preview)
         self.usage = QLabel()
-        self.usage.setStyleSheet("color: #65758b;")
+        self.usage.setStyleSheet("color: #605E5C;")
         fl.addWidget(self.usage)
         fl.addStretch()
         row = QHBoxLayout()
@@ -328,7 +328,7 @@ class StatusEditorDialog(QDialog):
         layout = QVBoxLayout(self)
         hint = QLabel("На одном проекте можно выбрать несколько статусов работы и несколько статусов клиента. Здесь они добавляются, переименовываются и перекрашиваются.")
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #65758b;")
+        hint.setStyleSheet("color: #605E5C;")
         layout.addWidget(hint)
         self.tabs = QTabWidget()
         self.tabs.addTab(StatusPage("work"), "Статусы работы")
@@ -641,7 +641,7 @@ class ProjectEditDialog(QDialog):
         self.dt_due.setDate(QDate.currentDate().addDays(30))
         l_dates.addWidget(self.dt_due, 1, 1)
         self.lbl_due_hint = QLabel("по умолчанию 30 дней с даты заключения, можно изменить вручную")
-        self.lbl_due_hint.setStyleSheet("color: #65758b;")
+        self.lbl_due_hint.setStyleSheet("color: #605E5C;")
         l_dates.addWidget(self.lbl_due_hint, 1, 2)
         l_dates.addWidget(QLabel("Дата акта:"), 2, 0)
         self.dt_act = OptionalDate()
@@ -685,7 +685,7 @@ class ProjectEditDialog(QDialog):
             self.doc_open[kind] = opn
             l_docs.addWidget(opn, r, 3)
         self.lbl_folder = QLabel()
-        self.lbl_folder.setStyleSheet("color: #65758b;")
+        self.lbl_folder.setStyleSheet("color: #605E5C;")
         self.lbl_folder.setWordWrap(True)
         l_docs.addWidget(self.lbl_folder, len(gsvdom.DOC_KINDS), 0, 1, 4)
         l_docs.setColumnStretch(1, 1)
@@ -1009,7 +1009,7 @@ class SideStatusBoard(QWidget):
         layout.addWidget(self.tree, 1)
         hint = QLabel("Нажмите на статус — раскроется список проектов. Двойной щелчок по проекту открывает договор.")
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        hint.setStyleSheet("color: #605E5C; font-size: 12px;")
         layout.addWidget(hint)
 
     def set_dark_mode(self, dark_mode):
@@ -1046,7 +1046,7 @@ class SideStatusBoard(QWidget):
                 item.setIcon(0, QIcon(pix))
                 item.setData(0, self.STATUS_ROLE, sid)
                 if not n:
-                    item.setForeground(0, QColor("#94a3b8"))
+                    item.setForeground(0, QColor("#605E5C"))
                 else:
                     item.addChild(QTreeWidgetItem(["…"]))      # раскрывающая стрелка; проекты подгружаются при открытии
                 group.addChild(item)

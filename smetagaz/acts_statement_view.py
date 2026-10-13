@@ -45,7 +45,7 @@ class ActsStatementDialog(QDialog):
         layout.addWidget(self.tabs, 1)
         self.note = QLabel('')
         self.note.setWordWrap(True)
-        self.note.setStyleSheet('color: #65758b;')
+        self.note.setStyleSheet('color: #605E5C;')
         layout.addWidget(self.note)
         buttons = QHBoxLayout()
         excel = QPushButton('Сохранить ведомость в Excel…')

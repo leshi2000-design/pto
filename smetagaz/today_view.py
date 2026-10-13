@@ -97,7 +97,7 @@ class RecurringEditDialog(QDialog):
         self.active.setChecked(True)
         form.addRow('', self.active)
         self.hint = QLabel()
-        self.hint.setStyleSheet('color: #65758b;')
+        self.hint.setStyleSheet('color: #605E5C;')
         layout.addWidget(self.hint)
         layout.addStretch()
 
@@ -173,7 +173,7 @@ class RecurringDialog(QDialog):
         layout = QVBoxLayout(self)
         intro = QLabel('Даты, которые повторяются каждый месяц. Они автоматически отмечаются в календаре на все будущие месяцы.')
         intro.setWordWrap(True)
-        intro.setStyleSheet('color: #65758b;')
+        intro.setStyleSheet('color: #605E5C;')
         layout.addWidget(intro)
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(['Название', 'Число месяца', 'Перенос с выходных', 'Показывать'])
@@ -305,7 +305,7 @@ class LegendButton(QToolButton):
     def restyle(self, *_):
         on = self.isChecked()
         self.setStyleSheet(f'QToolButton {{ border: 1px solid {self.color if on else "#94a3b8"}; border-radius: 9px; padding: 2px 8px 2px 6px; '
-                           f'background: {rgba(self.color, 0.14) if on else "transparent"}; color: {("#e5edf8" if is_dark() else "#17263d") if on else "#94a3b8"}; font-size: 11px; }}')
+                           f'background: {rgba(self.color, 0.14) if on else "transparent"}; color: {("#e5edf8" if is_dark() else "#17263d") if on else "#94a3b8"}; font-size: 12px; }}')
         self.setText(('● ' if on else '○ ') + KINDS[self.kind][0])
 
 
@@ -423,12 +423,12 @@ class EventRow(QFrame):
         col.addWidget(title)
         if ev['detail']:
             detail = QLabel(ev['detail'])
-            detail.setStyleSheet('color: #65758b; font-size: 11px;')
+            detail.setStyleSheet('color: #605E5C; font-size: 12px;')
             detail.setWordWrap(True)
             col.addWidget(detail)
         layout.addLayout(col, 1)
         kind = QLabel(ev['kind_label'])
-        kind.setStyleSheet(f'color: {color}; font-size: 10px; font-weight: 600;')
+        kind.setStyleSheet(f'color: {color}; font-size: 12px; font-weight: 600;')
         layout.addWidget(kind, 0, Qt.AlignmentFlag.AlignTop)
 
 
@@ -452,7 +452,7 @@ class DayTab(QWidget):
             head.addWidget(w)
         layout.addLayout(head)
         self.summary = QLabel()
-        self.summary.setStyleSheet('color: #65758b;')
+        self.summary.setStyleSheet('color: #605E5C;')
         layout.addWidget(self.summary)
         self.list = QListWidget()
         self.list.setSpacing(4)
@@ -462,7 +462,7 @@ class DayTab(QWidget):
         self.list.itemDoubleClicked.connect(self.open_item)
         layout.addWidget(self.list, 1)
         self.hint = QLabel('Двойной щелчок по записи открывает её карточку.')
-        self.hint.setStyleSheet('color: #94a3b8; font-size: 11px;')
+        self.hint.setStyleSheet('color: #605E5C; font-size: 12px;')
         layout.addWidget(self.hint)
 
     def section(self, text, color):
@@ -543,7 +543,7 @@ class StatChip(QFrame):
         self.value = QLabel('0')
         self.value.setStyleSheet(f'font-size: 22px; font-weight: 700; color: {color};')
         self.caption = QLabel(caption)
-        self.caption.setStyleSheet('color: #65758b; font-size: 11px;')
+        self.caption.setStyleSheet('color: #605E5C; font-size: 12px;')
         layout.addWidget(self.value)
         layout.addWidget(self.caption)
 
@@ -659,7 +659,8 @@ class TodayView(QWidget):
         for piece in info['text'].split(' · '):
             red = 'просрочено' in piece
             amber = 'к подписанию' in piece
-            color = '#DC2626' if red else '#D97706' if amber else '#475569'
+            dk = is_dark()
+            color = ('#F1707B' if dk else '#B42318') if red else ('#F5B04A' if dk else '#B45309') if amber else ('#C8C6C4' if dk else '#605E5C')
             parts.append(f'<span style="color:{color};{"font-weight:600;" if red or amber else ""}">{piece}</span>')
         self.summary.setText(' &nbsp;·&nbsp; '.join(parts))
 

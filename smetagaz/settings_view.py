@@ -146,7 +146,7 @@ class SettingsView(QWidget):
         off.addWidget(self.off_keep, 4, 1)
         self.off_warn = QLabel("")
         self.off_warn.setWordWrap(True)
-        self.off_warn.setStyleSheet("color: #D97706;")
+        self.off_warn.setStyleSheet("color: #B45309;")
         off.addWidget(self.off_warn, 5, 0, 1, 3)
         bar = QHBoxLayout()
         for text, fn in (("Сохранить настройки", self.off_save), ("Сделать копию сейчас", self.off_now), ("Проверить восстановлением сейчас", self.off_verify_now)):

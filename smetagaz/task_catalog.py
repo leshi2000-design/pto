@@ -73,8 +73,8 @@ class CatalogPage(QWidget):
             form.addWidget(QLabel('Пояснение (необязательно)'));self.note=QLineEdit();form.addWidget(self.note)
         else:
             self.done=QCheckBox('Завершающий статус');self.done.setToolTip('Задачи в таком статусе не считаются просроченными');form.addWidget(self.done)
-            hint=QLabel('Задачи в завершающем статусе не получают пометку «Просрочено».');hint.setWordWrap(True);hint.setStyleSheet('color:#65758b;font-size:11px;');form.addWidget(hint)
-        self.usage=QLabel();self.usage.setStyleSheet('color:#65758b;');form.addWidget(self.usage);form.addStretch()
+            hint=QLabel('Задачи в завершающем статусе не получают пометку «Просрочено».');hint.setWordWrap(True);hint.setStyleSheet('color:#605E5C;font-size: 12px;');form.addWidget(hint)
+        self.usage=QLabel();self.usage.setStyleSheet('color:#605E5C;');form.addWidget(self.usage);form.addStretch()
         row=QHBoxLayout();self.btn_delete=QPushButton('Удалить');self.btn_delete.setProperty('type','danger');self.btn_save=QPushButton('Сохранить');self.btn_save.setProperty('type','primary');row.addWidget(self.btn_delete);row.addStretch();row.addWidget(self.btn_save);form.addLayout(row);root.addWidget(self.form,4)
         self.search.textChanged.connect(self.load);self.list.currentItemChanged.connect(lambda cur,_:self.select(cur));self.btn_new.clicked.connect(self.start_new);self.btn_save.clicked.connect(self.save);self.btn_delete.clicked.connect(self.remove);self.name.textChanged.connect(self.update_preview);self.name.returnPressed.connect(self.save)
         self.load();self.start_new() if not self.list.count() else self.list.setCurrentRow(0)
@@ -148,7 +148,7 @@ class CatalogDialog(QDialog):
     """Справочник тегов и статусов задач."""
     def __init__(self,parent=None):
         super().__init__(parent);self.setWindowTitle('Теги и статусы задач');self.resize(820,520);l=QVBoxLayout(self)
-        intro=QLabel('Статусы — колонки доски задач, теги — цветные метки на карточках. Выберите запись слева, измените название и цвет, нажмите «Сохранить».');intro.setWordWrap(True);intro.setStyleSheet('color:#65758b;');l.addWidget(intro)
+        intro=QLabel('Статусы — колонки доски задач, теги — цветные метки на карточках. Выберите запись слева, измените название и цвет, нажмите «Сохранить».');intro.setWordWrap(True);intro.setStyleSheet('color:#605E5C;');l.addWidget(intro)
         self.tabs=QTabWidget();self.tags=CatalogPage('tags');self.statuses=CatalogPage('statuses');self.tabs.addTab(self.statuses,'Статусы (колонки доски)');self.tabs.addTab(self.tags,'Теги');l.addWidget(self.tabs,1)
         close=QPushButton('Закрыть');close.clicked.connect(self.accept);row=QHBoxLayout();row.addStretch();row.addWidget(close);l.addLayout(row)
 class TasksTable(QWidget):

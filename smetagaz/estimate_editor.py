@@ -76,7 +76,7 @@ class EstimateEditorDialog(QDialog):
         btn_pay.clicked.connect(self.open_payments)
         top_bar.addWidget(btn_pay)
 
-        self.btn_contract = QPushButton("Договор ▼")
+        self.btn_contract = QPushButton("Договор")
         self.contract_menu = QMenu(self)
         self.btn_contract.setMenu(self.contract_menu)
         self.contract_menu.aboutToShow.connect(self.fill_contract_menu)
@@ -87,7 +87,7 @@ class EstimateEditorDialog(QDialog):
         btn_breakdown.clicked.connect(self.show_work_breakdown)
         top_bar.addWidget(btn_breakdown)
 
-        btn_export = QPushButton("Экспорт ▼")
+        btn_export = QPushButton("Экспорт")
         btn_export.setProperty("type", "primary")
         export_menu = QMenu(self)
 
@@ -217,8 +217,8 @@ class EstimateEditorDialog(QDialog):
         right_panel.addWidget(self.totals_lbl)
 
         self.lbl_grand_total = QLabel("ВСЕГО: 0.00")
-        accent = db.get_setting("accent_color", "#0284C7")
-        self.lbl_grand_total.setStyleSheet(f"font-size: 16pt; font-weight: bold; color: {accent};")
+        from .theme import accent_fg
+        self.lbl_grand_total.setStyleSheet(f"font-size: 16pt; font-weight: bold; color: {accent_fg()};")
         self.lbl_grand_total.setAlignment(Qt.AlignmentFlag.AlignRight)
         right_panel.addWidget(self.lbl_grand_total)
 
@@ -339,7 +339,7 @@ class EstimateEditorDialog(QDialog):
             self.lbl_contract.setStyleSheet("color: #2563EB;")
         else:
             self.lbl_contract.setText("Смета без договора. Договор можно привязать позже — меню «Договор».")
-            self.lbl_contract.setStyleSheet("color: #65758b;")
+            self.lbl_contract.setStyleSheet("color: #605E5C;")
 
     def fill_contract_menu(self):
         self.contract_menu.clear()
@@ -645,9 +645,9 @@ class EstimateEditorDialog(QDialog):
 
         t_text = f"Прямые затраты (базовые): {self.base_dir_total:,.2f} руб.<br>"
         m_str = f" (с учетом {mat_adj}%)" if mat_adj != 0 else ""
-        t_text += f"<span style='color: #64748B;'>— Материалы{m_str}: {self.adj_mat_total:,.2f} руб.</span><br>"
+        t_text += f"<span style='color: #605E5C;'>— Материалы{m_str}: {self.adj_mat_total:,.2f} руб.</span><br>"
         w_str = f" (с учетом {work_adj}%)" if work_adj != 0 else ""
-        t_text += f"<span style='color: #64748B;'>— Работы{w_str}: {self.adj_work_total:,.2f} руб.</span><br>"
+        t_text += f"<span style='color: #605E5C;'>— Работы{w_str}: {self.adj_work_total:,.2f} руб.</span><br>"
         if tot_adj != 0:
             t_text += f"<br>Промежуточный итог: {self.adj_subtotal:,.2f} руб.<br>"
             t_text += f"Скидка/Надбавка ({tot_adj}%): {(self.grand_total - self.adj_subtotal):,.2f} руб.<br>"
@@ -684,11 +684,11 @@ class EstimateEditorDialog(QDialog):
             rows_html += f"<tr style='font-weight: bold;'><td colspan='5' align='right'>Прямые затраты (базовые):</td><td align='right'>{self.base_dir_total:,.2f}</td></tr>"
 
             if mat_adj != 0:
-                rows_html += f"<tr><td colspan='5' align='right' style='color: #64748b;'>В т.ч. материалы (база):</td><td align='right' style='color: #64748b;'>{self.base_mat_total:,.2f}</td></tr>"
+                rows_html += f"<tr><td colspan='5' align='right' style='color: #605E5C;'>В т.ч. материалы (база):</td><td align='right' style='color: #605E5C;'>{self.base_mat_total:,.2f}</td></tr>"
                 rows_html += f"<tr><td colspan='5' align='right'>Скидка/Надбавка на материалы ({mat_adj}%):</td><td align='right'>{(self.adj_mat_total - self.base_mat_total):,.2f}</td></tr>"
 
             if work_adj != 0:
-                rows_html += f"<tr><td colspan='5' align='right' style='color: #64748b;'>В т.ч. работы (база):</td><td align='right' style='color: #64748b;'>{self.base_work_total:,.2f}</td></tr>"
+                rows_html += f"<tr><td colspan='5' align='right' style='color: #605E5C;'>В т.ч. работы (база):</td><td align='right' style='color: #605E5C;'>{self.base_work_total:,.2f}</td></tr>"
                 rows_html += f"<tr><td colspan='5' align='right'>Скидка/Надбавка на работы ({work_adj}%):</td><td align='right'>{(self.adj_work_total - self.base_work_total):,.2f}</td></tr>"
 
             if tot_adj != 0:
@@ -700,7 +700,7 @@ class EstimateEditorDialog(QDialog):
             html = f"""
             <html><head><meta charset="utf-8"></head>
             <body style="font-family: '{font}', Arial, sans-serif; font-size: {f_size}px; padding: 20px; color: black;">
-                <div style="text-align: right; color: #64748b; font-size: {int(f_size)-2}px; margin-bottom: 10px;">{company}</div>
+                <div style="text-align: right; color: #605E5C; font-size: {int(f_size)-2}px; margin-bottom: 10px;">{company}</div>
                 <h1 style="color: {accent}; border-bottom: 2px solid {accent}; padding-bottom: 5px;">СМЕТА НА ОБЪЕКТ: {self.title}</h1>
                 <p><b>Дата:</b> {meta[0]} | <b>Заказчик:</b> {meta[1] or '—'} | <b>Телефон:</b> {meta[2] or '—'}</p>
                 <table border="1" cellpadding="6" cellspacing="0" style="border-collapse: collapse; width: 100%; border: 1px solid #cbd5e1; font-size: {f_size}px; margin-top: 15px;">
@@ -813,10 +813,10 @@ class EstimateEditorDialog(QDialog):
             html = f"""
             <html><head><meta charset="utf-8"></head>
             <body style="font-family: '{font}', Arial, sans-serif; font-size: {f_size}px; padding: 30px; color: black;">
-                <div style="text-align: right; color: #64748b; font-size: {int(f_size)-2}px; margin-bottom: 5px;">{company}</div>
+                <div style="text-align: right; color: #605E5C; font-size: {int(f_size)-2}px; margin-bottom: 5px;">{company}</div>
                 <div style="border-bottom: 3px solid {accent}; padding-bottom: 10px; margin-bottom: 20px;">
                     <h1 style="color: {accent}; margin: 0;">КАРТОЧКА КЛИЕНТА</h1>
-                    <p style="color: #64748b; margin: 5px 0 0 0; font-size: {f_size}px;">Объект / Шифр: <b>{self.title}</b></p>
+                    <p style="color: #605E5C; margin: 5px 0 0 0; font-size: {f_size}px;">Объект / Шифр: <b>{self.title}</b></p>
                 </div>
                 
                 <table width="100%" style="font-size: {f_size}px; margin-bottom: 25px; background: #f8fafc; padding: 15px; border-radius: 8px;">
@@ -828,7 +828,7 @@ class EstimateEditorDialog(QDialog):
                 <h3 style="color: #0f172a; border-left: 4px solid {accent}; padding-left: 10px;">Финансовая сводка</h3>
                 <table width="100%" style="font-size: {int(f_size)+1}px; margin-bottom: 30px; background: #f1f5f9; padding: 15px; border-radius: 8px;">
                     <tr><td width="30%"><b>Сумма сметы:</b></td><td><b>{total:,.2f} руб.</b></td></tr>
-                    <tr><td style="padding-top: 8px;"><b>Оплачено:</b></td><td style="color: #16a34a; padding-top: 8px;"><b>{paid:,.2f} руб.</b></td></tr>
+                    <tr><td style="padding-top: 8px;"><b>Оплачено:</b></td><td style="color: #15803D; padding-top: 8px;"><b>{paid:,.2f} руб.</b></td></tr>
                     <tr><td style="padding-top: 8px;"><b>Остаток долга:</b></td><td style="color: #dc2626; padding-top: 8px;"><b>{debt:,.2f} руб.</b></td></tr>
                 </table>
 
@@ -843,7 +843,7 @@ class EstimateEditorDialog(QDialog):
                     v = float(amt) if amt is not None else 0.0
                     html += f"<tr><td>{dt}</td><td>{v:,.2f} руб.</td></tr>"
             else:
-                html += "<tr><td colspan='2' style='text-align: center; color: #64748b; padding: 15px;'>Платежи по данному объекту пока не вносились</td></tr>"
+                html += "<tr><td colspan='2' style='text-align: center; color: #605E5C; padding: 15px;'>Платежи по данному объекту пока не вносились</td></tr>"
 
             html += """
                 </table>

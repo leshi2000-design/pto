@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                               QHBoxLayout, QPushButton, QLabel, QStackedWidget,
                               QFrame, QScrollArea, QMessageBox, QDialog, QLineEdit, QListWidget, QListWidgetItem)
 from PyQt6.QtGui import QFont
-from PyQt6.QtCore import Qt, QTimer, QLockFile
+from PyQt6.QtCore import QSize, Qt, QTimer, QLockFile
 from PyQt6.QtGui import QShortcut, QKeySequence
 from .workspace_view import WorkspaceView, open_record
 from .config import DATA_DIR
@@ -110,7 +110,7 @@ class MainWindow(QMainWindow):
         root_layout.setSpacing(0)
 
         sidebar = QFrame()
-        sidebar.setFixedWidth(232);sidebar.setObjectName("sidebar")
+        sidebar.setFixedWidth(264);sidebar.setObjectName("sidebar")
         self.sidebar_layout = QVBoxLayout(sidebar)
 
         logo = QLabel("СМЕТА · ГАЗ")
@@ -219,6 +219,7 @@ class MainWindow(QMainWindow):
                 name = config.get(tab_id, {}).get("name") or dict(KNOWN_TABS).get(tab_id, tab_id)
                 btn = QPushButton(name)
                 btn.setIcon(icon(tab_id))
+                btn.setIconSize(QSize(20, 20))
                 btn.setObjectName("navButton")
                 btn.setToolTip(name)
                 btn.setCheckable(True)
@@ -267,10 +268,11 @@ class MainWindow(QMainWindow):
         f_size = int(db.get_setting("font_size", "10"))
 
         app = QApplication.instance()
-        app.setFont(QFont(f_family, f_size))
-
-        from .theme import apply
-        apply(app,is_dark,f_family,f_size)
+        from . import theme
+        theme.apply(app,is_dark,f_family,f_size,accent)
+        from .icons import icon
+        for view, btn in zip(self.views, self.tabs_buttons):
+            btn.setIcon(icon(getattr(view, '_tab_id', 'workspace'), theme.icon_color(is_dark)))
 
         for view in self.views:
             if hasattr(view, 'refresh_ui'): view.refresh_ui()
