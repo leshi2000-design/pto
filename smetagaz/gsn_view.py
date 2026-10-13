@@ -69,7 +69,7 @@ class GsnContractDialog(QDialog):
 class GsnProjectsView(QWidget):
     def __init__(self):
         super().__init__();layout=QVBoxLayout(self);self.pager=RegistryPager(self);bar=QHBoxLayout();self.search=QLineEdit();self.search.setPlaceholderText('Договор, объект, клиент, телефон, адрес');bar.addWidget(self.search,1)
-        for label,fn in [('Создать договор',self.create),('Открыть карточку',self.edit),('Оплаты',self.open_payments),('Импорт из Excel…',self.import_excel),('Теги для шаблонов',self.show_tag_reference)]:b=QPushButton(label);b.clicked.connect(fn);bar.addWidget(b)
+        for label,fn in [('Создать договор',self.create),('Открыть карточку',self.edit),('Оплаты',self.open_payments),('Теги для шаблонов',self.show_tag_reference)]:b=QPushButton(label);b.clicked.connect(fn);bar.addWidget(b)
         layout.addLayout(bar);self.table=QTableWidget(0,7);self.table.setHorizontalHeaderLabels(['Договор','Дата','Объект строительства','Клиент','Телефон','Адрес объекта','Дата акта']);self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows);self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers);self.table.setColumnWidth(2,280);self.table.setColumnWidth(3,240);self.table.horizontalHeader().setStretchLastSection(True);layout.addWidget(self.table,1);self.table.cellDoubleClicked.connect(self.edit);self.search.textChanged.connect(self.load_data);self.load_data()
     def load_data(self,*_):
         q='%'+self.search.text().casefold()+'%';rows=self.pager.fetch("SELECT id,contract_number,contract_date,title,client_name,phone,address,act_date FROM gsn_projects WHERE LOWER(coalesce(contract_number,'')||' '||title||' '||coalesce(client_name,'')||' '||coalesce(phone,'')||' '||coalesce(address,'')) LIKE ? ORDER BY id DESC",(q,));self.table.setRowCount(len(rows))
@@ -80,10 +80,6 @@ class GsnProjectsView(QWidget):
         if r>=0:
             from .payments_view import PaymentsDialog
             PaymentsDialog('gsn_projects',self.table.item(r,0).data(Qt.ItemDataRole.UserRole),self).exec();self.load_data()
-    def import_excel(self):
-        from .gsn_import_view import ImportGsnDialog
-        ImportGsnDialog(self).exec()
-        self.load_data()
     def show_tag_reference(self):
         from .executive_workspace import TagReferenceDialog
         TagReferenceDialog('gsn_projects',self).exec()

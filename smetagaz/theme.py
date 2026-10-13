@@ -1,16 +1,18 @@
-"""Оформление в стиле Microsoft Office (Fluent): светлая и тёмная темы, крупный чёткий шрифт, контраст не ниже WCAG AA для основного текста."""
+"""Современное минималистичное оформление: светлая и тёмная темы, мягкие нейтральные цвета, скругления, тонкие разделители, один акцентный цвет.
+Контраст основного текста не ниже WCAG AA."""
 from PyQt6.QtCore import QObject, QEvent
 from PyQt6.QtGui import QFont, QColor, QPalette
 from PyQt6.QtWidgets import QWidget
 
-OFFICE_BLUE = '#185ABD'          # синий Word; прежний «небесный» акцент по умолчанию заменяется на него
-LEGACY_ACCENTS = {'#0284c7', '#2563eb', ''}
-FONT_FALLBACKS = ['Segoe UI', 'Segoe UI Variable', 'Calibri', 'Arial', 'Noto Sans', 'DejaVu Sans']
+MODERN_ACCENT = '#4F46E5'        # индиго; прежние акценты по умолчанию (небесный, синий Office) заменяются на него
+OFFICE_BLUE = MODERN_ACCENT      # прежнее имя
+LEGACY_ACCENTS = {'#0284c7', '#2563eb', '#185abd', ''}
+FONT_FALLBACKS = ['Inter', 'Segoe UI Variable', 'Segoe UI', 'Noto Sans', 'Arial', 'DejaVu Sans']
 
-LIGHT = dict(bg='#F3F2F1', panel='#FFFFFF', side='#FFFFFF', text='#201F1E', text2='#323130', muted='#605E5C', line='#E1DFDD', border='#8A8886', hover='#EDEBE9',
-             alt='#FAF9F8', disabled='#A19F9D', header='#F3F2F1', scroll='#C8C6C4', scroll_hover='#A19F9D')
-DARK = dict(bg='#1F1E1D', panel='#292827', side='#252423', text='#F3F2F1', text2='#E1DFDD', muted='#C8C6C4', line='#3B3A39', border='#8A8886', hover='#3B3A39',
-            alt='#2F2E2D', disabled='#797775', header='#323130', scroll='#605E5C', scroll_hover='#8A8886')
+LIGHT = dict(bg='#F7F7F8', panel='#FFFFFF', side='#FFFFFF', text='#18181B', text2='#3F3F46', muted='#5B5B66', line='#ECECEF', border='#D4D4DB', hover='#F1F1F4',
+             alt='#FAFAFB', disabled='#A1A1AA', header='#FFFFFF', scroll='#D4D4D8', scroll_hover='#A1A1AA')
+DARK = dict(bg='#111113', panel='#1A1A1E', side='#151518', text='#F4F4F5', text2='#D4D4D8', muted='#A1A1AA', line='#27272D', border='#3A3A42', hover='#25252B',
+            alt='#1E1E23', disabled='#6B6B75', header='#1A1A1E', scroll='#3F3F46', scroll_hover='#6B6B75')
 
 
 def mix(a, b, t):
@@ -28,14 +30,14 @@ def colors(dark=False, accent=''):
         c['accent_fg'] = mix(base, '#FFFFFF', 0.55)              # цвет акцентного текста на тёмном фоне
         c['accent_hover'] = mix(base, '#FFFFFF', 0.22)
         c['accent_press'] = base
-        c['sel'] = mix(base, '#000000', 0.25)
+        c['sel'] = mix(base, '#000000', 0.55)
         c['sel_text'] = '#FFFFFF'
     else:
         c['accent'] = base
         c['accent_fg'] = base
         c['accent_hover'] = mix(base, '#000000', 0.15)
         c['accent_press'] = mix(base, '#000000', 0.30)
-        c['sel'] = mix(base, '#FFFFFF', 0.85)
+        c['sel'] = mix(base, '#FFFFFF', 0.90)
         c['sel_text'] = c['text']
     return c
 
@@ -107,7 +109,7 @@ def accent_fg():
 
 
 def icon_color(dark=False):
-    return '#E1DFDD' if dark else '#323130'
+    return '#D4D4D8' if dark else '#3F3F46'
 
 
 def apply(app, dark=False, family='Segoe UI', size=10, accent=''):
@@ -117,7 +119,7 @@ def apply(app, dark=False, family='Segoe UI', size=10, accent=''):
     font.setFamilies([f for f in dict.fromkeys([family or FONT_FALLBACKS[0], *FONT_FALLBACKS])])
     font.setPointSize(max(10, min(14, int(size or 10))))
     font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
-    font.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
+    font.setHintingPreference(QFont.HintingPreference.PreferDefaultHinting)
     app.setFont(font)
     palette = QPalette()
     for role, color in [(QPalette.ColorRole.Window, c['bg']), (QPalette.ColorRole.WindowText, c['text']), (QPalette.ColorRole.Base, c['panel']), (QPalette.ColorRole.AlternateBase, c['alt']),
@@ -133,104 +135,104 @@ def apply(app, dark=False, family='Segoe UI', size=10, accent=''):
     app.setStyleSheet(f'''
     QWidget {{ color:{c['text']}; }}
     QMainWindow, QDialog {{ background:{c['bg']}; }}
-    QToolTip {{ background:{c['panel']}; color:{c['text']}; border:1px solid {c['border']}; padding:6px 8px; }}
+    QToolTip {{ background:{c['text']}; color:{c['panel']}; border:0; border-radius:6px; padding:6px 10px; }}
     QLabel {{ background:transparent; }}
 
-    /* Боковая панель: светлая «навигация» Office, выбранный пункт — акцентная полоса слева */
+    /* Боковая панель: белая, выбранный пункт — мягкая «таблетка» */
     QFrame#sidebar {{ background:{c['side']}; border:0; border-right:1px solid {c['line']}; }}
     QFrame#sidebar QLabel {{ color:{c['muted']}; }}
-    QLabel#brand {{ font-size:19px; font-weight:700; color:{c['accent_fg']}; padding:4px 6px; }}
+    QLabel#brand {{ font-size:18px; font-weight:700; color:{c['text']}; padding:6px 8px; }}
     QScrollArea#navigation {{ background:transparent; border:0; }}
     QWidget#navContent {{ background:{c['side']}; }}
-    QPushButton#navButton {{ text-align:left; background:transparent; color:{c['text2']}; border:0; border-left:3px solid transparent; border-radius:2px; padding:8px 12px; min-height:22px; font-weight:400; }}
+    QPushButton#navButton {{ text-align:left; background:transparent; color:{c['text2']}; border:0; border-radius:8px; padding:8px 12px; min-height:22px; font-weight:400; }}
     QPushButton#navButton:hover {{ background:{c['hover']}; color:{c['text']}; }}
-    QPushButton#navButton:checked {{ background:{c['sel']}; color:{c['accent_fg'] if not dark else c['sel_text']}; border-left:3px solid {c['accent_fg']}; font-weight:700; }}
-    QLabel#navSection {{ color:{c['muted']}; font-size:11px; font-weight:700; letter-spacing:1px; padding:6px 14px 2px 14px; background:transparent; }}
-    QFrame#navDivider {{ background:{c['line']}; border:0; max-height:1px; }}
+    QPushButton#navButton:checked {{ background:{c['sel']}; color:{c['accent_fg'] if not dark else '#FFFFFF'}; font-weight:600; }}
+    QLabel#navSection {{ color:{c['muted']}; font-size:11px; font-weight:600; letter-spacing:1px; padding:10px 14px 2px 14px; background:transparent; }}
+    QFrame#navDivider {{ background:transparent; border:0; max-height:0px; }}
 
     /* Заголовок страницы */
-    QFrame#pageHeader {{ background:{c['panel']}; border-bottom:1px solid {c['line']}; }}
-    QLabel#pageTitle {{ font-size:22px; font-weight:600; color:{c['text']}; }}
+    QFrame#pageHeader {{ background:{c['bg']}; border:0; }}
+    QLabel#pageTitle {{ font-size:24px; font-weight:600; color:{c['text']}; }}
     QLabel#pageSubtitle {{ color:{c['muted']}; font-size:12px; }}
 
-    /* Кнопки */
-    QPushButton {{ background:{c['panel']}; color:{c['text']}; border:1px solid {c['border']}; border-radius:2px; padding:5px 14px; min-height:22px; }}
-    QPushButton:hover {{ background:{c['hover']}; border-color:{c['muted']}; }}
+    /* Кнопки: плоские, с тонкой рамкой; главная — залитая акцентом */
+    QPushButton {{ background:{c['panel']}; color:{c['text']}; border:1px solid {c['border']}; border-radius:8px; padding:6px 14px; min-height:22px; }}
+    QPushButton:hover {{ background:{c['hover']}; }}
     QPushButton:pressed {{ background:{c['line']}; }}
-    QPushButton:focus {{ border:2px solid {c['accent_fg']}; padding:4px 13px; }}
+    QPushButton:focus {{ border:1px solid {c['accent_fg']}; }}
     QPushButton:disabled {{ color:{c['disabled']}; background:{c['alt']}; border-color:{c['line']}; }}
-    QPushButton:checked {{ background:{c['sel']}; border-color:{c['accent_fg']}; color:{c['sel_text'] if dark else c['accent_fg']}; font-weight:600; }}
+    QPushButton:checked {{ background:{c['sel']}; border-color:{c['sel']}; color:{c['sel_text'] if dark else c['accent_fg']}; font-weight:600; }}
     QPushButton[type="primary"] {{ background:{c['accent']}; border:1px solid {c['accent']}; color:#FFFFFF; font-weight:600; }}
     QPushButton[type="primary"]:hover {{ background:{c['accent_hover']}; border-color:{c['accent_hover']}; }}
     QPushButton[type="primary"]:pressed {{ background:{c['accent_press']}; }}
     QPushButton[type="primary"]:disabled {{ background:{c['line']}; border-color:{c['line']}; color:{c['disabled']}; }}
-    QPushButton[type="danger"] {{ color:{'#F1707B' if dark else '#A4262C'}; border-color:{'#F1707B' if dark else '#A4262C'}; }}
-    QPushButton[type="danger"]:hover {{ background:{'#442726' if dark else '#FDE7E9'}; }}
-    QPushButton[type="warning"] {{ color:{'#F7B955' if dark else '#8A5A00'}; border-color:{'#F7B955' if dark else '#8A5A00'}; }}
+    QPushButton[type="danger"] {{ color:{'#F87171' if dark else '#B91C1C'}; border-color:{'#7F2A2A' if dark else '#F3C5C5'}; }}
+    QPushButton[type="danger"]:hover {{ background:{'#3A1F21' if dark else '#FEF2F2'}; }}
+    QPushButton[type="warning"] {{ color:{'#FBBF24' if dark else '#92400E'}; border-color:{'#6B4E12' if dark else '#F3DDB0'}; }}
     QPushButton::menu-indicator {{ subcontrol-position:right center; subcontrol-origin:padding; right:6px; }}
 
-    /* Поля ввода: чёткая рамка и акцентная линия при вводе */
+    /* Поля ввода */
     QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox, QDoubleSpinBox, QDateEdit, QTimeEdit {{
-        background:{c['panel']}; color:{c['text']}; border:1px solid {c['border']}; border-radius:2px; padding:4px 8px; min-height:22px;
+        background:{c['panel']}; color:{c['text']}; border:1px solid {c['border']}; border-radius:8px; padding:5px 10px; min-height:22px;
         selection-background-color:{c['accent']}; selection-color:#FFFFFF; }}
-    QLineEdit:hover, QTextEdit:hover, QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover, QDateEdit:hover {{ border-color:{c['text2']}; }}
-    QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QDateEdit:focus, QTimeEdit:focus {{ border:1px solid {c['accent_fg']}; border-bottom:2px solid {c['accent_fg']}; }}
+    QLineEdit:hover, QTextEdit:hover, QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover, QDateEdit:hover {{ border-color:{c['muted']}; }}
+    QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QDateEdit:focus, QTimeEdit:focus {{ border:1px solid {c['accent_fg']}; }}
     QLineEdit:read-only {{ background:{c['alt']}; }}
     QLineEdit:disabled, QTextEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QDateEdit:disabled {{ background:{c['alt']}; color:{c['disabled']}; border-color:{c['line']}; }}
     QComboBox::drop-down, QDateEdit::drop-down {{ border:0; width:26px; subcontrol-origin:padding; subcontrol-position:center right; }}
     QComboBox::down-arrow, QDateEdit::down-arrow {{ image:url({arrows['down']}); width:14px; height:14px; }}
     QSpinBox, QDoubleSpinBox, QTimeEdit {{ padding-right:24px; }}
-    QSpinBox::up-button, QDoubleSpinBox::up-button, QTimeEdit::up-button {{ subcontrol-origin:border; subcontrol-position:top right; width:22px; border:0; border-left:1px solid {c['line']}; background:transparent; }}
-    QSpinBox::down-button, QDoubleSpinBox::down-button, QTimeEdit::down-button {{ subcontrol-origin:border; subcontrol-position:bottom right; width:22px; border:0; border-left:1px solid {c['line']}; background:transparent; }}
+    QSpinBox::up-button, QDoubleSpinBox::up-button, QTimeEdit::up-button {{ subcontrol-origin:border; subcontrol-position:top right; width:22px; border:0; background:transparent; }}
+    QSpinBox::down-button, QDoubleSpinBox::down-button, QTimeEdit::down-button {{ subcontrol-origin:border; subcontrol-position:bottom right; width:22px; border:0; background:transparent; }}
     QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover, QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {{ background:{c['hover']}; }}
     QSpinBox::up-arrow, QDoubleSpinBox::up-arrow, QTimeEdit::up-arrow {{ image:url({arrows['up']}); width:10px; height:10px; }}
     QSpinBox::down-arrow, QDoubleSpinBox::down-arrow, QTimeEdit::down-arrow {{ image:url({arrows['down']}); width:10px; height:10px; }}
-    QComboBox QAbstractItemView {{ background:{c['panel']}; color:{c['text']}; border:1px solid {c['border']}; selection-background-color:{c['sel']}; selection-color:{c['sel_text']}; outline:0; }}
+    QComboBox QAbstractItemView {{ background:{c['panel']}; color:{c['text']}; border:1px solid {c['border']}; border-radius:8px; selection-background-color:{c['sel']}; selection-color:{c['sel_text']}; outline:0; padding:4px; }}
     QCheckBox, QRadioButton {{ spacing:8px; min-height:22px; }}
     QCheckBox:disabled, QRadioButton:disabled {{ color:{c['disabled']}; }}
 
-    /* Таблицы и списки */
-    QTableView {{ qproperty-showGrid:false; qproperty-alternatingRowColors:true; }}
-    QTableView, QTreeView, QListView, QListWidget {{ background:{c['panel']}; alternate-background-color:{c['alt']}; color:{c['text']}; border:1px solid {c['line']}; border-radius:2px;
+    /* Таблицы и списки: без сетки, тонкие линии строк */
+    QTableView {{ qproperty-showGrid:false; qproperty-alternatingRowColors:false; }}
+    QTableView, QTreeView, QListView, QListWidget {{ background:{c['panel']}; alternate-background-color:{c['alt']}; color:{c['text']}; border:1px solid {c['line']}; border-radius:10px;
         selection-background-color:{c['sel']}; selection-color:{c['sel_text']}; outline:0; }}
-    QTableView::item, QTreeView::item, QListView::item {{ padding:4px 6px; border-bottom:1px solid {c['line']}; }}
+    QTableView::item, QTreeView::item, QListView::item {{ padding:5px 8px; border-bottom:1px solid {c['line']}; }}
     QTableView::item:selected, QTreeView::item:selected, QListView::item:selected {{ background:{c['sel']}; color:{c['sel_text']}; }}
     QTableView::item:hover, QTreeView::item:hover {{ background:{c['hover']}; }}
-    QHeaderView::section {{ background:{c['header']}; color:{c['text2']}; font-weight:600; padding:7px 8px; border:0; border-right:1px solid {c['line']}; border-bottom:1px solid {c['border']}; }}
+    QHeaderView::section {{ background:{c['header']}; color:{c['muted']}; font-weight:600; font-size:12px; padding:9px 10px; border:0; border-bottom:1px solid {c['border']}; }}
     QTableCornerButton::section {{ background:{c['header']}; border:0; border-bottom:1px solid {c['border']}; }}
 
-    /* Вкладки — как в ленте Office: подчёркивание выбранной */
-    QTabWidget::pane {{ background:{c['panel']}; border:1px solid {c['line']}; border-top:1px solid {c['line']}; top:-1px; }}
-    QTabBar::tab {{ background:transparent; color:{c['text2']}; border:0; border-bottom:3px solid transparent; padding:8px 16px; margin-right:2px; }}
-    QTabBar::tab:hover {{ background:{c['hover']}; color:{c['text']}; }}
-    QTabBar::tab:selected {{ color:{c['accent_fg']}; border-bottom:3px solid {c['accent_fg']}; font-weight:600; }}
+    /* Вкладки: тонкое подчёркивание выбранной */
+    QTabWidget::pane {{ background:{c['panel']}; border:1px solid {c['line']}; border-radius:10px; top:-1px; }}
+    QTabBar::tab {{ background:transparent; color:{c['muted']}; border:0; border-bottom:2px solid transparent; padding:8px 14px; margin-right:4px; }}
+    QTabBar::tab:hover {{ color:{c['text']}; }}
+    QTabBar::tab:selected {{ color:{c['accent_fg']}; border-bottom:2px solid {c['accent_fg']}; font-weight:600; }}
     QTabBar::tab:disabled {{ color:{c['disabled']}; }}
 
     /* Группы-карточки */
-    QGroupBox {{ background:{c['panel']}; border:1px solid {c['line']}; border-radius:4px; margin-top:16px; padding:16px 10px 10px; }}
-    QGroupBox::title {{ subcontrol-origin:margin; left:12px; padding:0 6px; color:{c['text2']}; font-weight:600; }}
-    QFrame#metricCard {{ background:{c['panel']}; border:1px solid {c['line']}; border-radius:4px; padding:12px; }}
+    QGroupBox {{ background:{c['panel']}; border:1px solid {c['line']}; border-radius:12px; margin-top:16px; padding:18px 12px 12px; }}
+    QGroupBox::title {{ subcontrol-origin:margin; left:14px; padding:0 6px; color:{c['text2']}; font-weight:600; }}
+    QFrame#metricCard {{ background:{c['panel']}; border:1px solid {c['line']}; border-radius:12px; padding:12px; }}
 
     /* Прокрутка */
     QScrollArea {{ border:0; background:transparent; }}
     QScrollBar:vertical {{ background:transparent; width:12px; margin:0; }}
-    QScrollBar::handle:vertical {{ background:{c['scroll']}; border-radius:3px; min-height:30px; margin:2px; }}
+    QScrollBar::handle:vertical {{ background:{c['scroll']}; border-radius:4px; min-height:30px; margin:2px; }}
     QScrollBar::handle:vertical:hover {{ background:{c['scroll_hover']}; }}
     QScrollBar:horizontal {{ background:transparent; height:12px; }}
-    QScrollBar::handle:horizontal {{ background:{c['scroll']}; border-radius:3px; min-width:30px; margin:2px; }}
+    QScrollBar::handle:horizontal {{ background:{c['scroll']}; border-radius:4px; min-width:30px; margin:2px; }}
     QScrollBar::handle:horizontal:hover {{ background:{c['scroll_hover']}; }}
     QScrollBar::add-line, QScrollBar::sub-line {{ height:0; width:0; }}
     QScrollBar::add-page, QScrollBar::sub-page {{ background:transparent; }}
 
-    QProgressBar {{ border:0; background:{c['line']}; border-radius:2px; text-align:center; color:{c['text']}; min-height:14px; }}
-    QProgressBar::chunk {{ background:{c['accent']}; border-radius:2px; }}
-    QMenu {{ background:{c['panel']}; color:{c['text']}; border:1px solid {c['border']}; padding:4px 0; }}
-    QMenu::item {{ padding:7px 28px 7px 20px; }}
+    QProgressBar {{ border:0; background:{c['line']}; border-radius:4px; text-align:center; color:{c['text']}; min-height:8px; }}
+    QProgressBar::chunk {{ background:{c['accent']}; border-radius:4px; }}
+    QMenu {{ background:{c['panel']}; color:{c['text']}; border:1px solid {c['line']}; border-radius:10px; padding:6px; }}
+    QMenu::item {{ padding:7px 26px 7px 14px; border-radius:6px; }}
     QMenu::item:selected {{ background:{c['hover']}; color:{c['text']}; }}
     QMenu::item:disabled {{ color:{c['disabled']}; }}
-    QMenu::separator {{ height:1px; background:{c['line']}; margin:4px 0; }}
-    QSplitter::handle {{ background:{c['line']}; }}
-    QSplitter::handle:horizontal {{ width:1px; }} QSplitter::handle:vertical {{ height:1px; }}
+    QMenu::separator {{ height:1px; background:{c['line']}; margin:4px 6px; }}
+    QSplitter::handle {{ background:transparent; }}
+    QSplitter::handle:horizontal {{ width:6px; }} QSplitter::handle:vertical {{ height:6px; }}
     QDialogButtonBox QPushButton {{ min-width:84px; }}
     QCalendarWidget QAbstractItemView {{ selection-background-color:{c['accent']}; selection-color:#FFFFFF; }}
     QCalendarWidget QToolButton {{ color:{c['text']}; background:transparent; border:0; padding:4px 8px; }}

@@ -25,6 +25,7 @@ class ContractsRegistryView(QWidget):
         top_bar.addWidget(btn_new)
         payments=QPushButton("Оплаты");payments.clicked.connect(self.open_payments);top_bar.addWidget(payments)
         acts=QPushButton("Ведомость актов…");acts.setToolTip("Подписанные акты за календарный месяц для бухгалтерии");acts.clicked.connect(lambda:__import__("smetagaz.acts_statement_view",fromlist=["x"]).ActsStatementDialog("contracts",self).exec());top_bar.addWidget(acts)
+        imp_btn=QPushButton("Импорт из Excel…");imp_btn.setToolTip("Загрузить договоры монтажа ГСВ из таблицы Excel");imp_btn.clicked.connect(self.import_excel);top_bar.addWidget(imp_btn)
         tags=QPushButton("Теги для шаблонов");tags.clicked.connect(self.show_tag_reference);top_bar.addWidget(tags)
         top_bar.addSpacing(20)
 
@@ -117,6 +118,11 @@ class ContractsRegistryView(QWidget):
     def new_contract(self):
         dlg = ContractCardDialog(parent=self)
         dlg.exec()
+        self.load_data()
+
+    def import_excel(self):
+        from .gsvm_import_view import ImportGsvmDialog
+        ImportGsvmDialog(self).exec()
         self.load_data()
 
     def open_contract(self):

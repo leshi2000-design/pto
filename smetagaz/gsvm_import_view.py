@@ -1,38 +1,38 @@
-"""Окно импорта договоров «Монтаж ГСН» из Excel: привязка столбцов, проверка, импорт."""
+"""Окно импорта договоров «Монтаж ГСВ» из Excel: привязка столбцов, проверка, импорт."""
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QComboBox, QTableWidget, QTableWidgetItem, QFileDialog, QMessageBox,
                               QHeaderView, QAbstractItemView, QGroupBox)
 from PyQt6.QtGui import QColor
 
 from .database import db
-from . import gsn_project_import as imp
+from . import gsvm_import as imp
 
 STATUS_TEXT = {'new': ('Новый', '#16A34A'), 'exists': ('Уже есть', '#D97706'), 'error': ('Ошибка', '#DC2626')}
 
 
-class ImportGsnDialog(QDialog):
+class ImportGsvmDialog(QDialog):
     def __init__(self, parent=None, path=''):
         super().__init__(parent)
-        self.setWindowTitle('Импорт договоров из Excel · Монтаж ГСН')
+        self.setWindowTitle('Импорт договоров из Excel · Монтаж ГСВ')
         self.resize(1250, 860)
         self.headers, self.rows, self.header_row, self.prepared, self.combos = [], [], 1, [], []
         layout = QVBoxLayout(self)
         bar = QHBoxLayout()
         self.path = QLineEdit(path)
         self.path.setReadOnly(True)
-        self.path.setPlaceholderText('Файл Excel (.xlsx) с таблицей договоров ГСН')
+        self.path.setPlaceholderText('Файл Excel (.xlsx) с таблицей договоров ГСВ')
         browse = QPushButton('Выбрать файл…')
         browse.clicked.connect(self.browse)
         bar.addWidget(self.path, 1)
         bar.addWidget(browse)
         layout.addLayout(bar)
-        grp = QGroupBox('Привязка столбцов таблицы к графам договора ГСН')
+        grp = QGroupBox('Привязка столбцов таблицы к графам договора ГСВ')
         gl = QVBoxLayout(grp)
         self.hint = QLabel('Выберите файл — столбцы подберутся по названиям: № договора, Адрес, Заказчик, Телефон, Паспортные данные, Дата заключения, Стоимость, Дата акта, '
                            'Проект, ПГ-4, Котел, Счетчик, Сигнализатор, Регулятор. Для оборудования отметка («+», «да», «1») создаёт запись, число — столько записей, текст — модель.')
         self.hint.setWordWrap(True)
         gl.addWidget(self.hint)
         self.map_table = QTableWidget(0, 3)
-        self.map_table.setHorizontalHeaderLabels(['Столбец таблицы', 'Пример значения', 'Графа договора ГСН'])
+        self.map_table.setHorizontalHeaderLabels(['Столбец таблицы', 'Пример значения', 'Графа договора ГСВ'])
         self.map_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.map_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.map_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
@@ -76,7 +76,7 @@ class ImportGsnDialog(QDialog):
             self.load_file(path)
 
     def browse(self):
-        path, _ = QFileDialog.getOpenFileName(self, 'Таблица договоров ГСН', '', 'Excel (*.xlsx *.xlsm)')
+        path, _ = QFileDialog.getOpenFileName(self, 'Таблица договоров ГСВ', '', 'Excel (*.xlsx *.xlsm)')
         if path:
             self.load_file(path)
 
