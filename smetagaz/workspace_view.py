@@ -161,6 +161,9 @@ class WorkspaceView(QWidget):
         if self.query.text().strip():
             pattern='%'+self.query.text().strip().casefold().replace('\\','\\\\').replace('%','\\%').replace('_','\\_')+'%'
             where=' WHERE '+' OR '.join(f'LOWER({f}) LIKE ? ESCAPE \'\\\'' for f in fields);params=[pattern]*len(fields)
+            if source=='crm.clients':       # клиенты: слова, телефон (без учёта пробелов и скобок) и адрес
+                from .registry_tools import search_clause
+                clause,found=search_clause(self.query.text(),['name','phone','address'],['phone']);where=' WHERE '+clause;params=found
         all_cols=[r[1] for r in db.fetchall('PRAGMA '+('crm.table_info(clients)' if source=='crm.clients' else f'table_info({source})'))]
         self.filters.set_columns(all_cols)
         query,params=self.filters.apply(f'SELECT * FROM {source}{where} ORDER BY id DESC',params)

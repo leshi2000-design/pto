@@ -25,7 +25,7 @@ KEY_TABLES = ('estimates', 'contracts', 'gsv_projects', 'le_contracts', 'smr_con
 
 def settings(db):
     folder = db.get_setting('offsite_dir', '')
-    return dict(folder=folder, password=db.get_setting('offsite_password', ''), keep=int(db.get_setting('offsite_keep', str(DEFAULT_KEEP)) or DEFAULT_KEEP),
+    return dict(folder=folder, password=__import__('smetagaz.secret_store', fromlist=['x']).get_secret(db, 'offsite_password'), keep=int(db.get_setting('offsite_keep', str(DEFAULT_KEEP)) or DEFAULT_KEEP),
                 interval_h=int(db.get_setting('offsite_interval_h', str(DEFAULT_INTERVAL_H)) or DEFAULT_INTERVAL_H), enabled=db.get_setting('offsite_enabled', '0') == '1')
 
 
@@ -60,7 +60,7 @@ def list_copies(folder):
     return sorted((p for p in folder.glob(PREFIX + '*' + SUFFIX) if p.is_file()), key=lambda p: p.name)
 
 
-def make_copy(db, now=None):
+def make_copy(db, now=None, progress=None):
     """Создаёт зашифрованную копию в папке, удаляет старые сверх лимита. Возвращает путь к новой копии."""
     s = settings(db)
     now = now or datetime.now()
@@ -72,7 +72,9 @@ def make_copy(db, now=None):
     target = folder / f'{PREFIX}{now:%Y%m%d_%H%M%S}{SUFFIX}'
     with tempfile.TemporaryDirectory(prefix='smetagaz-offsite-') as tmp:
         archive = Path(tmp) / 'data.zip'
-        create_backup(db, archive)
+        create_backup(db, archive, progress)
+        if progress:
+            progress(0, 0, 'Шифрование копии')
         part = folder / (target.name + '.part')
         try:
             encrypt_backup(archive, part, s['password'])

@@ -134,7 +134,7 @@ def cell_text(value):
 
 # --- подготовка и импорт -----------------------------------------------------------------------
 
-def prepare(db, rows, mapping):
+def prepare(db, rows, mapping, ctx=None):
     """Разбирает строки по привязке столбцов. Возвращает список {row, data, status, messages}.
 
     status: new — будет создан, exists — ПД уже есть в программе, error — строка пропускается.
@@ -142,6 +142,8 @@ def prepare(db, rows, mapping):
     by_field = {key: idx for idx, key in mapping.items() if key}
     result, seen = [], set()
     for number, row in enumerate(rows, 1):
+        if ctx:
+            ctx.progress(number, len(rows), f'Проверка строки {number} из {len(rows)}')
         data, messages, error = {}, [], False
         for key, idx in by_field.items():
             value = row[idx] if idx < len(row) else None
@@ -204,7 +206,7 @@ def _save_client_for(db, data):
     return save_client(db, values, cid)
 
 
-def import_rows(db, prepared, on_exists='skip', infer_statuses=True):
+def import_rows(db, prepared, on_exists='skip', infer_statuses=True, ctx=None):
     """Создаёт (и при on_exists='update' обновляет) договоры. Возвращает счётчики и список ошибок."""
     report = dict(created=0, updated=0, skipped=0, errors=[])
     todo = sorted((p for p in prepared if p['status'] != 'error'), key=lambda p: (p['data']['year'] or 99, p['data']['seq'] or 9999, p['row']))
@@ -212,7 +214,13 @@ def import_rows(db, prepared, on_exists='skip', infer_statuses=True):
         if p['status'] == 'error':
             report['errors'].append((p['row'], '; '.join(p['messages'])))
     ids = {r[1]: r[0] for kind in ('work', 'client') for r in gd.catalog(db, kind)}
-    for p in todo:
+    for n, p in enumerate(todo, 1):
+        if ctx:
+            try:
+                ctx.progress(n, len(todo), f'Импорт строки {p["row"]} ({n} из {len(todo)})')
+            except Exception:       # отмена: сохранённые строки остаются
+                report['cancelled'] = len(todo) - n + 1
+                break
         data = p['data']
         if p['status'] == 'exists' and on_exists != 'update':
             report['skipped'] += 1

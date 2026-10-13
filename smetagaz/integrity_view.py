@@ -53,11 +53,15 @@ class IntegrityDialog(QDialog):
         layout.addLayout(bar)
 
     def check(self):
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        try:
-            self.findings = integrity.check(db)
-        finally:
-            QApplication.restoreOverrideCursor()
+        from . import background
+        if getattr(self, 'job', None) is not None and not self.job.finished:
+            return
+        self.summary.setText('Проверка выполняется…')
+        self.job = background.run(self, 'Проверка целостности базы', lambda ctx: integrity.check(db), done=self.show_findings,
+                                  error=lambda e: self.summary.setText(f'Проверка не выполнена: {e}'), cancelled=lambda: self.summary.setText('Проверка отменена.'))
+
+    def show_findings(self, findings):
+        self.findings = findings
         counts = integrity.summary(self.findings)
         self.table.setRowCount(len(self.findings))
         for r, f in enumerate(self.findings):

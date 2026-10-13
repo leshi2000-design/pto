@@ -74,11 +74,13 @@ def find_existing(db, data):
     return row[0] if row else None
 
 
-def prepare(db, rows, mapping):
+def prepare(db, rows, mapping, ctx=None):
     """Разбирает строки. status: new — будет создан, exists — договор с таким номером уже есть, error — пропускается."""
     by_field = {key: idx for idx, key in mapping.items() if key}
     result, seen = [], set()
     for number, row in enumerate(rows, 1):
+        if ctx:
+            ctx.progress(number, len(rows), f'Проверка строки {number} из {len(rows)}')
         data, messages, error = {}, [], False
         for key, idx in by_field.items():
             value = row[idx] if idx < len(row) else None
@@ -112,7 +114,7 @@ def prepare(db, rows, mapping):
     return result
 
 
-def import_rows(db, prepared, on_exists='skip'):
+def import_rows(db, prepared, on_exists='skip', ctx=None):
     """Создаёт (и при on_exists='update' обновляет) договоры монтажа ГСВ с клиентами и оборудованием."""
     import re as _re
     from .gsv_domain import get_client
@@ -120,7 +122,14 @@ def import_rows(db, prepared, on_exists='skip'):
     for p in prepared:
         if p['status'] == 'error':
             report['errors'].append((p['row'], '; '.join(p['messages'])))
-    for p in sorted((p for p in prepared if p['status'] != 'error'), key=lambda p: p['row']):
+    todo = sorted((p for p in prepared if p['status'] != 'error'), key=lambda p: p['row'])
+    for n, p in enumerate(todo, 1):
+        if ctx:
+            try:
+                ctx.progress(n, len(todo), f'Импорт строки {p["row"]} ({n} из {len(todo)})')
+            except Exception:       # отмена: уже сохранённые строки остаются, остальные не обрабатываются
+                report['cancelled'] = len(todo) - n + 1
+                break
         data = p['data']
         if p['status'] == 'exists' and on_exists != 'update':
             report['skipped'] += 1

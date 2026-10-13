@@ -3,6 +3,13 @@ from pathlib import Path
 folder=tempfile.TemporaryDirectory();os.environ['SMETAGAZ_DATA_DIR']=folder.name;os.environ.setdefault('QT_QPA_PLATFORM','offscreen');sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from PyQt6.QtWidgets import QApplication,QMessageBox,QFileDialog
 app=QApplication([])
+
+def wait(owner):
+    import time
+    end=time.time()+15
+    job=getattr(owner,'job',None)
+    import smetagaz.background as bg
+    while job is not None and job in bg._ACTIVE and time.time()<end:app.processEvents();time.sleep(0.01)
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from smetagaz.theme import apply
 apply(app)
@@ -21,12 +28,12 @@ for section,expected in (('gsv_projects','Иванов'),('contracts','Козл�
     QFileDialog.getExistingDirectory=staticmethod(lambda *a,**k:str(Path(folder.name)/'acts'));d.collect();assert (Path(folder.name)/'acts').exists()
 # --- проверка базы ---
 db.execute("INSERT INTO contracts(contract_number,client_id,client_name) VALUES('9',999,'Призрак')")
-dlg=iv.IntegrityDialog();dlg.check();assert dlg.table.rowCount()>=1 and dlg.fix.isEnabled() and 'Ошибок: 1' in dlg.summary.text()
-dlg.fix_clients();assert not dlg.fix.isEnabled() and list((Path(folder.name)/'backups').glob('before_integrity_fix_*'))
+dlg=iv.IntegrityDialog();dlg.check();wait(dlg);assert dlg.table.rowCount()>=1 and dlg.fix.isEnabled() and 'Ошибок: 1' in dlg.summary.text()
+dlg.fix_clients();wait(dlg);assert not dlg.fix.isEnabled() and list((Path(folder.name)/'backups').glob('before_integrity_fix_*'))
 # --- резервная копия перед импортом ---
 import smetagaz.gsv_import_view as gi
 from test_gsv_import import make_xlsx,ROWS
-x=Path(folder.name)/'c.xlsx';make_xlsx(x,ROWS[:2]);im=gi.ImportProjectsDialog(None,str(x));im.check();im.do_import()
+x=Path(folder.name)/'c.xlsx';make_xlsx(x,ROWS[:2]);im=gi.ImportProjectsDialog(None,str(x));im.check();wait(im);im.do_import();wait(im)
 assert len(list((Path(folder.name)/'backups').glob('before_import_*')))==1
 # --- удаление клиента делает копию ---
 import smetagaz.workspace_view as wv

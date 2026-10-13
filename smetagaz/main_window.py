@@ -37,6 +37,7 @@ from .gsn_catalog import GsnCatalogView
 from .estimates_ui import EstimatesModule
 from .extra_views import GsnProjectsView, WeldersView, CalculatorsView, WriteoffView
 from .legal_entities_view import LegalEntitiesView
+from .audit_view import AuditView
 from .counterparty_ui import SmrView
 
 class GlobalSearchDialog(QDialog):
@@ -82,7 +83,7 @@ NAV_SECTIONS = [
     ('Услуги', ['gsv', 'contracts', 'gsn', 'smr']),
     ('Сметы', ['estimates']),
     ('Контрагенты', ['clients', 'legal_entities']),
-    ('Дополнительно', ['welders', 'writeoff', 'calculators', 'stats', 'exec', 'workspace']),
+    ('Дополнительно', ['welders', 'writeoff', 'calculators', 'stats', 'exec', 'workspace', 'audit']),
     ('Справочники', ['gsv_catalog', 'gsn_catalog', 'materials']),
     ('Настройки', ['settings']),
 ]
@@ -90,7 +91,7 @@ KNOWN_TABS = [
     ("tasks", "Сегодня"), ("gsv", "Проекты ГСВ"), ("contracts", "Монтаж ГСВ"), ("gsn", "Монтаж ГСН"), ("smr", "СМР"),
     ("clients", "Клиенты"), ("legal_entities", "Юрлица"),
     ("welders", "Сварщики"), ("writeoff", "Списание"), ("calculators", "Калькуляторы"), ("stats", "Статистика"),
-    ("estimates", "Реестр смет"), ("exec", "Исполнительная док."), ("workspace", "Все реестры · быстрый обзор"),
+    ("estimates", "Реестр смет"), ("exec", "Исполнительная док."), ("workspace", "Все реестры · быстрый обзор"), ("audit", "Журнал и корзина"),
     ("gsv_catalog", "Справочники ГСВ"), ("gsn_catalog", "Справочник ГСН"), ("materials", "Справочник"),
     ("settings", "Настройки"),
 ]
@@ -118,11 +119,15 @@ class MainWindow(QMainWindow):
         sidebar.setFixedWidth(264);sidebar.setObjectName("sidebar")
         self.sidebar_layout = QVBoxLayout(sidebar)
 
+        brand_row = QHBoxLayout()
+        brand_row.setContentsMargins(6, 4, 6, 4)
+        self.logo_mark = QLabel()
+        self.logo_mark.setFixedSize(40, 40)
         logo = QLabel("ПТО")
         logo.setObjectName("brand")
-
-        logo.setWordWrap(True)
-        self.sidebar_layout.addWidget(logo)
+        brand_row.addWidget(self.logo_mark)
+        brand_row.addWidget(logo, 1)
+        self.sidebar_layout.addLayout(brand_row)
 
         btn_search = QPushButton("Поиск · Ctrl+K")
         btn_search.setProperty("type","primary")
@@ -144,6 +149,7 @@ class MainWindow(QMainWindow):
 
         self.view_classes = {
             "workspace": WorkspaceView,
+            "audit": AuditView,
             "clients": lambda: WorkspaceView("crm.clients"),
             "tasks": TodayView,
             "estimates": EstimatesModule,
@@ -335,7 +341,8 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         from . import theme
         theme.apply(app,is_dark,f_family,f_size,accent)
-        from .icons import icon
+        from .icons import icon, logo_pixmap
+        self.logo_mark.setPixmap(logo_pixmap('#3DB2A3' if is_dark else '#1B5E57', 40))
         for view, btn in zip(self.views, self.tabs_buttons):
             btn.setIcon(icon(getattr(view, '_tab_id', 'workspace'), theme.icon_color(is_dark)))
 

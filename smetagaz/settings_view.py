@@ -42,8 +42,7 @@ class SettingsView(QWidget):
         self.backup_status.setWordWrap(True);layout.addWidget(self.backup_status)
         btn_password=QPushButton('Установить / изменить пароль входа')
         btn_password.clicked.connect(self.change_password);layout.addWidget(btn_password)
-        self.pool=ThreadPoolExecutor(max_workers=1);self.job=None;self.job_callback=None
-        self.job_timer=QTimer(self);self.job_timer.timeout.connect(self.poll_job)
+        self.job=None
         layout.addWidget(QLabel('Пароль входа защищает интерфейс. Базы на диске не зашифрованы.\nДля защиты диска используйте шифрование средствами ОС.'))
 
         # 1. Интерфейс: Название и вкладки
@@ -268,17 +267,17 @@ class SettingsView(QWidget):
         try:db.set_setting('password_hash',password_hash(new));QMessageBox.information(self,'Пароль','Пароль установлен')
         except ValueError as e:QMessageBox.warning(self,'Пароль',str(e))
 
-    def start_job(self,fn,callback):
-        if self.job and not self.job.done():
+    def start_job(self,fn,callback,title='Резервная копия'):
+        """Операция в фоне с окном прогресса и кнопкой «Отмена»; fn(ctx) получает ctx.progress / ctx.check."""
+        if getattr(self,'job',None) is not None and not self.job.finished:
             QMessageBox.information(self,'Операция','Дождитесь завершения текущей операции');return
-        self.job_callback=callback;self.job=self.pool.submit(fn);self.job_timer.start(100)
+        from . import background
         self.backup_status.setText('Выполняется операция с копией…')
-
-    def poll_job(self):
-        if not self.job or not self.job.done():return
-        self.job_timer.stop()
-        try:self.job_callback(self.job.result())
-        except Exception as e:QMessageBox.critical(self,'Копия',str(e));self.backup_status.setText('Ошибка: '+str(e))
+        def failed(error):
+            QMessageBox.critical(self,title,str(error));self.backup_status.setText('Ошибка: '+str(error))
+        def cancelled():
+            self.backup_status.setText('Операция отменена: прежние файлы не изменены.')
+        self.job=background.run(self,title,fn,done=callback,error=failed,cancelled=cancelled)
 
     def do_backup(self):
         path,chosen=QFileDialog.getSaveFileName(self,'Полная резервная копия','smetagaz_backup.sgb','Зашифрованная копия (*.sgb);;Обычная копия (*.zip)')
@@ -292,16 +291,17 @@ class SettingsView(QWidget):
             if len(password)<10:QMessageBox.warning(self,'Пароль','Минимум 10 символов');return
             repeat,ok=QInputDialog.getText(self,'Копия','Повторите пароль копии:',QLineEdit.EchoMode.Password)
             if not ok or repeat!=password:QMessageBox.warning(self,'Пароль','Пароли не совпали');return
-        def work():
-            if not encrypted:return create_backup(db,path)
+        def work(ctx):
+            if not encrypted:return create_backup(db,path,ctx.progress)
             with tempfile.TemporaryDirectory(dir=Path(path).parent) as tmp:
-                archive=Path(tmp)/'data.zip';result=create_backup(db,archive)
+                archive=Path(tmp)/'data.zip';result=create_backup(db,archive,ctx.progress)
+                ctx.progress(0,0,'Шифрование копии');ctx.check()
                 output=Path(tmp)/'encrypted.sgb';encrypt_backup(archive,output,password);os.replace(output,path)
                 return result
         def done(result):
             message=f'Копия сохранена. Отсутствующих исходных файлов: {len(result["missing"])}.'
             self.backup_status.setText(message);QMessageBox.information(self,'Копия',message)
-        self.start_job(work,done)
+        self.start_job(work,done,'Восстановление из копии')
 
     # --- копия вне компьютера
     def off_refresh(self):
@@ -320,7 +320,7 @@ class SettingsView(QWidget):
     def off_save(self):
         db.set_setting('offsite_enabled', '1' if self.off_enabled.isChecked() else '0')
         db.set_setting('offsite_dir', self.off_dir.text().strip())
-        db.set_setting('offsite_password', self.off_password.text())
+        __import__('smetagaz.secret_store', fromlist=['x']).set_secret(db, 'offsite_password', self.off_password.text())
         db.set_setting('offsite_interval_h', self.off_interval.value())
         db.set_setting('offsite_keep', self.off_keep.value())
         self.off_refresh()
@@ -330,41 +330,50 @@ class SettingsView(QWidget):
     def off_now(self):
         self.off_save_silent()
         from . import offsite_backup as ob
-        self.start_job(lambda: str(ob.make_copy(db)), lambda path: (self.off_refresh(), QMessageBox.information(self, 'Копия', 'Копия создана:\n' + path)))
+        self.start_job(lambda ctx: str(ob.make_copy(db, progress=ctx.progress)), lambda path: (self.off_refresh(), QMessageBox.information(self, 'Копия', 'Копия создана:\n' + path)))
 
     def off_verify_now(self):
         self.off_save_silent()
         from . import offsite_backup as ob
-        self.start_job(lambda: ob.verify_latest(db), lambda message: (self.off_refresh(), QMessageBox.information(self, 'Проверка восстановлением', message)))
+        self.start_job(lambda ctx: ob.verify_latest(db), lambda message: (self.off_refresh(), QMessageBox.information(self, 'Проверка восстановлением', message)))
 
     def off_save_silent(self):
         db.set_setting('offsite_dir', self.off_dir.text().strip())
-        db.set_setting('offsite_password', self.off_password.text())
+        __import__('smetagaz.secret_store', fromlist=['x']).set_secret(db, 'offsite_password', self.off_password.text())
 
     def contracts_excel_path(self):
         return Path(db.db_name).parent / 'excel_reports' / EXPORT_FILENAME
 
     def export_contracts_excel_now(self):
         path = self.contracts_excel_path()
-        now = datetime.now()
-        try:
-            gsv_count, gsn_count = export_registries(db, path)
-            message = f'{now:%d.%m.%Y %H:%M}: ГСВ {gsv_count}, ГСН {gsn_count} строк — {path}'
-            db.set_setting('last_contracts_excel', now.isoformat())
-        except Exception as e:
-            message = f'{now:%d.%m.%Y %H:%M}: ошибка экспорта — {e}'
-        db.set_setting('contracts_excel_status', message)
-        self.contracts_excel_status.setText(message)
-        try:
-            from .gsv_project_domain import export_cards, EXPORT_FILENAME as PROJECTS_FILE
-            ppath = path.parent / PROJECTS_FILE
-            count = export_cards(db, ppath)
-            pmessage = f'{now:%d.%m.%Y %H:%M}: проекты ГСВ, карточек {count} — {ppath}'
-            db.set_setting('last_projects_excel', now.isoformat())
-        except Exception as e:
-            pmessage = f'{now:%d.%m.%Y %H:%M}: ошибка экспорта — {e}'
-        db.set_setting('projects_excel_status', pmessage)
-        self.projects_excel_status.setText(pmessage)
+
+        def work(ctx):
+            now = datetime.now()
+            out = {}
+            ctx.progress(0, 2, 'Реестры договоров…')
+            try:
+                gsv_count, gsn_count = export_registries(db, path)
+                out['registry'] = f'{now:%d.%m.%Y %H:%M}: ГСВ {gsv_count}, ГСН {gsn_count} строк — {path}'
+                db.set_setting('last_contracts_excel', now.isoformat())
+            except Exception as e:
+                out['registry'] = f'{now:%d.%m.%Y %H:%M}: ошибка экспорта — {e}'
+            ctx.progress(1, 2, 'Карточки проектов ГСВ…')
+            try:
+                from .gsv_project_domain import export_cards, EXPORT_FILENAME as PROJECTS_FILE
+                ppath = path.parent / PROJECTS_FILE
+                count = export_cards(db, ppath)
+                out['projects'] = f'{now:%d.%m.%Y %H:%M}: проекты ГСВ, карточек {count} — {ppath}'
+                db.set_setting('last_projects_excel', now.isoformat())
+            except Exception as e:
+                out['projects'] = f'{now:%d.%m.%Y %H:%M}: ошибка экспорта — {e}'
+            db.set_setting('contracts_excel_status', out['registry'])
+            db.set_setting('projects_excel_status', out['projects'])
+            return out
+
+        def done(out):
+            self.contracts_excel_status.setText(out['registry'])
+            self.projects_excel_status.setText(out['projects'])
+        self.start_job(work, done, 'Выгрузка в Excel')
 
     def open_contracts_excel_folder(self):
         from .platform_utils import open_local
@@ -382,11 +391,14 @@ class SettingsView(QWidget):
         if path.lower().endswith('.sgb'):
             password,ok=QInputDialog.getText(self,'Копия','Пароль копии:',QLineEdit.EchoMode.Password)
             if not ok:return
-        def work():
-            if not path.lower().endswith('.sgb'):return restore_backup(path,destination)
+        def work(ctx):
+            if not path.lower().endswith('.sgb'):
+                ctx.progress(0,0,'Проверка и распаковка копии');return restore_backup(path,destination)
             with tempfile.TemporaryDirectory(dir=parent) as tmp:
-                archive=Path(tmp)/'data.zip';decrypt_backup(path,archive,password);return restore_backup(archive,destination)
+                ctx.progress(0,0,'Расшифровка копии')
+                archive=Path(tmp)/'data.zip';decrypt_backup(path,archive,password)
+                ctx.progress(0,0,'Проверка и распаковка копии');return restore_backup(archive,destination)
         def done(result):
             message=f'Данные проверены и восстановлены в {destination}.\nДля запуска выберите эту папку: python run.py --data-dir "{destination}".\nТекущие данные не изменены.'
             self.backup_status.setText(message);QMessageBox.information(self,'Восстановлено',message)
-        self.start_job(work,done)
+        self.start_job(work,done,'Восстановление из копии')

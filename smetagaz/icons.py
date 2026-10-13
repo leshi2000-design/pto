@@ -2,6 +2,7 @@ from PyQt6.QtGui import QIcon,QPixmap,QPainter
 from PyQt6.QtCore import QByteArray,Qt
 from PyQt6.QtSvg import QSvgRenderer
 PATHS={
+'audit':'M3 12a9 9 0 1 0 3-6.7 M3 4v5h5 M12 7v5l3 2',
 'workspace':'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',
 'clients':'M9 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M2 21v-2a7 7 0 0 1 14 0v2 M17 4a4 4 0 0 1 0 8 M19 15a5 5 0 0 1 3 5',
 'tasks':'M9 5h12 M9 12h12 M9 19h12 M2 5l2 2 3-4 M2 12l2 2 3-4 M2 19l2 2 3-4',
@@ -23,3 +24,21 @@ PATHS={
 def icon(name,color='#bdcce1'):
     svg=f'<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="{PATHS.get(name,PATHS["workspace"])}" fill="none" stroke="{color}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>'
     pix=QPixmap(48,48);pix.fill(Qt.GlobalColor.transparent);p=QPainter(pix);QSvgRenderer(QByteArray(svg.encode())).render(p);p.end();return QIcon(pix)
+
+
+def logo_pixmap(color='#1B5E57', size=40):
+    """Знак «ПТО» (assets/icon.svg) нужного цвета и размера (с учётом масштаба экрана)."""
+    from pathlib import Path
+    from PyQt6.QtGui import QPixmap, QPainter, QColor
+    from PyQt6.QtCore import QByteArray, Qt
+    from PyQt6.QtSvg import QSvgRenderer
+    svg = (Path(__file__).parent / 'assets' / 'icon.svg').read_text(encoding='utf-8').replace('#1B5E57', color)
+    side = size * 2
+    pix = QPixmap(side, side)
+    pix.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    QSvgRenderer(QByteArray(svg.encode())).render(painter)
+    painter.end()
+    pix.setDevicePixelRatio(2)
+    return pix

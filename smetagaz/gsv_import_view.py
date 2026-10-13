@@ -134,7 +134,14 @@ class ImportProjectsDialog(QDialog):
         if 'client_name' not in used:
             QMessageBox.warning(self, 'Привязка', 'Укажите столбец с заказчиком — без него клиента не создать.')
             return
-        self.prepared = imp.prepare(db, self.rows, mapping)
+        from . import background
+        self.summary.setText('Проверка строк…')
+        self.run.setEnabled(False)
+        self.job = background.run(self, 'Проверка таблицы', lambda ctx: imp.prepare(db, self.rows, mapping, ctx), done=self.show_prepared, modal=True,
+                                  error=lambda e: self.summary.setText(f'Проверка не выполнена: {e}'), cancelled=lambda: self.summary.setText('Проверка отменена.'))
+
+    def show_prepared(self, prepared):
+        self.prepared = prepared
         self.preview.setRowCount(len(self.prepared))
         counts = {'new': 0, 'exists': 0, 'error': 0}
         for r, p in enumerate(self.prepared):
@@ -163,8 +170,15 @@ class ImportProjectsDialog(QDialog):
         except Exception as e:
             QMessageBox.warning(self, 'Импорт отменён', f'Не удалось создать резервную копию базы, импорт не выполнен:\n{e}')
             return
-        report = imp.import_rows(db, self.prepared, self.on_exists.currentData(), self.infer.isChecked())
+        from . import background
+        self.run.setEnabled(False)
+        self.job = background.run(self, 'Импорт договоров', lambda ctx: imp.import_rows(db, self.prepared, self.on_exists.currentData(), self.infer.isChecked(), ctx), done=lambda report: self.import_finished(report, backup), modal=True,
+                                  error=lambda e: QMessageBox.warning(self, 'Импорт', f'Импорт не выполнен: {e}'), cancelled=lambda: None)
+
+    def import_finished(self, report, backup):
         text = f'Создано договоров: {report["created"]}, обновлено: {report["updated"]}, пропущено: {report["skipped"]}, ошибок: {len(report["errors"])}.\nРезервная копия базы до импорта: {backup}'
+        if report.get('cancelled'):
+            text += f'\nИмпорт отменён: не обработано строк — {report["cancelled"]} (обработанные сохранены).'
         if report['errors']:
             text += '\n\n' + '\n'.join(f'Строка {self.header_row + n}: {msg}' for n, msg in report['errors'][:15])
         self.summary.setText(text.split('\n')[0])

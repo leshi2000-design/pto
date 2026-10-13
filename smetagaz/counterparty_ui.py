@@ -15,6 +15,7 @@ from .gsvm_docs import FORMATS
 from .gsvm_tabs import STATE_TEXT, make_table, open_file, print_files, read_item
 from .legal_entities_domain import DIRECTIONS
 from .pagebar import PageBar
+from .registry_tools import RegistryTools, search_clause
 from .gsv_project_domain import date_short
 
 
@@ -933,7 +934,7 @@ class ContractsRegistry(QWidget):
         self.cmb_signed.currentIndexChanged.connect(self.search_changed)
         bar.addWidget(self.cmb_signed)
         self.search = QLineEdit()
-        self.search.setPlaceholderText('Номер, контрагент, объект…')
+        self.search.setPlaceholderText('Номер, контрагент, объект, телефон, адрес…')
         self.search.textChanged.connect(self.search_changed)
         bar.addWidget(self.search, 1)
         for text, fn, kind in (('Создать договор', self.add, 'primary'), ('Открыть', self.edit, ''), ('Оплаты', self.payments, ''), ('Ведомость актов за месяц…', self.statement, ''),
@@ -947,6 +948,7 @@ class ContractsRegistry(QWidget):
         self.table = make_table(['№ договора', 'Дата', 'Контрагент', 'Объект', 'Сумма', 'Оплачено', 'Актов', 'Подписан', 'Статус'], (110, 95, 230, 240, 120, 120, 60, 90))
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.doubleClicked.connect(self.edit)
+        self.tools = RegistryTools(db, 'contracts_' + self.mod, self.table, self.search, bar)
         layout.addWidget(self.table, 1)
         self.total = QLabel('')
         layout.addWidget(self.total)
@@ -965,8 +967,10 @@ class ContractsRegistry(QWidget):
         where, params = ['1=1'], []
         q = self.search.text().strip().casefold()
         if q:
-            where.append(f"LOWER(coalesce(c.contract_number,'')||' '||{label}||' '||coalesce(c.object_name,'')||' '||coalesce(c.object_address,'')) LIKE ?")
-            params.append('%' + q + '%')
+            phones = ['lc.phone'] if self.mod == 'le' else ['lc.phone', 'pc.phone']
+            clause, found = search_clause(q, ['c.contract_number', label, 'c.object_name', 'c.object_address'] + phones, phones)
+            where.append(clause)
+            params.extend(found)
         if self.cmb_status.currentData():
             where.append('c.status=?')
             params.append(self.cmb_status.currentData())

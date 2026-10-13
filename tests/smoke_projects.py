@@ -4,6 +4,13 @@ folder=tempfile.TemporaryDirectory();os.environ['SMETAGAZ_DATA_DIR']=folder.name
 from PyQt6.QtWidgets import QApplication,QMessageBox
 from PyQt6.QtCore import Qt,QDate
 app=QApplication([])
+
+def wait(owner):
+    import time
+    end=time.time()+15
+    job=getattr(owner,'job',None)
+    import smetagaz.background as bg
+    while job is not None and job in bg._ACTIVE and time.time()<end:app.processEvents();time.sleep(0.01)
 from smetagaz.theme import apply
 apply(app)
 def warning(*a,**k):raise AssertionError(str(a[1:]))
@@ -82,9 +89,9 @@ from test_gsv_import import make_xlsx,ROWS
 from smetagaz.gsv_import_view import ImportProjectsDialog
 xlsx=Path(folder.name)/'clients.xlsx';make_xlsx(xlsx,ROWS[1:3])
 imp_dialog=ImportProjectsDialog(view,str(xlsx));assert [c.currentData() for c in imp_dialog.combos][:4]==['pd_number','object_name','client_address','client_name']
-imp_dialog.check();assert imp_dialog.preview.rowCount()==2 and imp_dialog.run.isEnabled()
+imp_dialog.check();wait(imp_dialog);assert imp_dialog.preview.rowCount()==2 and imp_dialog.run.isEnabled()
 QMessageBox.question=lambda *a,**k:QMessageBox.StandardButton.Yes;QMessageBox.information=lambda *a,**k:None
-imp_dialog.do_import();assert db.fetchone("SELECT count(*) FROM gsv_projects WHERE object_name IN ('Баня','Гараж')")[0]==2
+imp_dialog.do_import();wait(imp_dialog);assert db.fetchone("SELECT count(*) FROM gsv_projects WHERE object_name IN ('Баня','Гараж')")[0]==2
 card=ProjectEditDialog(db.fetchone("SELECT id FROM gsv_projects WHERE object_name='Гараж'")[0]);assert card.txt_tu.text()=='ТУ 99' and not card.txt_tu.isEnabled()
 # --- дерево статусов и порядок по № ПД ---
 from smetagaz.gsv_view import GsvProjectsView as _V

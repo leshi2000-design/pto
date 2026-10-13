@@ -92,7 +92,7 @@ def test_excel_history_one_version_per_day(tmp_path):
 
 def test_backup_on_exit_runs_when_last_copy_is_old(tmp_path, monkeypatch):
     from PyQt6.QtWidgets import QApplication
-    QApplication.instance() or QApplication([])
+    app = QApplication.instance() or QApplication([])
     from smetagaz import services
     d = DatabaseManager(tmp_path / 'smetagaz.db'); d.init_db()
     monkeypatch.setattr(services, 'db', d)
@@ -102,4 +102,81 @@ def test_backup_on_exit_runs_when_last_copy_is_old(tmp_path, monkeypatch):
     before = len(list((tmp_path / 'backups').glob('auto_*.zip')))
     svc2 = services.AutoBackupService(); svc2.backup_on_exit()       # свежая копия уже есть — повторно не создаётся
     assert len(list((tmp_path / 'backups').glob('auto_*.zip'))) == before
+    d.close()
+
+
+def test_offsite_password_is_not_stored_in_plain_text(tmp_path):
+    from smetagaz import secret_store, offsite_backup
+    d = DatabaseManager(tmp_path / 'smetagaz.db'); d.init_db()
+    d.set_setting('offsite_password', 'old-plain-password')          # старый формат
+    secret_store.migrate(d)
+    stored = d.get_setting('offsite_password')
+    assert stored.startswith(('key:', 'dpapi:')) and 'old-plain-password' not in stored
+    assert offsite_backup.settings(d)['password'] == 'old-plain-password'
+    secret_store.set_secret(d, 'offsite_password', 'new-secret-123')
+    assert offsite_backup.settings(d)['password'] == 'new-secret-123' and 'new-secret' not in d.get_setting('offsite_password')
+    (tmp_path / 'secret.key').unlink()                               # база без ключа пароль не раскрывает
+    assert secret_store.reveal(stored, tmp_path) != 'old-plain-password'
+    d.close()
+
+
+def test_background_job_progress_cancel_and_errors(tmp_path):
+    import time
+    from PyQt6.QtWidgets import QApplication, QWidget
+    from smetagaz import background
+    app = QApplication.instance() or QApplication([])
+    host = QWidget()
+
+    def pump(job, timeout=10):
+        end = time.time() + timeout
+        while job in background._ACTIVE and time.time() < end:       # до вызова обработчиков в основном потоке
+            app.processEvents(); time.sleep(0.01)
+
+    out = {}
+    job = background.run(host, 'Тест', lambda ctx: (ctx.progress(1, 2, 'шаг'), 42)[1], done=lambda r: out.update(result=r))
+    pump(job)
+    assert out == {'result': 42}
+    # ошибка доходит до обработчика
+    job = background.run(host, 'Тест', lambda ctx: 1 / 0, error=lambda e: out.update(error=type(e).__name__))
+    pump(job)
+    assert out['error'] == 'ZeroDivisionError'
+
+    # отмена: цикл прерывается на ближайшей проверке
+    steps = []
+
+    def long_work(ctx):
+        for n in range(1000):
+            ctx.progress(n, 1000, 'работа'); steps.append(n); time.sleep(0.005)
+    job = background.run(host, 'Тест', long_work, cancelled=lambda: out.update(cancelled=True))
+    time.sleep(0.05); job.ctx.cancel()
+    pump(job)
+    assert out.get('cancelled') and len(steps) < 1000
+
+
+def test_backup_cancel_keeps_destination_untouched(tmp_path):
+    from smetagaz import backup, background
+    d = DatabaseManager(tmp_path / 'smetagaz.db'); d.init_db()
+    (tmp_path / 'attachments').mkdir(); (tmp_path / 'attachments' / 'a.txt').write_text('x')
+    target = tmp_path / 'b.zip'; target.write_bytes(b'previous')
+    ctx = background.Context(); ctx.cancel()
+    with pytest.raises(background.Cancelled):
+        backup.create_backup(d, target, ctx.progress)
+    assert target.read_bytes() == b'previous' and not [p for p in tmp_path.iterdir() if p.name.startswith('tmp')]
+    d.close()
+
+
+def test_import_cancel_returns_partial_report(tmp_path):
+    from smetagaz import gsvm_import as imp, background
+    d = DatabaseManager(tmp_path / 'smetagaz.db'); d.init_db()
+    rows = [dict(row=n, data=dict(client_name=f'Клиент {n}', contract_date='2026-03-01', address=f'ул. {n}'), status='new', messages=[]) for n in range(1, 6)]
+    ctx = background.Context()
+    original = ctx.progress
+
+    def stop_after_two(done, total, text=''):
+        if done == 3:
+            ctx.cancel()
+        return original(done, total, text)
+    ctx.progress = stop_after_two
+    report = imp.import_rows(d, rows, 'skip', ctx)
+    assert report['created'] == 2 and report['cancelled'] == 3
     d.close()

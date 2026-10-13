@@ -287,7 +287,7 @@ def test_paged_registries(env):
     reg.pager.next.click()
     assert reg.table.rowCount() == 30 and not reg.pager.next.isEnabled() and reg.pager.offset == 100
     reg.search.setText('Объект 12')                      # поиск сбрасывает страницу
-    assert reg.pager.offset == 0 and reg.table.rowCount() == 11
+    assert reg.pager.offset == 0 and reg.table.rowCount() == 15      # слова ищутся независимо: «Объект» и «12» (в том числе в номерах договоров)
     reg.search.setText('')
     reg.cmb_signed.setCurrentIndex(1)
     assert reg.pager.total == 65

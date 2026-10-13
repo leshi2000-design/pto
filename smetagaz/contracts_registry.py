@@ -12,6 +12,9 @@ from .pagination import RegistryPager
 from .widgets import SmartTableManager
 from .contract_card import ContractCardDialog
 
+from .registry_tools import RegistryTools, search_clause
+
+
 class ContractsRegistryView(QWidget):
     def __init__(self):
         super().__init__()
@@ -31,8 +34,8 @@ class ContractsRegistryView(QWidget):
 
         top_bar.addWidget(QLabel("Поиск:"))
         self.search_inp = QLineEdit()
-        self.search_inp.setPlaceholderText("№, объект, клиент...")
-        self.search_inp.setFixedWidth(250)
+        self.search_inp.setPlaceholderText("№, объект, клиент, телефон, адрес...")
+        self.search_inp.setMinimumWidth(320)
         self.search_inp.textChanged.connect(self.load_data)
         top_bar.addWidget(self.search_inp)
         top_bar.addStretch()
@@ -48,6 +51,7 @@ class ContractsRegistryView(QWidget):
         self.table.customContextMenuRequested.connect(self.show_context_menu)
         self.table.doubleClicked.connect(self.open_contract)
 
+        self.tools = RegistryTools(db, 'contracts', self.table, self.search_inp, top_bar)
         self.table_manager = SmartTableManager(self.table, main_col=2, default_widths={0: 120, 1: 100, 3: 130, 4: 250})
         layout.addWidget(self.table)
 
@@ -78,7 +82,7 @@ class ContractsRegistryView(QWidget):
     def load_data(self):
         self.table.setUpdatesEnabled(False)
         self.table.setRowCount(0)
-        search_str = self.search_inp.text().strip().lower()
+        search_str = self.search_inp.text().strip()
 
         query = """
             SELECT c.id, c.contract_number, c.contract_date, c.object_name, c.contract_amount, e.title 
@@ -87,8 +91,10 @@ class ContractsRegistryView(QWidget):
         """
         params = []
         if search_str:
-            query += " WHERE LOWER(c.contract_number) LIKE ? OR LOWER(c.object_name) LIKE ? OR LOWER(e.title) LIKE ?"
-            params.extend([f"%{search_str}%", f"%{search_str}%", f"%{search_str}%"])
+            clause, found = search_clause(search_str, ['c.contract_number', 'c.object_name', 'e.title', 'c.client_name', 'c.party_name', 'c.object_address', 'c.client_address', 'c.designer_code'],
+                                          ['c.client_phone'])
+            query += " WHERE " + clause
+            params.extend(found)
         query += " ORDER BY c.id DESC"
 
         rows = self.pager.fetch(query, tuple(params))

@@ -88,6 +88,10 @@ def initialize(db):
         estimates_migrate(db)
         from .gsn_project_import import migrate as gsn_import_migrate
         gsn_import_migrate(db)
+        from .secret_store import migrate as secret_migrate
+        secret_migrate(db)
+        from .audit_domain import migrate as audit_migrate
+        audit_migrate(db)
         from .cache_domain import migrate as perf_migrate
         perf_migrate(db)
         db.execute('CREATE INDEX IF NOT EXISTS idx_payments_est ON payments(estimate_id)')

@@ -4,7 +4,7 @@ from PyQt6.QtCore import QObject, QEvent
 from PyQt6.QtGui import QFont, QColor, QPalette
 from PyQt6.QtWidgets import QWidget
 
-MODERN_ACCENT = '#4F46E5'        # индиго; прежние акценты по умолчанию (небесный, синий Office) заменяются на него
+MODERN_ACCENT = '#1B6B62'        # бирюзово-зелёный из логотипа ПТО; прежние акценты по умолчанию заменяются на него
 OFFICE_BLUE = MODERN_ACCENT      # прежнее имя
 LEGACY_ACCENTS = {'#0284c7', '#2563eb', '#185abd', ''}
 FONT_FALLBACKS = ['Inter', 'Segoe UI Variable', 'Segoe UI', 'Noto Sans', 'Arial', 'DejaVu Sans']
@@ -161,7 +161,7 @@ def apply(app, dark=False, family='Segoe UI', size=10, accent=''):
     /* Боковая панель: белая, выбранный пункт — мягкая «таблетка» */
     QFrame#sidebar {{ background:{c['side']}; border:0; border-right:1px solid {c['line']}; }}
     QFrame#sidebar QLabel {{ color:{c['muted']}; }}
-    QLabel#brand {{ font-size:18px; font-weight:700; color:{c['text']}; padding:6px 8px; }}
+    QLabel#brand {{ font-size:22px; font-weight:700; color:{c['text']}; padding:6px 8px; }}
     QScrollArea#navigation {{ background:transparent; border:0; }}
     QWidget#navContent {{ background:{c['side']}; }}
     QPushButton#navButton {{ text-align:left; background:transparent; color:{c['text2']}; border:0; border-radius:8px; padding:8px 12px; min-height:22px; font-weight:400; }}

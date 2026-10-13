@@ -77,8 +77,11 @@ def test_dialog_and_registry(db, tmp_path, monkeypatch):
     dlg = iv.ImportGsvmDialog(None, str(f))
     assert dlg.map_table.rowCount() == 14 and sum(1 for c in dlg.combos if c.currentData()) == 14
     dlg.check()
+    from conftest import wait_job
+    wait_job(dlg)
     assert dlg.run.isEnabled() and 'Новых: 2' in dlg.summary.text()
     dlg.do_import()
+    wait_job(dlg)
     assert db.fetchone('SELECT count(*) FROM contracts')[0] == 2
     view = cr.ContractsRegistryView()
     view.load_data()

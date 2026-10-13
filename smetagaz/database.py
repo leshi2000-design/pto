@@ -49,6 +49,7 @@ class DatabaseManager:
         self.conn = sqlite3.connect(self.db_name, timeout=20, check_same_thread=False)
         self.conn.isolation_level = None
         self.conn.create_function("LOWER", 1, lambda s: str(s or "").casefold(), deterministic=True)
+        self.conn.create_function("digits", 1, lambda s: "".join(ch for ch in str(s or "") if ch.isdigit()), deterministic=True)
         self.conn.create_function("norm", 1, lambda s: str(s or "").strip().casefold(), deterministic=True)
         self.conn.execute("PRAGMA busy_timeout=20000")
         self.conn.execute("PRAGMA journal_mode = DELETE")
@@ -239,7 +240,7 @@ class DatabaseManager:
                 ('export_font', 'Segoe UI'), ('export_font_size', '13'),
                 ('export_company_name', 'ООО "ГазМонтаж"'),
                 ('export_excel_template', ''), ('export_word_template', ''),
-                ('app_name', 'ПТО 3.5.0'), ('tabs_config', json.dumps(default_tabs))
+                ('app_name', 'ПТО 3.6.0'), ('tabs_config', json.dumps(default_tabs))
             ]
             c.executemany("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", defaults)
 
@@ -304,7 +305,8 @@ class DatabaseManager:
         self.set_setting("schema_version","8")
         from . import __version__ as _app_version
         self.set_setting("app_version",_app_version)
-        if str(self.get_setting("app_name") or "").startswith("СМЕТА-ГАЗ"):self.set_setting("app_name","ПТО "+_app_version)      # название по умолчанию; своё название не трогаем
+        import re as _re
+        if _re.match(r"^(СМЕТА-ГАЗ|ПТО)( \d+(\.\d+)*)?$",str(self.get_setting("app_name") or "")):self.set_setting("app_name","ПТО "+_app_version)      # название по умолчанию; своё название не трогаем
 
     def close(self):
         with self._lock:

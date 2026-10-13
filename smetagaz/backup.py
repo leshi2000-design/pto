@@ -18,7 +18,10 @@ def digest(path):
     return h.hexdigest()
 
 
-def create_backup(db, destination):
+def create_backup(db, destination, progress=None):
+    """progress(сделано, всего, текст) — необязательный обратный вызов; он же может прервать копирование исключением (до этого момента итоговый файл не тронут)."""
+    step = progress or (lambda *a, **k: None)
+    step(0, 0, 'Снимок баз данных')
     destination=Path(destination).resolve()
     destination.parent.mkdir(parents=True,exist_ok=True)
     with tempfile.TemporaryDirectory(dir=destination.parent) as tmp:
@@ -36,6 +39,7 @@ def create_backup(db, destination):
             source=data_root/dirname
             if source.is_dir():
                 for item in source.rglob('*'):
+                    step(0, 0, 'Копирование файлов: ' + item.name)
                     if item.is_symlink():raise ValueError('Символическая ссылка в папке данных: '+str(item))
                     if item.is_file() and not item.name.endswith('.part'):
                         target=stage/item.relative_to(data_root);target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(item,target)
@@ -72,12 +76,19 @@ def create_backup(db, destination):
                 if value and src.is_file():
                     dest=Path('templates')/(key+'_'+src.name);(stage/dest).parent.mkdir(exist_ok=True)
                     shutil.copy2(src,stage/dest);snapshot.execute('UPDATE settings SET value=? WHERE key=?',(dest.as_posix(),key))
-        files={f.relative_to(stage).as_posix():digest(f) for f in stage.rglob('*') if f.is_file()}
+        staged = [f for f in stage.rglob('*') if f.is_file()]
+        files = {}
+        for n, f in enumerate(staged, 1):
+            step(n, len(staged), 'Контрольные суммы: ' + f.name)
+            files[f.relative_to(stage).as_posix()] = digest(f)
         manifest={'version':1,'created':datetime.now(timezone.utc).isoformat(),'files':files,'missing':missing,'external_welding_references':external_references}
         (stage/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2),encoding='utf-8')
         temp_archive=stage/'archive.tmp'
         with zipfile.ZipFile(temp_archive,'w',zipfile.ZIP_DEFLATED,compresslevel=3,allowZip64=True) as z:
-            for name in [*files,'manifest.json']:z.write(stage/name,name)
+            names = [*files, 'manifest.json']
+            for n, name in enumerate(names, 1):
+                step(n, len(names), 'Архивирование: ' + name)
+                z.write(stage/name, name)
         with open(temp_archive,'rb') as f:os.fsync(f.fileno())
         os.replace(temp_archive,destination)
         try:destination.chmod(0o600)

@@ -7,6 +7,7 @@ import logging
 from datetime import datetime, date
 
 from .lazy import LazyModule
+from .registry_tools import RegistryTools, search_clause
 openpyxl = LazyModule("openpyxl")
 
 from PyQt6.QtWidgets import (
@@ -1133,7 +1134,7 @@ class GsvProjectsView(QWidget):
         self.btn_urgent.clicked.connect(self.toggle_urgent)
 
         self.txt_search = QLineEdit()
-        self.txt_search.setPlaceholderText("Поиск по № ПД, объекту, заказчику…")
+        self.txt_search.setPlaceholderText("№ ПД, объект, заказчик, телефон, адрес…")
         self.txt_search.textChanged.connect(self.load_data)
 
         btn_tpl = QPushButton("Шаблоны документов")
@@ -1187,6 +1188,7 @@ class GsvProjectsView(QWidget):
         self.view_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.view_table.customContextMenuRequested.connect(self.open_context_menu)
         QShortcut(QKeySequence.StandardKey.Delete, self.view_table).activated.connect(self.delete_row)
+        self.tools = RegistryTools(db, 'gsv_projects', self.view_table, self.txt_search, tools_bar)
         splitter.addWidget(self.view_table)
         splitter.setStretchFactor(1, 1)
         layout.addWidget(splitter)
@@ -1265,7 +1267,7 @@ class GsvProjectsView(QWidget):
         sql="SELECT id,pd_number,object_name,coalesce(nullif(client_name,''),party_name),cost,client_status,work_status,project_folder,due_date,coalesce(act_signed,0),act_date FROM gsv_projects"
         conditions=[];params=[]
         if q:
-            conditions.append('(LOWER(pd_number) LIKE ? OR LOWER(object_name) LIKE ? OR LOWER(coalesce(nullif(client_name,''),party_name)) LIKE ?)');params.extend(['%'+q+'%']*3)
+            clause,found=search_clause(q,['pd_number','object_name','client_name','party_name','address','contract_number'],['phone']);conditions.append(clause);params.extend(found)
         if self.urgent_filter_active:conditions.append("coalesce(act_signed,0)=0 AND date(due_date) <= date('now','+5 days')")
         if conditions:sql+=' WHERE '+' AND '.join(conditions)
         direction='DESC' if self.order_desc else 'ASC'
