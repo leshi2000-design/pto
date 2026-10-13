@@ -16,6 +16,14 @@ def verify(password,stored):
         return hmac.compare_digest(actual,expected)
     except (ValueError,TypeError):return False
 
+def _atomic_target(destination):
+    """Временный файл в той же папке: конечный файл заменяется только после успешной записи."""
+    import tempfile
+    destination=Path(destination)
+    destination.parent.mkdir(parents=True,exist_ok=True)
+    fd,tmp=tempfile.mkstemp(dir=destination.parent,prefix=destination.name+'.',suffix='.tmp')
+    return os.fdopen(fd,'wb'),Path(tmp)
+
 def encrypt_backup(source,destination,password):
     from cryptography.hazmat.primitives.ciphers import Cipher,algorithms,modes
     if len(password)<10:raise ValueError('Минимум 10 символов')
@@ -23,13 +31,20 @@ def encrypt_backup(source,destination,password):
     key=hashlib.scrypt(password.encode(),salt=salt,n=32768,r=8,p=1,maxmem=128*1024*1024,dklen=32)
     header=b'SGBAK1'+salt+nonce
     encryptor=Cipher(algorithms.AES(key),modes.GCM(nonce)).encryptor();encryptor.authenticate_additional_data(header)
-    with open(source,'rb') as src,open(destination,'wb') as dst:
-        dst.write(header)
-        for chunk in iter(lambda:src.read(1024*1024),b''):dst.write(encryptor.update(chunk))
-        dst.write(encryptor.finalize());dst.write(encryptor.tag)
+    dst,tmp=_atomic_target(destination)
+    try:
+        with open(source,'rb') as src,dst:
+            dst.write(header)
+            for chunk in iter(lambda:src.read(1024*1024),b''):dst.write(encryptor.update(chunk))
+            dst.write(encryptor.finalize());dst.write(encryptor.tag)
+            dst.flush();os.fsync(dst.fileno())
+        os.replace(tmp,destination)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 def decrypt_backup(source,destination,password):
     from cryptography.hazmat.primitives.ciphers import Cipher,algorithms,modes
+    tmp=None
     try:
         with open(source,'rb') as src:
             header=src.read(34)
@@ -37,12 +52,16 @@ def decrypt_backup(source,destination,password):
             src.seek(-16,2);tag=src.read(16);end=src.tell()-16;src.seek(34)
             key=hashlib.scrypt(password.encode(),salt=header[6:22],n=32768,r=8,p=1,maxmem=128*1024*1024,dklen=32)
             decryptor=Cipher(algorithms.AES(key),modes.GCM(header[22:],tag)).decryptor();decryptor.authenticate_additional_data(header)
-            with open(destination,'wb') as dst:
+            dst,tmp=_atomic_target(destination)
+            with dst:
                 while src.tell()<end:dst.write(decryptor.update(src.read(min(1024*1024,end-src.tell()))))
-                dst.write(decryptor.finalize())
+                dst.write(decryptor.finalize())     # проверка AES-GCM: при неверном пароле здесь исключение
+                dst.flush();os.fsync(dst.fileno())
+        os.replace(tmp,destination);tmp=None
     except Exception:
-        Path(destination).unlink(missing_ok=True)
         raise ValueError('Неверный пароль или повреждённая копия') from None
+    finally:
+        if tmp:Path(tmp).unlink(missing_ok=True)       # прежний файл назначения остаётся нетронутым
 
 def login(db,parent=None):
     from PyQt6.QtWidgets import QInputDialog,QLineEdit,QMessageBox

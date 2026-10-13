@@ -52,8 +52,10 @@ class GlobalSearchDialog(QDialog):
         self.poller=QTimer(self);self.poller.setInterval(50);self.poller.timeout.connect(self.poll);self.poller.start()
         self.inp.textChanged.connect(self.changed);self.results.itemActivated.connect(self.open)
     def changed(self,*_):
-        self.offset=0;self.generation+=1;self.timer.start()
-    def next_page(self):self.offset+=100;self.generation+=1;self.timer.start()
+        self.offset=0;self.generation+=1;self.more.setEnabled(False);self.timer.start()
+    def next_page(self):
+        if not self.more.isEnabled():return        # страница ещё загружается — повторные нажатия не пропускают результаты
+        self.more.setEnabled(False);self.offset+=100;self.generation+=1;self.timer.start()
     def submit(self):
         if self.future and not self.future.done():self.timer.start();return
         self.request_generation=self.generation
@@ -169,11 +171,8 @@ class MainWindow(QMainWindow):
 
     def build_dynamic_tabs(self):
         tabs_json = db.get_setting("tabs_config", "[]")
-        try:
-            tabs_data = json.loads(tabs_json)
-        except (ValueError, TypeError) as e:
-            logging.warning(f"Некорректный tabs_config, сброшен: {e}")
-            tabs_data = []
+        from .database import parse_tabs_config
+        tabs_data = parse_tabs_config(tabs_json)
 
         existing_ids = {t["id"] for t in tabs_data}
         changed = False
@@ -238,7 +237,12 @@ class MainWindow(QMainWindow):
         if hasattr(view, '_factory'):
             replacement = view._factory()
             self.stack.removeWidget(view)
-            self.stack.insertWidget(idx, replacement)
+            from PyQt6.QtWidgets import QScrollArea
+            holder = QScrollArea()          # широкая страница прокручивается и не растягивает главное окно
+            holder.setWidgetResizable(True)
+            holder.setFrameShape(QScrollArea.Shape.NoFrame)
+            holder.setWidget(replacement)
+            self.stack.insertWidget(idx, holder)
             replacement._tab_id=view._tab_id
             self.views[idx] = replacement
             view.deleteLater()
@@ -265,7 +269,8 @@ class MainWindow(QMainWindow):
         theme = "dark" if is_dark else "light"
         accent = db.get_setting("accent_color", "#0284C7")
         f_family = db.get_setting("font_family", "Segoe UI")
-        f_size = int(db.get_setting("font_size", "10"))
+        from .database import safe_font_size
+        f_size = safe_font_size(db.get_setting("font_size", "10"))
 
         app = QApplication.instance()
         from . import theme

@@ -89,7 +89,7 @@ class SettingsView(QWidget):
         exp_layout.addWidget(QLabel("Размер шрифта PDF:"), 1, 2)
         self.font_size = QSpinBox()
         self.font_size.setRange(8, 24)
-        self.font_size.setValue(int(db.get_setting("export_font_size", "13")))
+        self.font_size.setValue(__import__("smetagaz.database",fromlist=["x"]).safe_font_size(db.get_setting("export_font_size", "13"), 13))
         exp_layout.addWidget(self.font_size, 1, 3)
 
         self.inp_prepared_by=QLineEdit(db.get_setting('estimate_prepared_by',''));exp_layout.addWidget(QLabel('Смету составил (по умолчанию):'),3,0);exp_layout.addWidget(self.inp_prepared_by,3,1,1,3)
@@ -202,11 +202,8 @@ class SettingsView(QWidget):
 
     def load_tabs_config(self):
         tabs_json = db.get_setting("tabs_config", "[]")
-        try:
-            tabs_data = json.loads(tabs_json)
-        except (ValueError, TypeError) as e:
-            logging.warning(f"Некорректный tabs_config, сброшен: {e}")
-            tabs_data = []
+        from .database import parse_tabs_config
+        tabs_data = parse_tabs_config(tabs_json)
 
         self.table_tabs.setRowCount(len(tabs_data))
         for r, tab in enumerate(tabs_data):

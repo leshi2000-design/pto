@@ -46,16 +46,32 @@ def colors(dark=False, accent=''):
 DARK_TEXT_FIX = {'#605E5C': '#C8C6C4', '#15803D': '#4ADE80', '#B45309': '#F5B04A', '#A4262C': '#F1707B'}
 
 
+def _fix_widget(w, dark):
+    """В тёмной теме подменяет зашитые светлые цвета текста; исходный стиль запоминается и возвращается при переходе на светлую тему."""
+    original = w.property('_sg_orig_style')
+    ss = w.styleSheet()
+    if not dark:
+        if original is not None:
+            w.setProperty('_sg_orig_style', None)
+            w.setStyleSheet(original)
+        return
+    base = original if original is not None else ss
+    if base and any(k in base for k in DARK_TEXT_FIX):
+        fixed = base
+        for k, v in DARK_TEXT_FIX.items():
+            fixed = fixed.replace(f'color: {k}', f'color: {v}').replace(f'color:{k}', f'color:{v}')
+        if fixed != ss:
+            if original is None:
+                w.setProperty('_sg_orig_style', ss)
+            w.setStyleSheet(fixed)
+
+
 class _DarkTextFix(QObject):
     dark = False
 
     def eventFilter(self, obj, event):
         if self.dark and event.type() == QEvent.Type.Polish and isinstance(obj, QWidget):
-            ss = obj.styleSheet()
-            if ss and any(k in ss for k in DARK_TEXT_FIX):
-                for k, v in DARK_TEXT_FIX.items():
-                    ss = ss.replace(f'color: {k}', f'color: {v}').replace(f'color:{k}', f'color:{v}')
-                obj.setStyleSheet(ss)
+            _fix_widget(obj, True)
         return False
 
 
@@ -66,13 +82,11 @@ def _install_filter(app, dark):
         app.installEventFilter(fix)
         app._dark_text_fix = fix
     fix.dark = dark
-    if dark:       # уже созданные виджеты
-        for w in app.allWidgets():
-            ss = w.styleSheet()
-            if ss and any(k in ss for k in DARK_TEXT_FIX):
-                for k, v in DARK_TEXT_FIX.items():
-                    ss = ss.replace(f'color: {k}', f'color: {v}').replace(f'color:{k}', f'color:{v}')
-                w.setStyleSheet(ss)
+    for w in app.allWidgets():       # уже созданные виджеты: подмена в тёмной теме, возврат исходного стиля в светлой
+        _fix_widget(w, dark)
+
+
+_ARROW_DIR = None
 
 
 def _arrow_files(color):
@@ -82,8 +96,10 @@ def _arrow_files(color):
     from PyQt6.QtCore import QByteArray, Qt
     from PyQt6.QtGui import QPixmap, QPainter
     from PyQt6.QtSvg import QSvgRenderer
-    folder = Path(tempfile.gettempdir()) / 'smetagaz_theme'
-    folder.mkdir(exist_ok=True)
+    global _ARROW_DIR
+    if _ARROW_DIR is None:       # отдельный приватный каталог на экземпляр приложения
+        _ARROW_DIR = Path(tempfile.mkdtemp(prefix='smetagaz-theme-'))
+    folder = _ARROW_DIR
     paths = {}
     for name, points in (('down', '3,6 8,11 13,6'), ('up', '3,10 8,5 13,10')):
         path = folder / f'{name}_{color.lstrip("#")}.png'
@@ -117,7 +133,11 @@ def apply(app, dark=False, family='Segoe UI', size=10, accent=''):
     app.setStyle('Fusion')
     font = QFont(family or FONT_FALLBACKS[0])
     font.setFamilies([f for f in dict.fromkeys([family or FONT_FALLBACKS[0], *FONT_FALLBACKS])])
-    font.setPointSize(max(10, min(14, int(size or 10))))
+    try:
+        size = int(float(size))
+    except (ValueError, TypeError):
+        size = 10
+    font.setPointSize(max(10, min(14, size)))
     font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
     font.setHintingPreference(QFont.HintingPreference.PreferDefaultHinting)
     app.setFont(font)

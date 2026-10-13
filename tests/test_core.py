@@ -72,7 +72,7 @@ def test_password_and_encrypted_backup(tmp_path):
     src=tmp_path/'plain';src.write_bytes(os.urandom(2200000));enc=tmp_path/'copy.sgb';out=tmp_path/'out'
     encrypt_backup(src,enc,'test-password-123');decrypt_backup(enc,out,'test-password-123');assert src.read_bytes()==out.read_bytes()
     with pytest.raises(ValueError):decrypt_backup(enc,out,'wrong-password')
-    assert not out.exists()
+    assert out.read_bytes()==src.read_bytes()      # прежний файл назначения не затронут
 
 def test_bulk_attachments(database,tmp_path):
     from smetagaz.file_jobs import import_files

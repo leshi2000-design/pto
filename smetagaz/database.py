@@ -8,6 +8,37 @@ from contextlib import contextmanager
 
 from .config import DB_NAME
 
+
+def parse_tabs_config(text):
+    """tabs_config -> список вкладок {id, name, visible}: структура проверяется, ошибочные элементы и дубликаты пропускаются."""
+    try:
+        data=json.loads(text or '[]')
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(data,list):
+        return []
+    result,seen=[],set()
+    for tab in data:
+        if not isinstance(tab,dict) or not isinstance(tab.get('id'),str) or not tab['id'] or tab['id'] in seen:
+            continue
+        seen.add(tab['id'])
+        tab=dict(tab)
+        tab['name']=str(tab.get('name') or tab['id'])
+        try:
+            tab['visible']=1 if int(tab.get('visible',1)) else 0
+        except (ValueError, TypeError):
+            tab['visible']=1
+        result.append(tab)
+    return result
+
+
+def safe_font_size(value, default=10):
+    try:
+        return max(8, min(20, int(float(value))))
+    except (ValueError, TypeError):
+        return default
+
+
 class DatabaseManager:
     def __init__(self, db_name=DB_NAME):
         self._lock = threading.RLock()
@@ -208,7 +239,7 @@ class DatabaseManager:
                 ('export_font', 'Segoe UI'), ('export_font_size', '13'),
                 ('export_company_name', 'ООО "ГазМонтаж"'),
                 ('export_excel_template', ''), ('export_word_template', ''),
-                ('app_name', 'ПТО 3.4.1'), ('tabs_config', json.dumps(default_tabs))
+                ('app_name', 'ПТО 3.4.2'), ('tabs_config', json.dumps(default_tabs))
             ]
             c.executemany("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", defaults)
 
@@ -252,10 +283,7 @@ class DatabaseManager:
         initialize(self)
         # 2.4: "Реестр договоров" renamed to "ГСВ" (внутреннее газоснабжение). Only rename the tab
         # if it still has the old default label, so a user's own custom rename is left alone.
-        try:
-            tabs_data=json.loads(self.get_setting("tabs_config","[]"))
-        except (ValueError, TypeError):
-            tabs_data=[]
+        tabs_data=parse_tabs_config(self.get_setting("tabs_config","[]"))
         renamed=False
         for tab in tabs_data:
             # 2.5: три раздела называются «Монтаж ГСВ», «Монтаж ГСН» и «Проекты ГСВ»; пользовательские названия не трогаем

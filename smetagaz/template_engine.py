@@ -14,6 +14,13 @@ TAG=re.compile(r'{{\s*([\w.]+)\s*}}',re.UNICODE)
 W='http://schemas.openxmlformats.org/wordprocessingml/2006/main'
 S='http://schemas.openxmlformats.org/spreadsheetml/2006/main'
 
+def _sha256_file(path):
+    h=hashlib.sha256()
+    with open(path,'rb') as f:
+        for chunk in iter(lambda:f.read(1024*1024),b''):h.update(chunk)
+    return h.hexdigest()
+
+
 def replace_nodes(nodes,values,found):
     text=''.join(n.text or '' for n in nodes)
     if ('{{' in TAG.sub('',text) or '}}' in TAG.sub('',text)):
@@ -151,7 +158,7 @@ def generate(db,owner,rid,slots,copy_certificates=True):
             with db.transaction():
                 domain.require(db,owner,rid)
                 for tmp,out,t in staged:
-                    if t:db.execute('INSERT INTO executive_generated(owner_type,owner_id,slot,title,file_path,context_json,sha256) VALUES(?,?,?,?,?,?,?)',(owner,rid,t['slot'],t['label'],str(out),json.dumps(ctx,ensure_ascii=False),hashlib.sha256(out.read_bytes()).hexdigest()))
+                    if t:db.execute('INSERT INTO executive_generated(owner_type,owner_id,slot,title,file_path,context_json,sha256) VALUES(?,?,?,?,?,?,?)',(owner,rid,t['slot'],t['label'],str(out),json.dumps(ctx,ensure_ascii=False),_sha256_file(out)))
         except Exception:
             for out in created:out.unlink(missing_ok=True)
             raise

@@ -39,6 +39,9 @@ def create_backup(db, destination):
                     if item.is_file() and not item.name.endswith('.part'):
                         target=stage/item.relative_to(data_root);target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(item,target)
         with sqlite3.connect(stage/'smetagaz.db') as snapshot:
+            # пароль внешних копий и их автозапуск не должны попадать в обычный архив; после восстановления их настраивают заново
+            snapshot.execute("UPDATE settings SET value='' WHERE key='offsite_password'")
+            snapshot.execute("UPDATE settings SET value='0' WHERE key='offsite_enabled'")
             if snapshot.execute("SELECT 1 FROM sqlite_master WHERE name='welding_documents'").fetchone():
                 external_references=[dict(id=r[0],title=r[1],path=r[2]) for r in snapshot.execute('SELECT id,title,file_path FROM welding_documents')]
             for table,column in [('attachments','file_path'),('certificates','file_path'),('gsv_projects','tu_path'),('gsv_projects','custom_contract_path'),('gsv_projects','project_folder'),('executive_objects','folder_path'),('executive_templates','file_path'),('executive_overrides','file_path'),('executive_generated','file_path'),('report_templates','file_path'),('dossiers','folder_path'),('dossier_files','file_path')]:
@@ -68,7 +71,7 @@ def create_backup(db, destination):
                 if value and src.is_file():
                     dest=Path('templates')/(key+'_'+src.name);(stage/dest).parent.mkdir(exist_ok=True)
                     shutil.copy2(src,stage/dest);snapshot.execute('UPDATE settings SET value=? WHERE key=?',(dest.as_posix(),key))
-        files={str(f.relative_to(stage)):digest(f) for f in stage.rglob('*') if f.is_file()}
+        files={f.relative_to(stage).as_posix():digest(f) for f in stage.rglob('*') if f.is_file()}
         manifest={'version':1,'created':datetime.now(timezone.utc).isoformat(),'files':files,'missing':missing,'external_welding_references':external_references}
         (stage/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2),encoding='utf-8')
         temp_archive=stage/'archive.tmp'
@@ -98,8 +101,9 @@ def restore_backup(archive, destination):
                 if (item.external_attr>>16)&0o170000==0o120000:raise ValueError('Ссылки в архиве запрещены')
             z.extractall(stage)
         manifest=json.loads((stage/'manifest.json').read_text(encoding='utf-8'))
-        actual={str(f.relative_to(stage)) for f in stage.rglob('*') if f.is_file()}
-        if actual!=set(manifest.get('files',{}))|{'manifest.json'}:raise ValueError('Состав архива не совпадает с описанием')
+        actual={f.relative_to(stage).as_posix() for f in stage.rglob('*') if f.is_file()}
+        manifest['files']={name.replace('\\','/'):value for name,value in manifest.get('files',{}).items()}      # старые манифесты Windows
+        if actual!=set(manifest['files'])|{'manifest.json'}:raise ValueError('Состав архива не совпадает с описанием')
         if manifest.get('version')!=1:raise ValueError('Неизвестный формат копии')
         if not {'smetagaz.db','clients.db'}<=set(manifest['files']):raise ValueError('Нет обязательных баз')
         for name,expected in manifest['files'].items():
