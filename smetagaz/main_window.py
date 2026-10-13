@@ -288,6 +288,13 @@ def global_exception_handler(exc_type, exc_value, exc_traceback):
 def main():
     sys.excepthook = global_exception_handler
     app = QApplication(sys.argv)
+    from pathlib import Path as _P
+    for name in ('icon.ico', 'icon.png'):      # свой значок: положите файл в smetagaz/assets
+        icon_file = _P(__file__).parent / 'assets' / name
+        if icon_file.exists():
+            from PyQt6.QtGui import QIcon
+            app.setWindowIcon(QIcon(str(icon_file)))
+            break
     lock = QLockFile(str(DATA_DIR / 'app.lock'))
     if not lock.tryLock(100):
         QMessageBox.warning(None, 'ПТО', 'Эта папка данных уже открыта другим экземпляром.');return

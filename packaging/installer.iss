@@ -9,6 +9,9 @@ OutputBaseFilename=PTO_Setup
 Compression=lzma2
 SolidCompression=yes
 PrivilegesRequired=lowest
+#ifexist "..\smetagaz\assets\icon.ico"
+SetupIconFile=..\smetagaz\assets\icon.ico
+#endif
 [Languages]
 Name: "ru"; MessagesFile: "compiler:Languages\Russian.isl"
 [Files]
