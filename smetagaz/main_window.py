@@ -97,7 +97,7 @@ KNOWN_TABS = [
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.app_name = db.get_setting("app_name", "СМЕТА-ГАЗ 1.0")
+        self.app_name = db.get_setting("app_name", "ПТО")
         self.setWindowTitle(self.app_name)
         self.resize(1350, 820)
         self.backup_service = AutoBackupService()
@@ -113,7 +113,7 @@ class MainWindow(QMainWindow):
         sidebar.setFixedWidth(264);sidebar.setObjectName("sidebar")
         self.sidebar_layout = QVBoxLayout(sidebar)
 
-        logo = QLabel("СМЕТА · ГАЗ")
+        logo = QLabel("ПТО")
         logo.setObjectName("brand")
 
         logo.setWordWrap(True)
@@ -290,7 +290,7 @@ def main():
     app = QApplication(sys.argv)
     lock = QLockFile(str(DATA_DIR / 'app.lock'))
     if not lock.tryLock(100):
-        QMessageBox.warning(None, 'СМЕТА-ГАЗ', 'Эта папка данных уже открыта другим экземпляром.');return
+        QMessageBox.warning(None, 'ПТО', 'Эта папка данных уже открыта другим экземпляром.');return
     import os
     os.chdir(DATA_DIR)
     db.init_db()

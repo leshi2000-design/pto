@@ -50,7 +50,7 @@ class SettingsView(QWidget):
         box_app = QGroupBox("Внешний вид: Название программы и Вкладки (Требуется перезапуск)")
         l_app = QGridLayout(box_app)
         l_app.addWidget(QLabel("Название программы:"), 0, 0)
-        self.inp_app_name = QLineEdit(db.get_setting("app_name", "СМЕТА-ГАЗ 1.0"))
+        self.inp_app_name = QLineEdit(db.get_setting("app_name", "ПТО"))
         l_app.addWidget(self.inp_app_name, 0, 1, 1, 2)
 
         self.btn_color = QPushButton("Выбрать акцентный цвет интерфейса")

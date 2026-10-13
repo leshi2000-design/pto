@@ -1,20 +1,20 @@
-; Inno Setup: установщик SmetaGaz_Setup.exe (jrsoftware.org/isinfo.php). Данные программы хранятся в %USERPROFILE%\.smetagaz и при обновлении не затрагиваются.
+; Inno Setup: установщик PTO_Setup.exe (jrsoftware.org/isinfo.php). Данные программы хранятся в %USERPROFILE%\.smetagaz и при обновлении не затрагиваются.
 [Setup]
-AppName=СМЕТА-ГАЗ
+AppName=ПТО
 AppVersion=3.4.1
-DefaultDirName={autopf}\СМЕТА-ГАЗ
-DefaultGroupName=СМЕТА-ГАЗ
+DefaultDirName={autopf}\ПТО
+DefaultGroupName=ПТО
 OutputDir=..\dist
-OutputBaseFilename=SmetaGaz_Setup
+OutputBaseFilename=PTO_Setup
 Compression=lzma2
 SolidCompression=yes
 PrivilegesRequired=lowest
 [Languages]
 Name: "ru"; MessagesFile: "compiler:Languages\Russian.isl"
 [Files]
-Source: "..\dist\СМЕТА-ГАЗ\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
+Source: "..\dist\ПТО\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
 [Icons]
-Name: "{group}\СМЕТА-ГАЗ"; Filename: "{app}\SmetaGaz.exe"
-Name: "{autodesktop}\СМЕТА-ГАЗ"; Filename: "{app}\SmetaGaz.exe"
+Name: "{group}\ПТО"; Filename: "{app}\PTO.exe"
+Name: "{autodesktop}\ПТО"; Filename: "{app}\PTO.exe"
 [Run]
-Filename: "{app}\SmetaGaz.exe"; Description: "Запустить СМЕТА-ГАЗ"; Flags: postinstall nowait
+Filename: "{app}\PTO.exe"; Description: "Запустить ПТО"; Flags: postinstall nowait

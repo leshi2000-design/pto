@@ -1,4 +1,4 @@
-# PyInstaller: сборка папки dist\СМЕТА-ГАЗ\ (запуск: build_windows.bat)
+# PyInstaller: сборка папки dist\ПТО\ (запуск: build_windows.bat)
 from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 
 hidden = (collect_submodules('smetagaz') + collect_submodules('pyqtgraph') + collect_submodules('openpyxl') +
@@ -7,5 +7,5 @@ datas = [('smetagaz/assets', 'smetagaz/assets')] + collect_data_files('docx') + 
 
 a = Analysis(['run.py'], pathex=['.'], datas=datas, hiddenimports=hidden, excludes=['tkinter', 'matplotlib', 'scipy', 'pytest'])
 pyz = PYZ(a.pure)
-exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='SmetaGaz', console=False, icon=None)
-coll = COLLECT(exe, a.binaries, a.datas, name='СМЕТА-ГАЗ')
+exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='PTO', console=False, icon=None)
+coll = COLLECT(exe, a.binaries, a.datas, name='ПТО')
