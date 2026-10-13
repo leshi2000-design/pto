@@ -242,6 +242,8 @@ def _suggestions(db, today):
         found.append(_suggestion(f'sign_act:contracts:{rid}', f'Получить подпись акта · договор {num} · {who}', ('contracts', rid), 'Высокая', reason='акт не подписан'))
     for rid, num, who in rows("SELECT id,pd_number,coalesce(nullif(client_name,''),party_name) FROM gsv_projects WHERE coalesce(act_date,'')<>'' AND coalesce(act_signed,1)=0"):
         found.append(_suggestion(f'sign_act:gsv_projects:{rid}', f'Получить подпись акта · проект {num} · {who}', ('gsv_projects', rid), 'Высокая', reason='акт не подписан'))
+    for rid, num, who in rows("SELECT id,contract_number,client_name FROM gsn_projects WHERE coalesce(act_date,'')<>'' AND coalesce(act_signed,0)=0"):
+        found.append(_suggestion(f'sign_act:gsn_projects:{rid}', f'Получить подпись акта · ГСН {num} · {who}', ('gsn_projects', rid), 'Высокая', reason='акт не подписан'))
     # ведомость актов за прошлый месяц — до 10-го
     year, month = acts_statement.default_period(today)
     signed = 0
@@ -294,6 +296,7 @@ def _summary(db, today):
     acts = 0
     for sql in ("SELECT count(*) FROM contracts WHERE coalesce(acceptance_act_date,'')<>'' AND coalesce(act_signed,1)=0",
                 "SELECT count(*) FROM gsv_projects WHERE coalesce(act_date,'')<>'' AND coalesce(act_signed,1)=0",
+                "SELECT count(*) FROM gsn_projects WHERE coalesce(act_date,'')<>'' AND coalesce(act_signed,0)=0",
                 "SELECT count(*) FROM le_acts WHERE coalesce(act_date,'')<>'' AND coalesce(signed,0)=0",
                 "SELECT count(*) FROM smr_acts WHERE coalesce(act_date,'')<>'' AND coalesce(signed,0)=0"):
         acts += db.fetchone(sql)[0]

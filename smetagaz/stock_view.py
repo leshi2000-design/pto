@@ -251,6 +251,7 @@ class Registry(QWidget):
         if mode=='acts':bar.addWidget(self.status)
         button(bar,'Сбросить',self.reset);l.addLayout(bar);actions=QHBoxLayout();l.addLayout(actions)
         if mode in ('acts','defects','materials','norms'):button(actions,'Создать',self.create);button(actions,'Изменить / открыть',self.edit)
+        if mode=='norms':button(actions,'Копировать норму',self.copy_norm)
         if mode in ('materials','balances'):button(actions,'Поступление / остаток',self.receive)
         if mode=='acts':button(actions,'Удалить черновик',self.delete)
         if mode=='defects':button(actions,'Списание по акту',self.writeoff)
@@ -268,7 +269,7 @@ class Registry(QWidget):
         self.category.setCurrentIndex(max(0,self.category.findData(selected_category)));self.category.blockSignals(False)
         if mode in ('acts','defects'):
             source='stock_acts' if mode=='acts' else 'defect_acts';cols='id,act_date,number,object_name,'+('status,basis' if mode=='acts' else 'reason,notes');query=f'SELECT {cols} FROM {source}';headers=['Дата','Номер','Объект','Статус' if mode=='acts' else 'Основание','Основание' if mode=='acts' else 'Примечание'];fields=['number','object_name','basis' if mode=='acts' else 'reason'];datecol='act_date'
-        elif mode=='norms':query='SELECT id,name,diameter,thickness,basis,notes FROM norm_profiles';headers=['Название нормы','Диаметр','Стенка','На единицу','Источник / примечание'];fields=['name','diameter','notes'];datecol=None
+        elif mode=='norms':query="SELECT id,name,diameter,thickness,basis,(SELECT count(*) FROM norm_items i WHERE i.profile_id=norm_profiles.id AND i.rate IS NOT NULL)||' из '||(SELECT count(*) FROM norm_items i WHERE i.profile_id=norm_profiles.id) filled,notes FROM norm_profiles";headers=['Название нормы','Диаметр','Стенка','На единицу','Нормы заданы','Источник / примечание'];fields=['name','diameter','notes'];datecol=None
         elif mode in ('materials','balances'):
             query='SELECT m.id,m.name,m.category,m.unit,coalesce(b.qty,0)/1000000.0 balance,m.notes FROM stock_materials m LEFT JOIN (SELECT material_id,sum(qty) qty FROM stock_moves GROUP BY material_id) b ON b.material_id=m.id';headers=['Материал','Категория','Ед.','Остаток','Примечание'];fields=['name','category','notes'];datecol=None
         else:
@@ -295,6 +296,17 @@ class Registry(QWidget):
         {'acts':ActDialog,'defects':DefectDialog,'materials':MaterialDialog,'norms':NormDialog}[self.mode](parent=self).exec();self.load_data()
     def edit(self):
         if self.selected() and self.mode in ('acts','defects','materials','balances','norms'):{'acts':ActDialog,'defects':DefectDialog,'materials':MaterialDialog,'balances':MaterialDialog,'norms':NormDialog}[self.mode](self.selected(),self).exec();self.load_data()
+    def copy_norm(self):
+        pid=self.selected()
+        if not pid:return
+        try:
+            with db.transaction():
+                old=db.fetchone('SELECT name,diameter,thickness,basis,notes FROM norm_profiles WHERE id=?',(pid,))
+                new=db.execute('INSERT INTO norm_profiles(name,diameter,thickness,basis,notes) VALUES(?,?,?,?,?)',(old[0]+' (копия)',*old[1:])).lastrowid
+                db.execute('INSERT INTO norm_items(profile_id,material_id,rate) SELECT ?,material_id,rate FROM norm_items WHERE profile_id=?',(new,pid))
+            self.load_data()
+            NormDialog(new,self).exec();self.load_data()
+        except Exception as e:error(self,e)
     def report(self):
         from .report_dialog import ReportTemplateDialog
         query,params=self.pager.filters.apply(self.report_query,self.report_params)
@@ -317,7 +329,7 @@ class Registry(QWidget):
 class WriteoffView(QWidget):
     def __init__(self):
         super().__init__();l=QVBoxLayout(self);self.tabs=QTabWidget();l.addWidget(self.tabs,1)
-        for mode,label in [('acts','Акты списания'),('defects','Дефектные акты'),('norms','Нормы расхода'),('materials','Материалы'),('balances','Остатки'),('moves','Движение материалов')]:self.tabs.addTab(Registry(mode),label)
+        for mode,label in [('acts','Акты списания'),('defects','Дефектные акты'),('norms','Справочник норм'),('materials','Материалы'),('balances','Остатки'),('moves','Движение материалов')]:self.tabs.addTab(Registry(mode),label)
         from .workspace_view import WorkspaceView
         self.tabs.addTab(WorkspaceView('writeoffs'),'Прежние записи');self.tabs.currentChanged.connect(lambda _:self.load_data())
     def load_data(self):self.tabs.currentWidget().load_data()

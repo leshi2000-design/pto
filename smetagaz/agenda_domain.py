@@ -201,6 +201,7 @@ def events_between(db, start, end, today=None):
         ("SELECT id,contract_date,contract_number,object_name,coalesce(nullif(client_name,''),party_name),coalesce(contract_signed,1) FROM contracts WHERE coalesce(contract_date,'')<>''", 'contract', 'Монтаж ГСВ', 'contracts'),
         ("SELECT id,contract_date,contract_number,object_name,coalesce(nullif(client_name,''),party_name),coalesce(contract_signed,1) FROM gsv_projects WHERE coalesce(contract_date,'')<>''", 'contract', 'Проект ГСВ', 'gsv_projects'),
         ("SELECT id,contract_date,contract_number,title,client_name,1 FROM gsn_projects WHERE coalesce(contract_date,'')<>''", 'contract', 'Монтаж ГСН', 'gsn_projects'),
+        ("SELECT id,act_date,contract_number,title,client_name,coalesce(act_signed,0) FROM gsn_projects WHERE coalesce(act_date,'')<>''", 'act', 'Монтаж ГСН', 'gsn_projects'),
         ("SELECT id,acceptance_act_date,contract_number,object_name,coalesce(nullif(client_name,''),party_name),coalesce(act_signed,1) FROM contracts WHERE coalesce(acceptance_act_date,'')<>''", 'act', 'Монтаж ГСВ', 'contracts'),
         ("SELECT id,act_date,contract_number,object_name,coalesce(nullif(client_name,''),party_name),coalesce(act_signed,1) FROM gsv_projects WHERE coalesce(act_date,'')<>''", 'act', 'Проект ГСВ', 'gsv_projects'),
         ("SELECT id,work_start_date,contract_number,object_name,coalesce(nullif(client_name,''),party_name),1 FROM contracts WHERE coalesce(work_start_date,'')<>''", 'work', 'Монтаж ГСВ · начало работ', 'contracts'),

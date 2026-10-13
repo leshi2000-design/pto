@@ -204,7 +204,7 @@ class PipesTab(QWidget):
         layout.addLayout(bar)
 
         layout.addWidget(QLabel('<b>Стыки</b> — строки повторяют трубопроводы верхней таблицы; количество стыков вводится вручную.'))
-        self.bottom = make_table(['Наименование трубопровода', 'Количество стыков, шт.', 'Примечание'], (330, 170))
+        self.bottom = make_table(['Наименование трубопровода', 'Количество стыков, шт.', 'Норма расхода (справочник норм)', 'Примечание'], (330, 170, 330))
         layout.addWidget(self.bottom, 2)
         bar = QHBoxLayout()
         for text, fn in (('＋ Добавить произвольный стык', self.add_custom), ('Удалить строку', self.remove_joint)):
@@ -214,6 +214,21 @@ class PipesTab(QWidget):
         self.total = QLabel('')
         self.total.setStyleSheet('font-weight: 700;')
         bar.addWidget(self.total, 1)
+        layout.addLayout(bar)
+        bar = QHBoxLayout()
+        layout.addWidget(QLabel('<b>Расход материалов на объект</b> — считается автоматически: количество стыков × норма из «Списание → Справочник норм».'))
+        self.plan = make_table(['Материал', 'Ед.', 'Расход на объект'], (420, 80))
+        self.plan.setMaximumHeight(190)
+        layout.addWidget(self.plan, 1)
+        self.plan_warn = QLabel('')
+        self.plan_warn.setWordWrap(True)
+        self.plan_warn.setStyleSheet('color: #B45309;')
+        layout.addWidget(self.plan_warn)
+        bar = QHBoxLayout()
+        b = QPushButton('Выгрузить расход в Excel…')
+        b.clicked.connect(self.export_plan)
+        bar.addWidget(b)
+        bar.addStretch()
         layout.addLayout(bar)
         bar = QHBoxLayout()
         self.btn_work = QPushButton('Внести в график работ…')
@@ -295,10 +310,10 @@ class PipesTab(QWidget):
         for r in range(self.bottom.rowCount()):
             name_item = self.bottom.item(r, 0)
             rows.append(dict(id=name_item.data(Qt.ItemDataRole.UserRole), pipeline_id=name_item.data(Qt.ItemDataRole.UserRole + 1), custom=name_item.data(Qt.ItemDataRole.UserRole + 2),
-                             name=name_item.text().strip(), count=self.bottom.cellWidget(r, 1).value(), note=read_item(self.bottom, r, 2)))
+                             name=name_item.text().strip(), count=self.bottom.cellWidget(r, 1).value(), profile_id=self.bottom.cellWidget(r, 2).currentData(), note=read_item(self.bottom, r, 3)))
         return rows
 
-    def add_joint_row(self, name, count=0, note='', rid=None, pipeline_id=None, custom=0):
+    def add_joint_row(self, name, count=0, note='', rid=None, pipeline_id=None, custom=0, profile_id=None):
         r = self.bottom.rowCount()
         self.bottom.insertRow(r)
         item = QTableWidgetItem(name)
@@ -314,14 +329,23 @@ class PipesTab(QWidget):
         spin.setValue(count or 0)
         spin.valueChanged.connect(self.update_total)
         self.bottom.setCellWidget(r, 1, spin)
-        self.bottom.setItem(r, 2, QTableWidgetItem(note or ''))
+        combo = QComboBox()
+        auto_id = md.guess_profile(db, name)
+        auto_name = db.fetchone('SELECT name FROM norm_profiles WHERE id=?', (auto_id,))[0] if auto_id else None
+        combo.addItem(f'Авто по Ду: {auto_name}' if auto_name else 'Авто по Ду: норма не найдена', None)
+        for pid_, pname in db.fetchall('SELECT id,name FROM norm_profiles ORDER BY diameter+0,name'):
+            combo.addItem(pname, pid_)
+        combo.setCurrentIndex(max(0, combo.findData(profile_id)))
+        combo.currentIndexChanged.connect(self.update_total)
+        self.bottom.setCellWidget(r, 2, combo)
+        self.bottom.setItem(r, 3, QTableWidgetItem(note or ''))
 
     def sync_bottom(self):
         """Строки нижней таблицы следуют за верхней, введённые количества сохраняются."""
         if self._loading:
             return
         old = self.joint_rows()
-        counts = {r['pipeline_id']: (r['count'], r['note'], r['id']) for r in old if r['pipeline_id'] and not r['custom']}
+        counts = {r['pipeline_id']: (r['count'], r['note'], r['id'], r['profile_id']) for r in old if r['pipeline_id'] and not r['custom']}
         customs = [r for r in old if r['custom']]
         self.bottom.setRowCount(0)
         seen = set()
@@ -331,10 +355,10 @@ class PipesTab(QWidget):
                 continue
             seen.add(pid)
             name = db.fetchone('SELECT name FROM gsv_pipelines WHERE id=?', (pid,))[0]
-            count, note, rid = counts.get(pid, (0, '', None))
-            self.add_joint_row(name, count, note, rid, pid, 0)
+            count, note, rid, profile = counts.get(pid, (0, '', None, None))
+            self.add_joint_row(name, count, note, rid, pid, 0, profile)
         for r in customs:
-            self.add_joint_row(r['name'], r['count'], r['note'], r['id'], None, 1)
+            self.add_joint_row(r['name'], r['count'], r['note'], r['id'], None, 1, r['profile_id'])
         self.update_total()
 
     def add_custom(self):
@@ -356,6 +380,52 @@ class PipesTab(QWidget):
     def update_total(self, *_):
         total = sum(self.bottom.cellWidget(r, 1).value() for r in range(self.bottom.rowCount()))
         self.total.setText(f'Всего стыков по объекту: {total} шт.')
+        if not self._loading:
+            self.refresh_plan()
+
+    def refresh_plan(self):
+        """Пересчёт расхода материалов по текущим данным таблицы (без сохранения)."""
+        plan = md.plan_consumption(db, self.joint_rows())
+        self.last_plan = plan
+        self.plan.setRowCount(len(plan['materials']))
+        for i, m in enumerate(plan['materials']):
+            for c, v in enumerate((m['name'], m['unit'], md.format_qty(m['qty']))):
+                it = QTableWidgetItem(v)
+                if c == 2:
+                    it.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.plan.setItem(i, c, it)
+        self.plan_warn.setText('\n'.join('⚠ ' + w for w in plan['warnings'][:8]) + (f'\n… и ещё {len(plan["warnings"]) - 8}' if len(plan['warnings']) > 8 else ''))
+
+    def export_plan(self):
+        plan = getattr(self, 'last_plan', None) or md.plan_consumption(db, self.joint_rows())
+        if not plan['materials'] and not plan['lines']:
+            QMessageBox.information(self, 'Расход', 'Введите количество стыков — тогда появится расход материалов.')
+            return
+        path, _ = QFileDialog.getSaveFileName(self, 'Расход материалов на объект', 'Расход_материалов.xlsx', 'Excel (*.xlsx)')
+        if not path:
+            return
+        import openpyxl
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = 'Расход на объект'
+        ws.append(['Материал', 'Ед.', 'Расход'])
+        for m in plan['materials']:
+            ws.append([m['name'], m['unit'], float(m['qty'])])
+        det = wb.create_sheet('Расчёт по стыкам')
+        det.append(['Трубопровод', 'Стыков', 'Норма', 'Материал', 'Ед.', 'Расход на 1 стык', 'Расход'])
+        for line in plan['lines']:
+            for it in line['items'] or [dict(name='', unit='', rate='', qty='')]:
+                det.append([line['name'], line['count'], line['profile_name'] or 'норма не найдена', it['name'], it['unit'], str(it['rate']), float(it['qty']) if it['qty'] != '' else ''])
+        for sheet in wb.worksheets:
+            for col in sheet.columns:
+                sheet.column_dimensions[col[0].column_letter].width = min(max(len(str(c.value or '')) for c in col) + 3, 60)
+            for row_cells in sheet:
+                for cell in row_cells:
+                    if isinstance(cell.value, str):
+                        cell.data_type = 's'
+        wb.save(path)
+        QMessageBox.information(self, 'Расход', 'Файл сохранён.')
 
     def load(self, cid):
         self._loading = True
@@ -365,7 +435,7 @@ class PipesTab(QWidget):
             for p in md.pipelines(db, cid):
                 self.add_pipe(p['pipeline_id'], p['quantity'], p['note'], p['from_estimate'])
             for j in md.joints(db, cid):
-                self.add_joint_row(j['name'], j['count'], j['note'], j['id'], j['pipeline_id'], j['custom'])
+                self.add_joint_row(j['name'], j['count'], j['note'], j['id'], j['pipeline_id'], j['custom'], j['profile_id'])
         self._loading = False
         self.update_total()
 

@@ -69,6 +69,9 @@ def migrate(db):
         'CREATE INDEX IF NOT EXISTS idx_gsvm_joints ON gsvm_joints(contract_id)',
     ):
         db.execute(sql)
+    jcols = {r[1] for r in db.fetchall('PRAGMA table_info(gsvm_joints)')}
+    if jcols and 'profile_id' not in jcols:      # норма расхода, выбранная для строки стыков (пусто — подбирается по Ду)
+        db.execute('ALTER TABLE gsvm_joints ADD COLUMN profile_id INTEGER REFERENCES norm_profiles(id) ON DELETE SET NULL')
     # История смет ведётся триггерами: любое изменение позиций или итога попадает в журнал независимо от того, где оно сделано.
     alive = 'EXISTS(SELECT 1 FROM estimates WHERE id={e}.estimate_id)'
     db.execute('DROP TRIGGER IF EXISTS estimate_log_insert')
@@ -290,7 +293,7 @@ def save_pipelines(db, cid, rows):
 
 
 def joints(db, cid):
-    cur = db.execute('SELECT id,pipeline_id,name,count,note,custom FROM gsvm_joints WHERE contract_id=? ORDER BY custom,id', (cid,))
+    cur = db.execute('SELECT id,pipeline_id,name,count,note,custom,profile_id FROM gsvm_joints WHERE contract_id=? ORDER BY custom,id', (cid,))
     return [dict(zip([c[0] for c in cur.description], r)) for r in cur.fetchall()]
 
 
@@ -322,11 +325,12 @@ def save_joints(db, cid, rows):
             if not name:
                 raise ValueError('Укажите наименование трубопровода для стыков')
             if r.get('id'):
-                db.execute('UPDATE gsvm_joints SET name=?,count=?,note=? WHERE id=? AND contract_id=?', (name, count, (r.get('note') or '').strip(), r['id'], cid))
+                db.execute('UPDATE gsvm_joints SET name=?,count=?,note=?,profile_id=? WHERE id=? AND contract_id=?',
+                           (name, count, (r.get('note') or '').strip(), r.get('profile_id') or None, r['id'], cid))
                 keep.add(r['id'])
             elif r.get('custom'):
-                keep.add(db.execute('INSERT INTO gsvm_joints(contract_id,pipeline_id,name,count,note,custom) VALUES(?,?,?,?,?,1)',
-                                    (cid, None, name, count, (r.get('note') or '').strip())).lastrowid)
+                keep.add(db.execute('INSERT INTO gsvm_joints(contract_id,pipeline_id,name,count,note,custom,profile_id) VALUES(?,?,?,?,?,1,?)',
+                                    (cid, None, name, count, (r.get('note') or '').strip(), r.get('profile_id') or None)).lastrowid)
         for r in joints(db, cid):
             if r['custom'] and r['id'] not in keep:
                 db.execute('DELETE FROM gsvm_joints WHERE id=?', (r['id'],))
@@ -500,6 +504,58 @@ def guess_profile(db, name):
         return None
     row = db.fetchone('SELECT id FROM norm_profiles WHERE diameter=? ORDER BY id LIMIT 1', (d,))
     return row[0] if row else None
+
+
+def plan_consumption(db, rows):
+    """Расход материалов на объект по стыкам: количество стыков × норма расхода из справочника норм («Списание» → «Справочник норм»).
+
+    rows: [{'name', 'count', 'profile_id' (или None — норма подбирается по Ду из названия)}].
+    Возвращает {'materials': [{material_id,name,unit,qty}], 'lines': [{name,count,profile_id,profile_name,auto,items:[{name,unit,rate,qty}]}], 'warnings': [текст]}.
+    Ничего не блокирует: строки без нормы и материалы без заданной нормы попадают в warnings, остальное считается."""
+    from decimal import Decimal, InvalidOperation
+    totals, lines, warnings = {}, [], []
+    for r in rows:
+        count = int(r.get('count') or 0)
+        if count <= 0:
+            continue
+        name = str(r.get('name') or '').strip()
+        pid, auto = r.get('profile_id'), False
+        if not pid:
+            pid, auto = guess_profile(db, name), True
+        profile = db.fetchone('SELECT name,basis FROM norm_profiles WHERE id=?', (pid,)) if pid else None
+        line = dict(name=name, count=count, profile_id=pid, profile_name=profile[0] if profile else '', auto=auto, items=[])
+        lines.append(line)
+        if not profile:
+            d = diameter_of(name)
+            warnings.append(f'«{name}»: не найдена норма расхода' + (f' для Ду {d}' if d else '') + ' — выберите норму в столбце «Норма расхода» или добавьте её в справочник норм.')
+            continue
+        items = db.fetchall('SELECT i.material_id,m.name,m.unit,i.rate FROM norm_items i JOIN stock_materials m ON m.id=i.material_id WHERE i.profile_id=? ORDER BY i.id', (pid,))
+        if not items:
+            warnings.append(f'«{name}»: в норме «{profile[0]}» нет материалов.')
+        for mid, mname, unit, rate in items:
+            if rate in (None, ''):
+                warnings.append(f'«{name}»: в норме «{profile[0]}» не задан расход «{mname}» (введите норму или 0).')
+                continue
+            try:
+                qty = Decimal(str(rate).replace(',', '.')) * count
+            except InvalidOperation:
+                warnings.append(f'«{name}»: некорректная норма «{mname}»: {rate}')
+                continue
+            line['items'].append(dict(name=mname, unit=unit, rate=rate, qty=qty))
+            cur = totals.setdefault(mid, dict(material_id=mid, name=mname, unit=unit, qty=Decimal(0)))
+            cur['qty'] += qty
+    materials = [dict(t, qty=t['qty']) for t in totals.values() if t['qty'] != 0]
+    return dict(materials=sorted(materials, key=lambda m: m['name']), lines=lines, warnings=warnings)
+
+
+def object_consumption(db, cid):
+    """Расход материалов по стыкам договора «Монтаж ГСВ» (по сохранённым данным)."""
+    return plan_consumption(db, joints(db, cid))
+
+
+def format_qty(value):
+    text = format(value.normalize(), 'f') if hasattr(value, 'normalize') else str(value)
+    return text.rstrip('0').rstrip('.') if '.' in text else text
 
 
 def calc_consumption(db, volumes):

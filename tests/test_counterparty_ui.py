@@ -169,11 +169,11 @@ def test_sidebar_sections_notes_and_gsn_catalog(env, monkeypatch):
     order = ['Проекты ГСВ', 'Монтаж ГСВ', 'Монтаж ГСН', 'СМР', 'Клиенты', 'Юрлица', 'Сварщики', 'Списание', 'Калькуляторы', 'Статистика']
     assert [n for n in names if n in order] == order
     assert names[-4:] == ['Справочники ГСВ', 'Справочник ГСН', 'Справочник', 'Настройки']
-    assert set(w.nav_groups) == {'Услуги', 'Контрагенты', 'Дополнительно', 'Справочники'}
-    w.toggle_group('Услуги', False)
-    assert db.get_setting('nav_collapsed') == '["Услуги"]'
-    w.switch_tab(names.index('СМР'), w.tabs_buttons[names.index('СМР')])
-    assert not w.nav_groups['Услуги'][1].isHidden() and db.get_setting('nav_collapsed') == '[]'
+    assert not hasattr(w, 'nav_groups') and not hasattr(w, 'toggle_group')            # сворачиваемых деревьев нет
+    from PyQt6.QtWidgets import QLabel, QFrame
+    headers = [l.text() for l in w.findChildren(QLabel, 'navSection')]
+    assert headers == ['УСЛУГИ', 'СМЕТЫ', 'КОНТРАГЕНТЫ', 'ДОПОЛНИТЕЛЬНО', 'СПРАВОЧНИКИ']
+    assert len(w.findChildren(QFrame, 'navDivider')) == 6                              # линия перед каждым разделом, кроме первого
     for i, b in enumerate(w.tabs_buttons):
         w.switch_tab(i, b)
     # заметки в «Сегодня»

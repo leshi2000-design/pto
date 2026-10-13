@@ -49,7 +49,7 @@ def auto_map(headers):
     return mapping
 
 
-def read_table(path):
+def read_table(path, mapper=None):
     """(заголовки, строки, номер строки заголовка). Строка заголовков ищется среди первых 15 строк по совпадению с известными названиями."""
     import openpyxl
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
@@ -58,7 +58,7 @@ def read_table(path):
     wb.close()
     best, best_score = 0, -1
     for i, row in enumerate(rows[:15]):
-        score = len(auto_map(row))
+        score = len((mapper or auto_map)(row))
         if score > best_score:
             best, best_score = i, score
     headers = [str(c).strip() if c is not None else '' for c in rows[best]] if rows else []
@@ -173,7 +173,7 @@ def prepare(db, rows, mapping):
                 messages.append('номер ПД повторяется в таблице выше')
                 status = 'error'
             seen.add(data['pd_number'])
-            if db.fetchone('SELECT 1 FROM gsv_projects WHERE pd_number=?', (data['pd_number'],)):
+            if status != 'error' and db.fetchone('SELECT 1 FROM gsv_projects WHERE pd_number=?', (data['pd_number'],)):
                 status = 'exists'
         result.append(dict(row=number, data=data, status=status, messages=messages))
     return result

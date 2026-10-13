@@ -191,31 +191,26 @@ class MainWindow(QMainWindow):
             for title, ids in sections:
                 if title == 'Дополнительно':
                     ids.extend(extra)
-        try:
-            collapsed = set(json.loads(db.get_setting("nav_collapsed", "[]")))
-        except (ValueError, TypeError):
-            collapsed = set()
         from .icons import icon
-        self.nav_groups = {}
+        shown_sections = 0
         for title, ids in sections:
             visible = [i for i in ids if i in self.view_classes and config.get(i, {}).get("visible", 1)]
             if not visible:
                 continue
-            target = self.nav_layout
-            if len(visible) > 1:
-                header = QPushButton(("▸  " if title in collapsed else "▾  ") + title.upper())
-                header.setObjectName("navGroup")
-                header.setToolTip("Свернуть или развернуть раздел")
-                box = QWidget()
-                box_layout = QVBoxLayout(box)
-                box_layout.setContentsMargins(0, 0, 0, 0)
-                box_layout.setSpacing(3)
-                box.setVisible(title not in collapsed)
-                header.clicked.connect(lambda _=False, t=title: self.toggle_group(t))
+            if shown_sections:      # разделы отделены друг от друга линией; сворачиваемых деревьев нет
+                line = QFrame()
+                line.setObjectName("navDivider")
+                line.setFixedHeight(1)
+                self.nav_layout.addSpacing(6)
+                self.nav_layout.addWidget(line)
+                self.nav_layout.addSpacing(4)
+            shown_sections += 1
+            first_name = config.get(visible[0], {}).get("name") or dict(KNOWN_TABS).get(visible[0], visible[0])
+            if len(visible) > 1 or first_name.casefold() != title.casefold():
+                header = QLabel(title.upper())
+                header.setObjectName("navSection")
                 self.nav_layout.addWidget(header)
-                self.nav_layout.addWidget(box)
-                self.nav_groups[title] = (header, box)
-                target = box_layout
+            target = self.nav_layout
             for tab_id in visible:
                 view_class = self.view_classes[tab_id]
                 view_instance = QWidget()
@@ -225,11 +220,9 @@ class MainWindow(QMainWindow):
                 btn = QPushButton(name)
                 btn.setIcon(icon(tab_id))
                 btn.setObjectName("navButton")
-                btn.setProperty("grouped", len(visible) > 1)
                 btn.setToolTip(name)
                 btn.setCheckable(True)
                 btn.setMinimumHeight(32)
-                btn._group = title if len(visible) > 1 else None
                 self.stack.addWidget(view_instance)
                 target.addWidget(btn)
                 self.tabs_buttons.append(btn)
@@ -239,18 +232,7 @@ class MainWindow(QMainWindow):
         if self.tabs_buttons:
             self.switch_tab(0, self.tabs_buttons[0])
 
-    def toggle_group(self, title, expand=None):
-        header, box = self.nav_groups[title]
-        show = box.isHidden() if expand is None else expand
-        box.setVisible(show)
-        header.setText(("▾  " if show else "▸  ") + title.upper())
-        collapsed = [t for t, (_h, b) in self.nav_groups.items() if b.isHidden()]
-        db.set_setting("nav_collapsed", json.dumps(collapsed, ensure_ascii=False))
-
     def switch_tab(self, idx, target_btn):
-        group = getattr(target_btn, '_group', None)
-        if group and group in self.nav_groups and self.nav_groups[group][1].isHidden():
-            self.toggle_group(group, True)
         view = self.views[idx]
         if hasattr(view, '_factory'):
             replacement = view._factory()

@@ -43,8 +43,9 @@ def test_statement_for_both_sections(d, tmp_path):
     m = st.statement(d, 'contracts', 2026, 9)
     assert [r['client'] for r in m['signed']] == ['Козлов'] and [r['client'] for r in m['unsigned']] == ['Не подписал']     # дата ДД.ММ.ГГГГ тоже распознаётся
     assert st.statement(d, 'gsv_projects', 2026, 10)['signed'][0]['client'] == 'Другой месяц'
+    assert st.statement(d, 'gsn_projects', 2026, 9) == {'signed': [], 'unsigned': []}      # Монтаж ГСН тоже поддерживается (дата акта из импорта и карточки)
     with pytest.raises(ValueError):
-        st.statement(d, 'gsn_projects', 2026, 9)
+        st.statement(d, 'unknown', 2026, 9)
 
 
 def test_export_and_collect(d, tmp_path):
