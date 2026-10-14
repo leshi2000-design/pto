@@ -1,11 +1,12 @@
 from PyQt6.QtWidgets import QDialog,QVBoxLayout,QHBoxLayout,QLabel,QPushButton,QTableWidget,QTableWidgetItem,QDateEdit,QDoubleSpinBox,QLineEdit,QMessageBox
 from PyQt6.QtCore import QDate,Qt
+from .date_widgets import DateEdit
 from .database import db
 from . import payments_domain as domain
 class PaymentsDialog(QDialog):
     def __init__(self,owner,rid,parent=None):
         super().__init__(parent);self.owner=owner;self.rid=rid;self.setWindowTitle('Оплаты · '+domain.OWNERS[owner][1]);self.resize(800,600);l=QVBoxLayout(self);self.info=QLabel();self.info.setWordWrap(True);l.addWidget(self.info);self.table=QTableWidget(0,3);self.table.setHorizontalHeaderLabels(['Дата','Сумма','Примечание']);self.table.horizontalHeader().setStretchLastSection(True);l.addWidget(self.table,1)
-        bar=QHBoxLayout();self.day=QDateEdit(QDate.currentDate());self.day.setCalendarPopup(True);self.amount=QDoubleSpinBox();self.amount.setRange(0,1e9);self.amount.setDecimals(2);self.note=QLineEdit();self.note.setPlaceholderText('Примечание к платежу')
+        bar=QHBoxLayout();self.day=DateEdit(QDate.currentDate());self.day.setCalendarPopup(True);self.amount=QDoubleSpinBox();self.amount.setRange(0,1e9);self.amount.setDecimals(2);self.note=QLineEdit();self.note.setPlaceholderText('Примечание к платежу')
         for w in (self.day,self.amount,self.note):bar.addWidget(w)
         b=QPushButton('Внести оплату');b.clicked.connect(self.add);bar.addWidget(b);l.addLayout(bar);bar=QHBoxLayout();b=QPushButton('Заполнить остаток');b.clicked.connect(lambda:self.amount.setValue(max(0,float(domain.summary(db,self.owner,self.rid)['debt']))));bar.addWidget(b);b=QPushButton('Удалить ошибочный платёж');b.clicked.connect(self.remove);bar.addWidget(b)
         if owner!='estimates':b=QPushButton('Связать со сметой…');b.clicked.connect(self.link);bar.addWidget(b)

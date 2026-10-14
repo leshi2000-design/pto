@@ -3,6 +3,7 @@
 график по месяцам (pyqtgraph) и таблица расхода позиций с фильтром по разделу
 справочника и поиском.
 """
+from .date_widgets import DateEdit
 from .lazy import LazyModule
 pg = LazyModule("pyqtgraph")
 
@@ -28,9 +29,9 @@ class StatisticsView(QWidget):
         self.combo_period.currentIndexChanged.connect(self.on_period_change)
         filter_bar.addWidget(self.combo_period)
 
-        self.date_start = QDateEdit()
+        self.date_start = DateEdit()
         self.date_start.setCalendarPopup(True)
-        self.date_end = QDateEdit()
+        self.date_end = DateEdit()
         self.date_end.setCalendarPopup(True)
 
         filter_bar.addWidget(QLabel("с"))

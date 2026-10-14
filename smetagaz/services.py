@@ -20,6 +20,7 @@ class AutoBackupService(QObject):
         self.timer=QTimer(self);self.timer.timeout.connect(self.run_checks);self.timer.start(60000)
         QTimer.singleShot(5000,self.run_checks)
     def run_checks(self):
+        if getattr(self,'_stopped',False):return          # после закрытия пул остановлен: отложенный запуск (singleShot) ничего не делает
         if not (self.future and not self.future.done()):
             try:last=datetime.fromisoformat(db.get_setting('last_db_backup',''))
             except ValueError:last=datetime.min
@@ -71,20 +72,38 @@ class AutoBackupService(QObject):
         except Exception as e:
             logging.exception('Contracts Excel export failed')
             db.set_setting('contracts_excel_status',f'{now:%d.%m.%Y %H:%M}: ошибка экспорта — {e}')
-    def backup_on_exit(self,min_age=300):
-        """При закрытии программы: свежая копия, если последней больше `min_age` секунд (закрыли раньше часового срока)."""
-        self.timer.stop();self.pool.shutdown(wait=True)       # дожидаемся уже идущих копий
-        now=datetime.now()
+    EXIT_MIN_AGE=1800        # копия при закрытии — только если последней больше 30 минут
+
+    def exit_backup_needed(self,now=None):
+        now=now or datetime.now()
         try:last=datetime.fromisoformat(db.get_setting('last_db_backup',''))
         except ValueError:last=datetime.min
-        if (now-last).total_seconds()>min_age:self.backup_db(now)
+        if (now-last).total_seconds()>self.EXIT_MIN_AGE:return True
         try:
             from . import offsite_backup
-            if offsite_backup.configured(db):
-                try:age=(now-datetime.fromisoformat(db.get_setting('last_offsite_backup',''))).total_seconds()
-                except ValueError:age=1e9
-                if age>min_age:self.offsite_backup(now)
+            return bool(offsite_backup.configured(db) and offsite_backup.due(db)[0])
         except Exception:
-            logging.exception('Exit offsite backup failed')
+            return False
+    def start_exit_backup(self):
+        """Копия при закрытии выполняется в фоне (окно программы уже скрыто); возвращает Future."""
+        def work():
+            now=datetime.now()
+            try:last=datetime.fromisoformat(db.get_setting('last_db_backup',''))
+            except ValueError:last=datetime.min
+            if (now-last).total_seconds()>self.EXIT_MIN_AGE:self.backup_db(now)
+            try:
+                from . import offsite_backup
+                if offsite_backup.configured(db) and offsite_backup.due(db)[0]:self.offsite_backup(now)
+            except Exception:
+                logging.exception('Exit offsite backup failed')
+        self._stopped=True;self.timer.stop()
+        try:return self.pool.submit(work)
+        except RuntimeError:           # пул уже остановлен предыдущим закрытием
+            self.pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='backup');return self.pool.submit(work)
+    def backup_on_exit(self,min_age=None):
+        """Синхронный вариант (тесты и закрытие без окна): дожидается и делает копии при необходимости."""
+        self._stopped=True;self.timer.stop();self.pool.shutdown(wait=True)
+        if self.exit_backup_needed():
+            self.pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='backup');self.start_exit_backup().result()
     def close(self):
-        self.timer.stop();self.pool.shutdown(wait=True)
+        self._stopped=True;self.timer.stop();self.pool.shutdown(wait=True)

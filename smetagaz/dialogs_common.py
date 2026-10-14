@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
                               QDateEdit, QGridLayout, QGroupBox)
 from PyQt6.QtCore import Qt, QDate
 
+from .date_widgets import DateEdit
 from .database import db
 from .pagination import RegistryPager
 from .widgets import SmartTableManager
@@ -109,7 +110,7 @@ class LegacyPaymentDialog(QDialog):
 
         grp = QGroupBox("Внести новый платеж")
         grp_layout = QGridLayout(grp)
-        self.date_edit = QDateEdit()
+        self.date_edit = DateEdit()
         self.date_edit.setCalendarPopup(True)
         self.date_edit.setDate(QDate.currentDate())
         self.spin_paid = QDoubleSpinBox()

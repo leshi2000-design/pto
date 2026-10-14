@@ -71,6 +71,8 @@ class DocumentsView(QWidget):
                 if c==0 and self.picker:item.setCheckState(Qt.CheckState.Checked if rid in self.selected_ids else Qt.CheckState.Unchecked)
                 self.table.setItem(r,c,item)
         self._loading=False
+        from .registry_tools import autofit_columns
+        autofit_columns(self.table)
     def create(self):DocumentDialog(category=self.category or ('welder' if self.welder_id else 'attestation'),welder_id=self.welder_id,parent=self).exec();self.load_data()
     def add_many(self):
         paths,_=QFileDialog.getOpenFileNames(self,'Указать документы (без копирования)','','Все файлы (*)')

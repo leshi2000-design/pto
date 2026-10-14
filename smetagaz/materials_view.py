@@ -126,6 +126,8 @@ class MaterialsView(QWidget):
         self.btn_open_card.setProperty("type", "primary")
         self.btn_add = QPushButton("Добавить позицию")
         self.btn_parse = QPushButton("Спарсить с сайта")
+        self.btn_prices = QPushButton("Обновить цены по ссылкам")
+        self.btn_prices.setToolTip("Прочитать актуальные цены со страниц поставщиков (у позиций, где указана ссылка)")
         self.btn_import_excel = QPushButton("Импорт Excel")
 
         self.btn_remove_dupes = QPushButton("Удалить дубликаты")
@@ -138,6 +140,7 @@ class MaterialsView(QWidget):
         actions.addWidget(self.btn_add)
         actions.addWidget(self.btn_parse)
         actions.addWidget(self.btn_import_excel)
+        actions.addWidget(self.btn_prices)
         actions.addWidget(self.btn_remove_dupes)
         actions.addWidget(self.btn_del)
         actions.addStretch()
@@ -175,6 +178,7 @@ class MaterialsView(QWidget):
         self.btn_open_card.clicked.connect(self.open_material_card)
         self.btn_add.clicked.connect(self.add_material)
         self.btn_parse.clicked.connect(self.open_scraper)
+        self.btn_prices.clicked.connect(self.update_prices)
         self.btn_import_excel.clicked.connect(self.import_materials_excel)
         self.btn_del.clicked.connect(self.del_material)
 
@@ -349,12 +353,24 @@ class MaterialsView(QWidget):
         dlg.exec()
         self.load_data()
 
+    def update_prices(self):
+        from .price_sync_view import PriceUpdateDialog
+        selected = {self.table.item(i.row(), 0).data(Qt.ItemDataRole.UserRole) for i in self.table.selectedItems()}
+        ids = None
+        if len(selected) > 1:        # выделено несколько позиций — проверяем только их
+            from . import price_sync
+            ids = [i for i in price_sync.linked_material_ids(db) if i in selected]
+        PriceUpdateDialog(self, self.selected_category_id, ids).exec()
+        self.load_data()
+
     def open_scraper(self):
         dlg = WebScraperDialog(current_cat_id=self.selected_category_id, parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted and dlg.parsed_data:
             d = dlg.parsed_data
-            db.execute("INSERT INTO materials (category_id, name, unit, price, url, note, item_type) VALUES (?, ?, ?, ?, ?, ?, 'Материал')",
-                       (d["category_id"], d["name"], d["unit"], d["price"], d["url"], d["note"]))
+            new_id = db.execute("INSERT INTO materials (category_id, name, unit, price, url, note, item_type) VALUES (?, ?, ?, ?, ?, ?, 'Материал')",
+                       (d["category_id"], d["name"], d["unit"], d["price"], d["url"], d["note"])).lastrowid
+            from . import price_sync
+            price_sync.remember_selector(db, new_id, d["url"], d.get("price_selector", ""))        # цену этого сайта потом можно обновлять автоматически
             self.load_data()
 
     def import_materials_excel(self):

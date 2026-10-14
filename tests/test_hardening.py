@@ -197,3 +197,69 @@ def test_backup_survives_fsync_errors(tmp_path, monkeypatch):
     security.decrypt_backup(tmp_path / 'b.sgb', tmp_path / 'out.zip', 'correct-password-1')
     assert (tmp_path / 'out.zip').read_bytes() == (tmp_path / 'b.zip').read_bytes()
     d.close()
+
+
+def test_close_hides_window_at_once_and_backs_up_in_background(tmp_path, monkeypatch):
+    import sys, time
+    from PyQt6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication([])
+    d = DatabaseManager(tmp_path / 'smetagaz.db'); d.init_db()
+    for name, mod in list(sys.modules.items()):
+        if name.startswith('smetagaz') and isinstance(getattr(mod, 'db', None), DatabaseManager) and mod.db is not d:
+            monkeypatch.setattr(mod, 'db', d)
+    import smetagaz.main_window as mw
+    monkeypatch.setattr(mw.QApplication, 'quit', staticmethod(lambda: None))
+    w = mw.MainWindow(); w.show(); app.processEvents()
+    w.backup_service.timer.stop()
+    started = time.perf_counter()
+    w.close()
+    assert not w.isVisible() and time.perf_counter() - started < 0.5      # окно скрылось сразу, копия идёт в фоне
+    end = time.time() + 20
+    while not getattr(w, '_exit_ready', False) and time.time() < end:
+        app.processEvents(); time.sleep(0.02)
+    assert w._exit_ready and list((tmp_path / 'backups').glob('auto_*.zip'))
+    d.close()
+
+
+def test_section_folder_root_is_user_defined(tmp_path, monkeypatch):
+    import smetagaz.database as database
+    from smetagaz import gsv_project_domain as gd, contracts_core as cc, folder_ui
+    d = DatabaseManager(tmp_path / 'smetagaz.db'); d.init_db()
+    monkeypatch.setattr(database, 'db', d)
+    assert gd.section_root('contracts') == gd.PROJECTS_DIR / 'Монтаж ГСВ'          # по умолчанию — внутри данных программы
+    mine = tmp_path / 'Мои договоры' / 'Монтаж'
+    d.set_setting('folder_root_contracts', str(mine))
+    assert gd.section_root('contracts') == mine and cc.section_root('smr') == gd.PROJECTS_DIR / 'СМР'
+    from PyQt6.QtWidgets import QMessageBox
+    monkeypatch.setattr(QMessageBox, 'exec', lambda self: 0)
+    box = {}
+
+    def fake_clicked(self):
+        return next(b for b in self.buttons() if b.text() == 'Создать новую')
+    monkeypatch.setattr(QMessageBox, 'clickedButton', fake_clicked)
+    path, create = folder_ui.choose_folder(None, 'contracts', '01-02-26 - ул. Мира')
+    assert create and path == str(mine / '01-02-26 - ул. Мира') and mine.is_dir()       # без лишних вопросов — в выбранной папке
+    d.close()
+
+
+def test_dates_are_shown_as_dd_mm_yyyy():
+    from PyQt6.QtWidgets import QApplication, QTableWidget, QTableWidgetItem
+    from PyQt6.QtCore import QDate
+    from smetagaz.dates import display_date
+    from smetagaz.date_widgets import DateEdit, install_display_patch
+    from smetagaz.domain_widgets import OptionalDate
+    app = QApplication.instance() or QApplication([])
+    assert display_date('2026-03-05') == '05.03.2026' and display_date('2026-03-05 14:30:00') == '05.03.2026 14:30:00' and display_date('текст') == 'текст'
+    install_display_patch()
+    table = QTableWidget(1, 1)
+    table.setItem(0, 0, QTableWidgetItem('2026-03-05'))
+    assert table.item(0, 0).text() == '05.03.2026'
+    edit = DateEdit(QDate(2026, 3, 5))
+    assert edit.displayFormat() == 'dd.MM.yyyy' and edit.text() == '05.03.2026'
+    optional = OptionalDate()
+    assert optional.value() == '' and optional.is_empty()
+    optional.set_value('2026-03-05')
+    assert optional.value() == '2026-03-05' and not optional.is_empty()
+    assert OptionalDate(default_today=True).value() == QDate.currentDate().toString('yyyy-MM-dd')
+    cal = edit.calendarWidget()
+    assert cal.firstDayOfWeek().name == 'Monday' and cal.locale().language().name == 'Russian'

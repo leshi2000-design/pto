@@ -255,7 +255,7 @@ def link_folder(db, mod, cid, path, create=False):
 
 
 def section_root(mod):
-    return gd.PROJECTS_DIR / cfg(mod)['section']
+    return gd.section_root(mod)
 
 
 def payments(db, mod, cid):

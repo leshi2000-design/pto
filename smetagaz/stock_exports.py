@@ -128,7 +128,8 @@ def export_document(db,source,rid,path,options=None):
                 for v in tail:append([v],True)
                 ws.page_setup.orientation='landscape' if opts['landscape'] else 'portrait';ws.page_setup.paperSize=ws.PAPERSIZE_A4;ws.page_setup.fitToWidth=1;ws.page_setup.fitToHeight=0;ws.sheet_properties.pageSetUpPr.fitToPage=True
                 ws.print_options.horizontalCentered=True
-            wb.save(temp)
+            from .dates import localize_workbook
+            localize_workbook(wb);wb.save(temp)
         else:raise ValueError('Выберите .docx, .xlsx или .pdf')
         os.replace(temp,path);return str(path)
     finally:

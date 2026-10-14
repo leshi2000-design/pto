@@ -5,6 +5,7 @@ from PyQt6.QtCore import Qt,QDate
 from PyQt6.QtGui import QColor
 from .database import db
 from .pagination import RegistryPager
+from .registry_tools import RegistryTools,autofit_columns
 from .domain_widgets import OptionalDate,ObjectField
 from .gsv_domain import save_job,set_work_day,owner_label
 from .welding_documents import DocumentsView
@@ -46,17 +47,18 @@ class WeldersRegistry(QWidget):
     def __init__(self):
         super().__init__();self.pager=RegistryPager(self);layout=QVBoxLayout(self);bar=QHBoxLayout();self.search=QLineEdit();self.search.setPlaceholderText('ФИО, телефон, клеймо…');bar.addWidget(self.search,1)
         for label,fn in [('Добавить сварщика',self.create),('Карточка / документы',self.edit),('Удалить запись',self.delete)]:b=QPushButton(label);b.clicked.connect(fn);bar.addWidget(b)
-        layout.addLayout(bar);self.table=QTableWidget(0,8);self.table.setHorizontalHeaderLabels(['ФИО','Рождение','Телефон','Аттестация','Вид сварки','Клеймо','Разряд','Действует до']);self.table.setColumnWidth(0,230);self.table.horizontalHeader().setStretchLastSection(True);self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers);self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows);layout.addWidget(self.table,1)
-        self.search.textChanged.connect(self.load_data);self.table.cellDoubleClicked.connect(lambda *_:self.edit());self.load_data()
+        layout.addLayout(bar);self.table=QTableWidget(0,9);self.table.setHorizontalHeaderLabels(['ФИО','Рождение','Телефон','Аттестация','Вид сварки','Клеймо','Разряд','Действует до','Примечания']);self.table.horizontalHeader().setStretchLastSection(True);self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers);self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows);layout.addWidget(self.table,1)
+        self.search.textChanged.connect(self.load_data);self.table.cellDoubleClicked.connect(lambda *_:self.edit());self.tools=RegistryTools(db,'welders',self.table,self.search,bar);self.load_data()
     def selected(self):
         r=self.table.currentRow();return self.table.item(r,0).data(Qt.ItemDataRole.UserRole) if r>=0 else None
     def load_data(self,*_):
-        q='%'+self.search.text().casefold()+'%';rows=self.pager.fetch('SELECT id,name,birth_date,phone,certificate,welding_type,stamp,grade,valid_until FROM welders WHERE LOWER(name) LIKE ? OR LOWER(phone) LIKE ? OR LOWER(stamp) LIKE ? ORDER BY id DESC',(q,q,q));self.table.setRowCount(len(rows))
+        q='%'+self.search.text().casefold()+'%';rows=self.pager.fetch('SELECT id,name,birth_date,phone,certificate,welding_type,stamp,grade,valid_until,notes FROM welders WHERE LOWER(name||\' \'||coalesce(phone,\'\')||\' \'||coalesce(stamp,\'\')||\' \'||coalesce(certificate,\'\')||\' \'||coalesce(welding_type,\'\')||\' \'||coalesce(notes,\'\')) LIKE ? ORDER BY id DESC',(q,));self.table.setRowCount(len(rows))
         for r,row in enumerate(rows):
             for c,value in enumerate(row[1:]):
                 item=QTableWidgetItem(str(value or ''));item.setData(Qt.ItemDataRole.UserRole,row[0])
                 if c==7 and value and value<date.today().isoformat():item.setForeground(QColor('#b91c1c'));item.setToolTip('Срок аттестации истёк')
                 self.table.setItem(r,c,item)
+        autofit_columns(self.table)
     def create(self):WelderDialog(parent=self).exec();self.load_data()
     def edit(self):
         if self.selected():WelderDialog(self.selected(),self).exec();self.load_data()
@@ -163,6 +165,7 @@ class ScheduleView(QWidget):
                 text=str(value or '')
                 if c==0:text=QDate.fromString(text,'yyyy-MM-dd').toString('dd.MM.yyyy') if text else 'Дата не задана'
                 item=QTableWidgetItem(text);item.setData(Qt.ItemDataRole.UserRole,row[0]);self.table.setItem(r,c,item)
+        autofit_columns(self.table)
     def create(self):JobDialog(reference=self.reference,parent=self).exec();self.load_data()
     def edit(self):
         if self.selected():JobDialog(self.selected(),parent=self).exec();self.load_data()

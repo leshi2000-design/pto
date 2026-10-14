@@ -151,6 +151,8 @@ def apply(app, dark=False, family='Segoe UI', size=10, accent=''):
         palette.setColor(QPalette.ColorGroup.Disabled, role, QColor(c['disabled']))
     app.setPalette(palette)
     _install_filter(app, dark)
+    from .date_widgets import install_display_patch
+    install_display_patch()
     arrows = _arrow_files(c['text2'])
     app.setStyleSheet(f'''
     QWidget {{ color:{c['text']}; }}
@@ -190,6 +192,10 @@ def apply(app, dark=False, family='Segoe UI', size=10, accent=''):
     QPushButton[type="danger"]:hover {{ background:{'#3A1F21' if dark else '#FEF2F2'}; }}
     QPushButton[type="warning"] {{ color:{'#FBBF24' if dark else '#92400E'}; border-color:{'#6B4E12' if dark else '#F3DDB0'}; }}
     QPushButton::menu-indicator {{ subcontrol-position:right center; subcontrol-origin:padding; right:6px; }}
+
+    QToolButton[registryTool="true"] {{ background:{c['panel']}; color:{c['text']}; border:1px solid {c['border']}; border-radius:8px; padding:5px 12px; min-height:22px; }}
+    QToolButton[registryTool="true"]:hover {{ background:{c['hover']}; }}
+    QToolButton[registryTool="true"]::menu-indicator {{ image:none; width:0; }}
 
     /* Поля ввода */
     QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox, QDoubleSpinBox, QDateEdit, QTimeEdit {{
@@ -254,6 +260,12 @@ def apply(app, dark=False, family='Segoe UI', size=10, accent=''):
     QSplitter::handle {{ background:transparent; }}
     QSplitter::handle:horizontal {{ width:6px; }} QSplitter::handle:vertical {{ height:6px; }}
     QDialogButtonBox QPushButton {{ min-width:84px; }}
-    QCalendarWidget QAbstractItemView {{ selection-background-color:{c['accent']}; selection-color:#FFFFFF; }}
-    QCalendarWidget QToolButton {{ color:{c['text']}; background:transparent; border:0; padding:4px 8px; }}
+    /* Календарь: внутренняя таблица не должна наследовать отступы обычных таблиц (иначе цифры и дни недели обрезаются) */
+    QCalendarWidget QAbstractItemView {{ background:{c['panel']}; color:{c['text']}; selection-background-color:{c['accent']}; selection-color:#FFFFFF; border:0; border-radius:0; outline:0; }}
+    QCalendarWidget QTableView::item {{ padding:0; border:0; }}
+    QCalendarWidget QHeaderView::section {{ padding:2px 0; border:0; background:{c['panel']}; color:{c['muted']}; font-weight:600; font-size:12px; }}
+    QCalendarWidget QToolButton {{ color:{c['text']}; background:transparent; border:0; border-radius:6px; padding:4px 8px; min-width:28px; }}
+    QCalendarWidget QToolButton:hover {{ background:{c['hover']}; }}
+    QCalendarWidget QMenu {{ padding:4px; }}
+    QCalendarWidget QSpinBox {{ min-width:70px; }}
     ''')

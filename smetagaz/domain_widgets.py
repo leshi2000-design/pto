@@ -1,15 +1,21 @@
 """Shared editors for clients, object references and GSV specifications."""
 from PyQt6.QtWidgets import (QWidget,QDialog,QVBoxLayout,QHBoxLayout,QGridLayout,QLineEdit,QTextEdit,QDateEdit,QLabel,QPushButton,QGroupBox,QComboBox,QTableWidget,QTableWidgetItem,QAbstractItemView,QDoubleSpinBox,QFileDialog,QMessageBox)
+from .date_widgets import DateEdit
 from PyQt6.QtCore import QDate,Qt,pyqtSignal
 from .database import db
 from .gsv_domain import EQUIPMENT_KINDS,get_client,owner_label,save_equipment,save_pipelines
 
-class OptionalDate(QDateEdit):
-    def __init__(self):
-        super().__init__();self.setCalendarPopup(True);self.setDisplayFormat('dd.MM.yyyy');self.setMinimumDate(QDate(1900,1,1));self.setSpecialValueText('Не указана');self.setDate(self.minimumDate())
+class OptionalDate(DateEdit):
+    """Дата, которую можно не указывать («Не указана»). Delete очищает поле; календарь открывается на сегодняшнем месяце, а не на 1900 годе."""
+    def __init__(self, default_today=False):
+        super().__init__();self.setSpecialValueText('Не указана');self.setDate(QDate.currentDate() if default_today else self.minimumDate())
+    def is_empty(self):return self.date()==self.minimumDate()
     def value(self):return '' if self.date()==self.minimumDate() else self.date().toString('yyyy-MM-dd')
     def set_value(self,value):
-        d=QDate.fromString(value or '','yyyy-MM-dd');self.setDate(d if d.isValid() else self.minimumDate())
+        d=QDate.fromString(str(value or '')[:10],'yyyy-MM-dd');self.setDate(d if d.isValid() else self.minimumDate())
+    def keyPressEvent(self,event):
+        if event.key() in (Qt.Key.Key_Delete,Qt.Key.Key_Backspace) and not self.lineEdit().hasSelectedText():self.setDate(self.minimumDate());return
+        super().keyPressEvent(event)
 
 class PhonesEditor(QWidget):
     """Несколько телефонов с пояснениями; хранится одной строкой «номер (пояснение); номер (пояснение)»."""

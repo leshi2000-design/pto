@@ -113,6 +113,8 @@ def export_registries(db, destination):
     fd, tmp = tempfile.mkstemp(suffix=".xlsx", dir=destination.parent)
     os.close(fd)
     try:
+        from .dates import localize_workbook
+        localize_workbook(wb)
         wb.save(tmp)
         keep_version(destination)
         os.replace(tmp, destination)

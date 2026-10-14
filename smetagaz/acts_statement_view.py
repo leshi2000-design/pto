@@ -68,12 +68,12 @@ class ActsStatementDialog(QDialog):
 
     @staticmethod
     def make_table():
-        t = QTableWidget(0, 10)
-        t.setHorizontalHeaderLabels(['Дата акта', '№ договора', 'Клиент', 'Объект', 'Адрес', 'Сумма', 'Оплачено', 'Остаток', 'Файл акта', 'Дата договора'])
+        t = QTableWidget(0, 11)
+        t.setHorizontalHeaderLabels(['Дата акта', '№ договора', 'Клиент', 'Объект', 'Адрес', 'Сумма', 'Оплачено', 'Дата оплаты', 'Остаток', 'Файл акта', 'Дата договора'])
         t.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         t.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         t.horizontalHeader().setStretchLastSection(True)
-        for i, w in enumerate((95, 110, 230, 220, 220, 90, 90, 90, 80)):
+        for i, w in enumerate((95, 110, 230, 220, 220, 90, 90, 100, 90, 80)):
             t.setColumnWidth(i, w)
         return t
 
@@ -85,14 +85,14 @@ class ActsStatementDialog(QDialog):
         for table, rows in ((self.signed, self.data['signed']), (self.unsigned, self.data['unsigned'])):
             table.setRowCount(len(rows))
             for r, row in enumerate(rows):
-                values = [st._fmt(row['act_date']), row['contract_number'], row['client'], row['object'], row['address'], money(row['amount']), money(row['paid']),
+                values = [st._fmt(row['act_date']), row['contract_number'], row['client'], row['object'], row['address'], money(row['amount']), money(row['paid']), st._fmt(row.get('pay_date', '')),
                           money(row['rest']), 'есть' if row['file'] else 'нет', st._fmt(row['contract_date'])]
                 for c, v in enumerate(values):
                     item = QTableWidgetItem(v)
                     item.setData(Qt.ItemDataRole.UserRole, r)
-                    if c >= 5 and c <= 7:
+                    if c in (5, 6, 8):
                         item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                    if c == 8 and not row['file']:
+                    if c == 9 and not row['file']:
                         item.setForeground(QColor('#DC2626'))
                     table.setItem(r, c, item)
         signed = self.data['signed']

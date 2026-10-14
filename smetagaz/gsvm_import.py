@@ -114,6 +114,18 @@ def prepare(db, rows, mapping, ctx=None):
     return result
 
 
+def _default_statuses(db, rid, signed, act):
+    """У импортированного договора без статусов ставятся стартовые: «Договор подписан/не подписан» и «Акт подписан»."""
+    from . import gsvm_statuses as gs
+    if gs.contract_status_ids(db, rid):
+        return
+    ids = {name: sid for sid, name in db.fetchall("SELECT id,name FROM gsvm_status_catalog WHERE kind='client'")}
+    wanted = [ids.get('Договор подписан' if signed else 'Договор не подписан')] + ([ids.get('Акт подписан')] if act else [])
+    wanted = [w for w in wanted if w]
+    if wanted:
+        gs.set_contract_statuses(db, rid, wanted)
+
+
 def import_rows(db, prepared, on_exists='skip', ctx=None):
     """Создаёт (и при on_exists='update' обновляет) договоры монтажа ГСВ с клиентами и оборудованием."""
     import re as _re
@@ -166,6 +178,7 @@ def import_rows(db, prepared, on_exists='skip', ctx=None):
                     fields.update(contract_number=number, seq_num=seq, year_num=year)
                     rid = db.execute('INSERT INTO contracts(' + ','.join(fields) + ') VALUES(' + ','.join('?' for _ in fields) + ')', tuple(fields.values())).lastrowid
                     report['created'] += 1
+                _default_statuses(db, rid, bool(date_c), bool(act))
                 for key, (kind, _base) in EQUIPMENT.items():
                     if key not in data:
                         continue            # столбец не импортируется — оборудование этого вида не трогаем

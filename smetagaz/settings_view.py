@@ -110,6 +110,29 @@ class SettingsView(QWidget):
         box_db_layout.addWidget(btn_restore)
         layout.addWidget(box_db)
 
+        # 4. Папки договоров: где создаются новые папки (по разделам)
+        box_folders = QGroupBox("Папки договоров (где создавать новые папки)")
+        fl = QGridLayout(box_folders)
+        fl.addWidget(QLabel("Если путь не задан, программа спрашивает место при создании папки, а предлагает стандартную папку внутри данных программы."), 0, 0, 1, 3)
+        self.folder_edits = {}
+        from .gsv_project_domain import SECTION_DIRS
+        for row, key in enumerate(('gsv_projects', 'contracts', 'gsn_projects', 'le', 'smr'), 1):
+            fl.addWidget(QLabel(SECTION_DIRS[key] + ":"), row, 0)
+            edit = QLineEdit(db.get_setting(f'folder_root_{key}', ''))
+            edit.setPlaceholderText("Например: D:\\Договоры\\" + SECTION_DIRS[key])
+            edit.editingFinished.connect(lambda k=key: self.save_folder_root(k))
+            self.folder_edits[key] = edit
+            fl.addWidget(edit, row, 1)
+            buttons = QHBoxLayout()
+            pick_btn = QPushButton("Выбрать…")
+            pick_btn.clicked.connect(lambda _=False, k=key: self.pick_folder_root(k))
+            reset_btn = QPushButton("Сбросить")
+            reset_btn.clicked.connect(lambda _=False, k=key: (self.folder_edits[k].setText(''), self.save_folder_root(k)))
+            buttons.addWidget(pick_btn)
+            buttons.addWidget(reset_btn)
+            fl.addLayout(buttons, row, 2)
+        layout.addWidget(box_folders)
+
         # 4a. Копия вне компьютера
         box_off = QGroupBox("Копия вне компьютера (второй диск или облачная папка)")
         off = QGridLayout(box_off)
@@ -302,6 +325,22 @@ class SettingsView(QWidget):
             message=f'Копия сохранена. Отсутствующих исходных файлов: {len(result["missing"])}.'
             self.backup_status.setText(message);QMessageBox.information(self,'Копия',message)
         self.start_job(work,done,'Восстановление из копии')
+
+    def pick_folder_root(self, key):
+        path = QFileDialog.getExistingDirectory(self, 'Папка для договоров этого раздела', self.folder_edits[key].text() or '')
+        if path:
+            self.folder_edits[key].setText(path)
+            self.save_folder_root(key)
+
+    def save_folder_root(self, key):
+        value = self.folder_edits[key].text().strip()
+        if value:
+            try:
+                Path(value).mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                QMessageBox.warning(self, 'Папка договоров', f'Не удалось создать или открыть папку:\n{value}\n{e}')
+                return
+        db.set_setting(f'folder_root_{key}', value)
 
     # --- копия вне компьютера
     def off_refresh(self):

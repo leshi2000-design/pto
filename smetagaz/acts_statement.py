@@ -50,6 +50,16 @@ def _paid(db, section, rid):
         return 0.0
 
 
+def _pay_date(db, section, rid):
+    """Дата последнего платежа по договору (ISO) или пустая строка, если оплат не было."""
+    from . import payments_domain
+    try:
+        days = [norm_date(r[1]) for r in payments_domain.history(db, section, rid) if r[1]]
+    except Exception:
+        return ''
+    return max(days) if days else ''
+
+
 def statement(db, section, year, month):
     """Кэшируемая обёртка: пересчёт только при изменении данных."""
     from .cache_domain import cached
@@ -72,10 +82,11 @@ def _statement(db, section, year, month):
                 continue
             ct = cc.contract(db, mod, cid)
             paid = sum(a for _d, a, _n in cc.payments(db, mod, cid))
+            pay_date = max((norm_date(d) for d, _a, _n in cc.payments(db, mod, cid) if d), default='')
             path = cc.doc_path(db, mod, 'act', aid)
             amount = float(amount or 0)
             row = dict(id=aid, number=number or '', contract_number=ct['contract_number'] or '', contract_date=norm_date(ct['contract_date']), act_date=act,
-                       client=cc.party_label(db, mod, ct), object=ct['object_name'] or '', address=ct['object_address'] or '', amount=amount, paid=paid, rest=float(ct['amount'] or 0) - paid,
+                       client=cc.party_label(db, mod, ct), object=ct['object_name'] or '', address=ct['object_address'] or '', amount=amount, paid=paid, rest=float(ct['amount'] or 0) - paid, pay_date=pay_date,
                        file=path if path and os.path.isfile(path) else '')
             result['signed' if signed else 'unsigned'].append(row)
         for rows in result.values():
@@ -88,7 +99,8 @@ def _statement(db, section, year, month):
         paid = _paid(db, section, rid)
         amount = float(amount or 0)
         row = dict(id=rid, number=number or '', contract_number=contract_number or '', contract_date=norm_date(contract_date), act_date=act, client=client or '',
-                   object=obj or '', address=address or '', amount=amount, paid=paid, rest=amount - paid, file=_act_file(db, section, rid))
+                   object=obj or '', address=address or '', amount=amount, paid=paid, rest=amount - paid, pay_date=_pay_date(db, section, rid) if paid else '',
+                   file=_act_file(db, section, rid))
         result['signed' if signed else 'unsigned'].append(row)
     for rows in result.values():
         rows.sort(key=lambda r: (r['act_date'], r['number']))
@@ -107,7 +119,7 @@ def export_statement(db, section, year, month, path):
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = 'Подписанные акты'
-    headers = ['№', 'Дата акта', '№ договора', 'Дата договора', 'Клиент', 'Объект', 'Адрес', 'Сумма, BYN', 'Оплачено, BYN', 'Остаток, BYN', 'Файл акта']
+    headers = ['№', 'Дата акта', '№ договора', 'Дата договора', 'Клиент', 'Объект', 'Адрес', 'Сумма, BYN', 'Оплачено, BYN', 'Дата оплаты', 'Остаток, BYN', 'Файл акта']
 
     def fill(sheet, rows, title):
         sheet['A1'] = title
@@ -119,13 +131,13 @@ def export_statement(db, section, year, month, path):
             c.font = Font(bold=True)
             c.alignment = Alignment(wrap_text=True, vertical='center')
         for i, r in enumerate(rows, 1):
-            sheet.append([i, _fmt(r['act_date']), r['contract_number'], _fmt(r['contract_date']), r['client'], r['object'], r['address'], r['amount'], r['paid'], r['rest'],
+            sheet.append([i, _fmt(r['act_date']), r['contract_number'], _fmt(r['contract_date']), r['client'], r['object'], r['address'], r['amount'], r['paid'], _fmt(r.get('pay_date', '')), r['rest'],
                           'есть' if r['file'] else 'нет'])
         last = sheet.max_row
-        sheet.append(['', '', '', '', 'ИТОГО', f'актов: {len(rows)}', '', sum(r['amount'] for r in rows), sum(r['paid'] for r in rows), sum(r['rest'] for r in rows), ''])
+        sheet.append(['', '', '', '', 'ИТОГО', f'актов: {len(rows)}', '', sum(r['amount'] for r in rows), sum(r['paid'] for r in rows), '', sum(r['rest'] for r in rows), ''])
         for c in sheet[last + 1]:
             c.font = Font(bold=True)
-        for col, width in zip('ABCDEFGHIJK', (5, 12, 14, 14, 30, 34, 36, 14, 14, 14, 10)):
+        for col, width in zip('ABCDEFGHIJKL', (5, 12, 14, 14, 30, 34, 36, 14, 14, 14, 14, 10)):
             sheet.column_dimensions[col].width = width
         for row in sheet.iter_rows(min_row=5):
             for c in row:

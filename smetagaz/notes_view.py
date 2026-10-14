@@ -5,6 +5,7 @@ from PyQt6.QtWidgets import (QWidget, QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                               QSplitter, QMessageBox, QDateEdit)
 from PyQt6.QtCore import Qt, QDate, pyqtSignal
 
+from .date_widgets import DateEdit
 from .database import db
 from . import notes_domain as nd
 from .pagebar import PageBar
@@ -57,7 +58,7 @@ class NotesPanel(QWidget):
         el.addWidget(self.title)
         row = QHBoxLayout()
         row.addWidget(QLabel('Дата:'))
-        self.day = QDateEdit(QDate.currentDate())
+        self.day = DateEdit(QDate.currentDate())
         self.day.setCalendarPopup(True)
         self.day.setDisplayFormat('dd.MM.yyyy')
         row.addWidget(self.day)

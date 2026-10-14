@@ -3,7 +3,7 @@
 """
 from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton, QLabel,
                               QMessageBox, QDialog, QLineEdit, QComboBox, QTextEdit,
-                              QGroupBox, QDoubleSpinBox)
+                              QGroupBox, QDoubleSpinBox, QApplication)
 
 from .database import db
 from .work_pricing import compute_work_price
@@ -73,9 +73,24 @@ class MaterialCardDialog(QDialog):
             w.valueChanged.connect(self.update_formula_preview)
         self.combo_type.currentTextChanged.connect(self.refresh_formula_visibility)
 
-        layout.addWidget(QLabel("Ссылка поставщика для мониторинга (опционально):"))
+        layout.addWidget(QLabel("Ссылка на позицию на сайте поставщика (цена будет обновляться по кнопке «Обновить цены по ссылкам»):"))
         self.input_url = QLineEdit()
         layout.addWidget(self.input_url)
+        layout.addWidget(QLabel("Селектор цены на странице (необязательно: если пусто, цена ищется в стандартной разметке сайта):"))
+        self.input_price_selector = QLineEdit()
+        self.input_price_selector.setPlaceholderText("например: .product-price, span[itemprop='price']")
+        layout.addWidget(self.input_price_selector)
+        price_bar = QHBoxLayout()
+        self.btn_check_price = QPushButton("Проверить цену по ссылке")
+        self.btn_check_price.clicked.connect(self.check_price_now)
+        self.btn_price_history = QPushButton("История цен")
+        self.btn_price_history.clicked.connect(self.show_price_history)
+        self.lbl_price_state = QLabel("")
+        self.lbl_price_state.setWordWrap(True)
+        price_bar.addWidget(self.btn_check_price)
+        price_bar.addWidget(self.btn_price_history)
+        price_bar.addWidget(self.lbl_price_state, 1)
+        layout.addLayout(price_bar)
 
         layout.addWidget(QLabel("Примечание (ГОСТ, ТУ, марка):"))
         self.input_note = QTextEdit()
@@ -99,6 +114,32 @@ class MaterialCardDialog(QDialog):
 
         self.load_material_data()
 
+    def check_price_now(self):
+        """Читает цену по ссылке и предлагает подставить её в цену продажи (в базу ничего не пишется, пока не нажато «Сохранить»)."""
+        from . import price_sync
+        url = self.input_url.text().strip()
+        if not url:
+            QMessageBox.information(self, "Цена", "Сначала укажите ссылку на позицию.")
+            return
+        self.btn_check_price.setEnabled(False)
+        self.lbl_price_state.setText("Проверяю…")
+        QApplication.processEvents()
+        try:
+            price, how = price_sync.extract_price(price_sync.fetch(url), self.input_price_selector.text())
+        except Exception as e:
+            price, how = None, str(e)
+        self.btn_check_price.setEnabled(True)
+        if price is None:
+            self.lbl_price_state.setText("Не удалось получить цену: " + str(how))
+            return
+        self.lbl_price_state.setText(f"На сайте: {price:.2f} ({how}). Текущая цена в справочнике: {self.input_price.text() or '0'}.")
+        if QMessageBox.question(self, "Цена по ссылке", f"На сайте найдена цена {price:.2f}. Подставить её в цену продажи?") == QMessageBox.StandardButton.Yes:
+            self.input_price.setText(f"{price:.2f}")
+
+    def show_price_history(self):
+        from .price_sync_view import PriceHistoryDialog
+        PriceHistoryDialog(self.material_id, self).exec()
+
     def refresh_certificate(self):
         row=db.fetchone('SELECT name,cert_number FROM certificates WHERE id=?',(self.certificate_id,))
         self.cert_label.setText('Сертификат: '+(' · '.join(str(v or '') for v in row) if row else 'не выбран'))
@@ -121,10 +162,10 @@ class MaterialCardDialog(QDialog):
     def load_material_data(self):
         cert=db.fetchone("SELECT certificate_id FROM materials WHERE id=?",(self.material_id,));self.certificate_id=cert[0] if cert else None;self.refresh_certificate()
         row = db.fetchone("""SELECT category_id, name, unit, price, url, note, item_type, purchase_price,
-                              labor_hours, hourly_rate, overhead_pct, profit_pct, other_costs
+                              labor_hours, hourly_rate, overhead_pct, profit_pct, other_costs, coalesce(price_selector,''), coalesce(price_status,'')
                               FROM materials WHERE id=?""", (self.material_id,))
         if row:
-            cat_id, name, unit, price, url, note, item_type, purch, labor_hours, hourly_rate, overhead_pct, profit_pct, other_costs = row
+            cat_id, name, unit, price, url, note, item_type, purch, labor_hours, hourly_rate, overhead_pct, profit_pct, other_costs, price_selector, price_status = row
             if cat_id is not None:
                 idx = self.combo_category.findData(cat_id)
                 if idx >= 0: self.combo_category.setCurrentIndex(idx)
@@ -139,6 +180,9 @@ class MaterialCardDialog(QDialog):
                 self.input_price.setText("0.00")
                 self.input_purchase.setText("0.00")
             self.input_url.setText(url or "")
+            self.input_price_selector.setText(price_selector)
+            if price_status:
+                self.lbl_price_state.setText("Последняя проверка: " + price_status)
             self.input_note.setPlainText(note or "")
             self.spin_labor_hours.setValue(float(labor_hours or 0.0))
             self.spin_hourly_rate.setValue(float(hourly_rate or 0.0))
@@ -197,4 +241,6 @@ class MaterialCardDialog(QDialog):
                                        self.spin_labor_hours.value(), self.spin_hourly_rate.value(),
                                        self.spin_overhead_pct.value(), self.spin_profit_pct.value(), self.spin_other_costs.value(),
                                        self.material_id))
+        from . import price_sync
+        price_sync.remember_selector(db, self.material_id, url, self.input_price_selector.text()) if self.input_price_selector.text().strip() else db.execute("UPDATE materials SET price_selector='' WHERE id=?", (self.material_id,))
         self.accept()

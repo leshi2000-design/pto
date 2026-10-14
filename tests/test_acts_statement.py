@@ -29,7 +29,8 @@ def data(d, tmp_path):
     d.execute("INSERT INTO gsv_projects(pd_number,contract_number,client_name,cost,act_date,act_signed) VALUES('04-26 ГСВ','04-03/26','Другой месяц',100,'2026-10-01',1)")
     d.execute("INSERT INTO gsv_projects(pd_number,contract_number,client_name,cost,act_date,act_signed) VALUES('05-26 ГСВ','05-03/26','Без акта',100,NULL,0)")
     d.execute("INSERT INTO gsv_project_docs(project_id,kind,file_path,data_hash,generated_at) VALUES(?,?,?,?,?)", (p1, 'act', str(act), '', ''))
-    payments_domain.add(d, 'gsv_projects', p1, 100, '2026-09-06', '')
+    payments_domain.add(d, 'gsv_projects', p1, 60, '2026-09-04', '')
+    payments_domain.add(d, 'gsv_projects', p1, 40, '2026-09-06', '')
     c = d.execute("INSERT INTO contracts(contract_number,contract_date,client_name,object_name,object_address,contract_amount,acceptance_act_date,act_signed) VALUES('01-02/26','2026-08-20','Козлов','Баня','Брест',1000,'2026-09-15',1)").lastrowid
     d.execute("INSERT INTO contracts(contract_number,client_name,contract_amount,acceptance_act_date,act_signed) VALUES('02-02/26','Не подписал',5,'15.09.2026',0)")
     return act
@@ -40,6 +41,7 @@ def test_statement_for_both_sections(d, tmp_path):
     g = st.statement(d, 'gsv_projects', 2026, 9)
     assert [r['client'] for r in g['signed']] == ['Иванов', 'Петров'] and [r['client'] for r in g['unsigned']] == ['Сидоров']
     assert g['signed'][0]['paid'] == 100 and g['signed'][0]['rest'] == 150 and g['signed'][0]['file'] and not g['signed'][1]['file']
+    assert g['signed'][0]['pay_date'] == '2026-09-06' and g['signed'][1]['pay_date'] == ''      # дата последней оплаты; без оплат — пусто
     m = st.statement(d, 'contracts', 2026, 9)
     assert [r['client'] for r in m['signed']] == ['Козлов'] and [r['client'] for r in m['unsigned']] == ['Не подписал']     # дата ДД.ММ.ГГГГ тоже распознаётся
     assert st.statement(d, 'gsv_projects', 2026, 10)['signed'][0]['client'] == 'Другой месяц'
@@ -57,6 +59,8 @@ def test_export_and_collect(d, tmp_path):
     assert 'сентябрь 2026' in ws['A1'].value and [c.value for c in ws[4]][:5] == ['№', 'Дата акта', '№ договора', 'Дата договора', 'Клиент']
     assert ws['E5'].value == 'Иванов' and ws['B5'].value == '05.09.2026' and ws['H7'].value == 550 and ws['F7'].value == 'актов: 2'
     assert wb['Не подписаны']['E5'].value == 'Сидоров'
+    headers = [c.value for c in ws[4]]
+    assert 'Дата оплаты' in headers and ws.cell(5, headers.index('Дата оплаты') + 1).value == '06.09.2026'      # дата оплаты попадает в Excel
     result = st.collect_acts(d, 'gsv_projects', 2026, 9, tmp_path / 'бухгалтерия')
     assert result['total'] == 2 and len(result['copied']) == 1 and [r['client'] for r in result['missing']] == ['Петров']
     files = sorted(p.name for p in __import__('pathlib').Path(result['folder']).iterdir())

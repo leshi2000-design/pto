@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLa
 from PyQt6.QtCore import Qt, QDate, pyqtSignal
 from PyQt6.QtGui import QColor, QAction
 
+from .date_widgets import DateEdit
 from .database import db
 from .platform_utils import open_local
 from .pagination import RegistryPager
@@ -153,7 +154,7 @@ class CertificateEditDialog(QDialog):
         grid.addWidget(QLabel("Срок действия:"), 3, 0)
         h_date = QHBoxLayout()
         self.chk_unlimited = QCheckBox("Бессрочный")
-        self.dt_valid = QDateEdit(calendarPopup=True)
+        self.dt_valid = DateEdit(calendarPopup=True)
         self.dt_valid.setDate(QDate.currentDate().addYears(1))
 
         self.chk_unlimited.toggled.connect(lambda c: self.dt_valid.setDisabled(c))

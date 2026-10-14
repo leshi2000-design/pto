@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (QDialog, QWidget, QVBoxLayout, QHBoxLayout, QFormLa
                               QPushButton, QTabWidget, QScrollArea, QMessageBox, QCheckBox, QTextEdit, QTableWidget, QTableWidgetItem, QAbstractItemView)
 from PyQt6.QtCore import QDate, QLocale, Qt
 
+from .date_widgets import DateEdit
 from .database import db
 from .domain_widgets import ClientForm, OptionalDate
 from .gsv_domain import get_client, save_client
@@ -83,7 +84,7 @@ class ContractCardDialog(QDialog):
         self.inp_code = QLineEdit()
         self.inp_designer = QLineEdit()
         self.chk_project_month = QCheckBox('указана')
-        self.dt_project = QDateEdit(QDate.currentDate())
+        self.dt_project = DateEdit(QDate.currentDate())
         self.dt_project.setLocale(QLocale(QLocale.Language.Russian))
         self.dt_project.setDisplayFormat('MMMM yyyy')
         self.dt_project.setCalendarPopup(True)
@@ -183,8 +184,19 @@ class ContractCardDialog(QDialog):
         self.lbl_folder.setStyleSheet('color: #605E5C;')
         dl.addWidget(self.lbl_folder, r + 1, 0, 1, 5)
         body.addWidget(docs)
+        from .gsvm_statuses_ui import StatusPicker, IdTransferBox
+        status_box = QGroupBox('7. Статусы договора')
+        sl = QVBoxLayout(status_box)
+        self.status_picker = StatusPicker()
+        sl.addWidget(self.status_picker)
+        body.addWidget(status_box)
+        id_box = QGroupBox('8. Передача исполнительной документации')
+        il = QVBoxLayout(id_box)
+        self.id_transfer = IdTransferBox()
+        il.addWidget(self.id_transfer)
+        body.addWidget(id_box)
         body.addStretch()
-        self.lock_widgets = [obj, self.customer, self.client_form, notes_box, project, terms]
+        self.lock_widgets = [obj, self.customer, self.client_form, notes_box, project, terms, status_box, id_box]
 
         # --- остальные вкладки ---
         self.equipment_tab = EquipmentTab(self)
@@ -226,7 +238,7 @@ class ContractCardDialog(QDialog):
     # --- мелочи интерфейса ---
     @staticmethod
     def make_date():
-        d = QDateEdit(QDate.currentDate())
+        d = DateEdit(QDate.currentDate())
         d.setCalendarPopup(True)
         d.setDisplayFormat('dd.MM.yyyy')
         return d
@@ -294,6 +306,9 @@ class ContractCardDialog(QDialog):
             if end.isValid():
                 self.date_end.setDate(end)
             self.date_act.set_value(c['acceptance_act_date'] or '')
+            self.id_transfer.fill(c)
+            from . import gsvm_statuses
+            self.status_picker.set_ids(gsvm_statuses.contract_status_ids(db, self.contract_id))
             client = get_client(db, c['client_id']) or dict(name=c['client_name'], phone=c['client_phone'], address=c['client_address'], passport=c['passport_series_number'],
                                                            passport_issuer=c['passport_issued_by'], passport_date=c['passport_issue_date'])
             self.client_form.fill(client, c['client_id'])
@@ -367,7 +382,7 @@ class ContractCardDialog(QDialog):
                     work_end_date=self.date_end.date().toString('yyyy-MM-dd'), acceptance_act_date=self.date_act.value(), contract_amount=self.inp_amount.value(),
                     client_id=cid, client_name=values['name'], client_phone=values['phone'], contract_signed=int(self.chk_contract_signed.isChecked()),
                     act_signed=int(self.chk_act_signed.isChecked()), le_client_id=self.customer.legal_id(), party_name=party_name, designer_code=self.inp_code.text().strip(), designer=self.inp_designer.text().strip(),
-                    project_month=self.dt_project.date().toString('yyyy-MM') if self.chk_project_month.isChecked() else '', notes=self.inp_notes.toPlainText().strip())
+                    project_month=self.dt_project.date().toString('yyyy-MM') if self.chk_project_month.isChecked() else '', notes=self.inp_notes.toPlainText().strip(), **self.id_transfer.values())
                 rid = self.contract_id
                 if rid:
                     db.execute('UPDATE contracts SET ' + ','.join(f'{k}=?' for k in fields) + ' WHERE id=?', (*fields.values(), rid))
@@ -375,6 +390,8 @@ class ContractCardDialog(QDialog):
                     fields.update(seq_num=seq, year_num=year)
                     rid = db.execute('INSERT INTO contracts(' + ','.join(fields) + ') VALUES(' + ','.join('?' for _ in fields) + ')', tuple(fields.values())).lastrowid
                 self.contract_id = rid
+                from . import gsvm_statuses
+                gsvm_statuses.set_contract_statuses(db, rid, self.status_picker.ids())
                 self.equipment_tab.save(rid)
                 self.pipes_tab.save(rid)
                 if self.estimate_id and not legal:

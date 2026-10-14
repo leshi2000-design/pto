@@ -45,7 +45,7 @@ class ScraperWorker(QThread):
                 if match: parsed_price = float(match.group(0))
 
             if parsed_name and parsed_price > 0:
-                self.finished_data.emit({"category_id": self.cat_id, "name": parsed_name, "unit": self.unit or "шт", "price": parsed_price, "url": self.url, "note": self.note})
+                self.finished_data.emit({"category_id": self.cat_id, "name": parsed_name, "unit": self.unit or "шт", "price": parsed_price, "url": self.url, "price_selector": self.price_sel, "note": self.note})
             else:
                 self.error_occurred.emit("Не удалось извлечь название или цену по селекторам.")
         except Exception as e:

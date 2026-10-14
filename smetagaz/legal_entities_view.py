@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QDate
 
+from .date_widgets import DateEdit
 from .database import db
 from .legal_entities_domain import DIRECTIONS, STATUSES, next_outgoing_number
 
@@ -216,7 +217,7 @@ class LegalContractDialog(QDialog):
         self.inp_number = QLineEdit()
         grid.addWidget(self.inp_number, 1, 1)
         grid.addWidget(QLabel("Дата:"), 1, 2)
-        self.date = QDateEdit(QDate.currentDate())
+        self.date = DateEdit(QDate.currentDate())
         self.date.setCalendarPopup(True)
         self.date.setDisplayFormat("dd.MM.yyyy")
         grid.addWidget(self.date, 1, 3)
@@ -430,7 +431,7 @@ class LegalActDialog(QDialog):
         self.inp_number = QLineEdit()
         grid.addWidget(self.inp_number, 0, 1)
         grid.addWidget(QLabel("Дата:"), 0, 2)
-        self.date = QDateEdit(QDate.currentDate())
+        self.date = DateEdit(QDate.currentDate())
         self.date.setCalendarPopup(True)
         self.date.setDisplayFormat("dd.MM.yyyy")
         grid.addWidget(self.date, 0, 3)
@@ -632,7 +633,7 @@ class OutgoingDocDialog(QDialog):
             self.inp_number.setText(next_outgoing_number(db))
         grid.addWidget(self.inp_number, 0, 1)
         grid.addWidget(QLabel("Дата регистрации:"), 0, 2)
-        self.date = QDateEdit(QDate.currentDate())
+        self.date = DateEdit(QDate.currentDate())
         self.date.setCalendarPopup(True)
         self.date.setDisplayFormat("dd.MM.yyyy")
         grid.addWidget(self.date, 0, 3)

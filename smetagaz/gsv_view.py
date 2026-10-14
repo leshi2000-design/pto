@@ -6,6 +6,7 @@ import os
 import logging
 from datetime import datetime, date
 
+from .date_widgets import DateEdit
 from .lazy import LazyModule
 from .registry_tools import RegistryTools, search_clause
 openpyxl = LazyModule("openpyxl")
@@ -374,8 +375,8 @@ class ReportsDialog(QDialog):
         self.cmb_period_preset.addItems(["Сегодня", "Текущая неделя", "Текущий месяц", "Текущий год"])
         self.cmb_period_preset.currentTextChanged.connect(self.set_period_preset)
         f_layout.addWidget(self.cmb_period_preset, 1, 1)
-        self.dt_from = QDateEdit(calendarPopup=True)
-        self.dt_to = QDateEdit(calendarPopup=True)
+        self.dt_from = DateEdit(calendarPopup=True)
+        self.dt_to = DateEdit(calendarPopup=True)
         f_layout.addWidget(self.dt_from, 1, 3)
         f_layout.addWidget(self.dt_to, 1, 5)
         self.btn_run_report = QPushButton("Сформировать")
@@ -629,7 +630,7 @@ class ProjectEditDialog(QDialog):
         grp_dates = QGroupBox("Сроки")
         l_dates = QGridLayout(grp_dates)
         l_dates.addWidget(QLabel("Дата заключения:"), 0, 0)
-        self.dt_contract = QDateEdit(calendarPopup=True)
+        self.dt_contract = DateEdit(calendarPopup=True)
         self.dt_contract.setDisplayFormat("dd.MM.yyyy")
         self.dt_contract.setDate(QDate.currentDate())
         self.prev_contract = QDate.currentDate()
@@ -638,7 +639,7 @@ class ProjectEditDialog(QDialog):
         self.chk_contract_signed = QCheckBox("Договор подписан")
         l_dates.addWidget(self.chk_contract_signed, 0, 2)
         l_dates.addWidget(QLabel("Срок исполнения:"), 1, 0)
-        self.dt_due = QDateEdit(calendarPopup=True)
+        self.dt_due = DateEdit(calendarPopup=True)
         self.dt_due.setDisplayFormat("dd.MM.yyyy")
         self.dt_due.setDate(QDate.currentDate().addDays(30))
         l_dates.addWidget(self.dt_due, 1, 1)

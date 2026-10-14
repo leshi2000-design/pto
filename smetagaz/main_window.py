@@ -2,6 +2,7 @@
 Главное окно приложения. Динамическая генерация вкладок из БД + Глобальный поиск с навигацией.
 """
 import sys
+import time
 import logging
 import traceback
 import json
@@ -317,13 +318,32 @@ class MainWindow(QMainWindow):
         elif hasattr(view, 'calculate'): view.calculate()
 
     def closeEvent(self, event):
-        from PyQt6.QtWidgets import QApplication as _A
-        _A.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        try:
-            self.backup_service.backup_on_exit()
-        finally:
-            _A.restoreOverrideCursor()
-        event.accept()
+        """Закрытие без зависания: окно скрывается сразу, нужная копия (если последней больше 30 минут) делается в фоне, затем программа завершается."""
+        if getattr(self, '_closing', False):
+            event.ignore()
+            return
+        if getattr(self, '_exit_ready', False) or not self.backup_service.exit_backup_needed():
+            self.backup_service.close()
+            self._exit_ready = True
+            event.accept()
+            return
+        event.ignore()
+        self._closing = True
+        self.hide()
+        self._exit_future = self.backup_service.start_exit_backup()
+        self._exit_started = time.monotonic()
+        self._exit_timer = QTimer(self)
+        self._exit_timer.timeout.connect(self._finish_exit)
+        self._exit_timer.start(100)
+
+    def _finish_exit(self):
+        if not self._exit_future.done() and time.monotonic() - self._exit_started < 180:
+            return
+        self._exit_timer.stop()
+        self._exit_ready = True
+        self._closing = False
+        self.close()                        # повторное закрытие уже без копии
+        QApplication.quit()
 
     def toggle_theme(self):
         is_dark = db.get_setting("is_dark", "0") == "1"

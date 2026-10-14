@@ -35,7 +35,7 @@ class Choice(QComboBox):
         super().__init__();self.source=source;self.setEditable(True);self.setInsertPolicy(QComboBox.InsertPolicy.NoInsert);self.setCompleter(None);self.setMinimumWidth(160);self.setMaxVisibleItems(16)
         self.refresh('',selected);self.lineEdit().setPlaceholderText('Введите название для поиска…');self.timer=QTimer(self);self.timer.setSingleShot(True);self.timer.setInterval(250);self.timer.timeout.connect(self.search);self.lineEdit().textEdited.connect(lambda _:self.timer.start())
     def refresh(self,query,selected=None):
-        rows=db.fetchall(f'SELECT id,name FROM {self.source} WHERE LOWER(name) LIKE ? ORDER BY name,id LIMIT 100',('%'+query.casefold()+'%',))
+        rows=db.fetchall(f'SELECT id,name FROM {self.source} WHERE LOWER(name) LIKE ?'+(' AND coalesce(active,1)=1' if self.source=='stock_materials' else '')+' ORDER BY name,id LIMIT 100',('%'+query.casefold()+'%',))
         if selected and not any(r[0]==selected for r in rows):
             row=db.fetchone(f'SELECT id,name FROM {self.source} WHERE id=?',(selected,))
             if row:rows.append(row)
@@ -105,10 +105,28 @@ class Header(QWidget):
         super().__init__();self.defect=defect;f=QFormLayout(self);self.inputs={}
         self.number=QLineEdit();self.day=OptionalDate();self.day.set_value(date.today().isoformat());f.addRow('Номер *',self.number);f.addRow('Дата *',self.day)
         self.object_name=QLineEdit();self.object_name.setPlaceholderText('Введите произвольный объект / адрес');f.addRow('Объект *',self.object_name)
+        self.listed=QComboBox();self.listed.addItem('— не выбран —',None)
+        for oid,name,*_ in domain.objects(db):self.listed.addItem(name,oid)
+        self.listed.setToolTip('Объекты из раздела «Объекты списания»: подставляют название, связь с договором и реквизиты по умолчанию')
+        f.addRow('Объект из списка «Объекты списания»',self.listed);self.listed.currentIndexChanged.connect(self.pick_listed)
         self.reference=ObjectField();f.addRow('Необязательно: выбрать из базы',self.reference);self.reference.changed.connect(self.fill_object)
         keys=[('organization','Организация'),('approved_by','Утверждает (должность, ФИО)'),('commission','Комиссия / ответственные (ФИО)'),('reason' if defect else 'basis','Основание'),('conditions','Условия выполнения работ')] if defect else [('organization','Организация'),('approved_by','Утверждает (должность, ФИО)'),('commission','Комиссия / ответственные (ФИО)'),('basis','Основание: акт работ / документ')]
         keys.append(('notes','Примечания'))
         for key,label in keys:self.inputs[key]=QLineEdit();f.addRow(label,self.inputs[key])
+        self.apply_defaults()
+    def apply_defaults(self,oid=None):
+        """Подставляет значения по умолчанию в пустые поля (комиссия, кто утверждает и т. д.)."""
+        for key,value in domain.object_defaults(db,oid).items():
+            if key in self.inputs and value and not self.inputs[key].text().strip():self.inputs[key].setText(value)
+    def pick_listed(self):
+        oid=self.listed.currentData()
+        if not oid:return
+        row=db.fetchone('SELECT name,owner_type,owner_id FROM writeoff_objects WHERE id=?',(oid,))
+        if row:
+            self.object_name.setText(row[0]);self.reference.set_reference(row[1],row[2]) if row[1] else self.reference.set_reference(None,None)
+            for key in ('organization','approved_by','commission'):
+                if key in self.inputs:self.inputs[key].clear()
+            self.apply_defaults(oid)
     def fill_object(self):
         if self.reference.reference[0]:self.object_name.setText(owner_label(db,*self.reference.reference))
     def values(self):
@@ -250,15 +268,17 @@ class Registry(QWidget):
         for k,v in STATUS.items():self.status.addItem(v,k)
         if mode=='acts':bar.addWidget(self.status)
         button(bar,'Сбросить',self.reset);l.addLayout(bar);actions=QHBoxLayout();l.addLayout(actions)
-        if mode in ('acts','defects','materials','norms'):button(actions,'Создать',self.create);button(actions,'Изменить / открыть',self.edit)
+        if mode in ('acts','defects','materials','norms'):button(actions,'Создать',self.create);button(actions,'Изменить / открыть' if mode!='materials' else 'Изменить материал',self.edit_item if mode=='materials' else self.edit)
+        if mode in ('materials','balances'):button(actions,'Поступления и списания',self.history)
         if mode=='norms':button(actions,'Копировать норму',self.copy_norm)
         if mode in ('materials','balances'):button(actions,'Поступление / остаток',self.receive)
-        if mode=='acts':button(actions,'Удалить черновик',self.delete)
-        if mode=='defects':button(actions,'Списание по акту',self.writeoff)
+        if mode=='acts':button(actions,'Удалить акт',self.delete)
+        if mode=='defects':button(actions,'Списание по акту',self.writeoff);button(actions,'Копия на основании',self.copy_defect);button(actions,'Удалить акт',self.delete_defect)
+        if mode=='materials':button(actions,'Удалить материал',self.delete_material)
         if mode in ('acts','defects'):button(actions,'Экспорт документа',self.export)
         if mode=='balances':button(actions,'Отчёт по шаблону',self.report)
         button(actions,'Обновить',self.load_data);actions.addStretch();self.table=table([]);l.addWidget(self.table,1);self.summary=QLabel();l.addWidget(self.summary)
-        self.table.cellDoubleClicked.connect(lambda *_:self.edit());self.search.textChanged.connect(self.load_data);self.date_from.dateChanged.connect(self.load_data);self.date_to.dateChanged.connect(self.load_data);self.category.currentIndexChanged.connect(self.load_data);self.status.currentIndexChanged.connect(self.load_data);self.load_data()
+        self.table.cellDoubleClicked.connect(lambda *_:self.history() if self.mode in ('materials','balances') else self.edit());self.search.textChanged.connect(self.load_data);self.date_from.dateChanged.connect(self.load_data);self.date_to.dateChanged.connect(self.load_data);self.category.currentIndexChanged.connect(self.load_data);self.status.currentIndexChanged.connect(self.load_data);self.load_data()
     def selected(self):
         r=self.table.currentRow();return self.table.item(r,0).data(Qt.ItemDataRole.UserRole) if r>=0 else None
     def reset(self):self.search.clear();self.date_from.set_value('');self.date_to.set_value('');self.category.setCurrentIndex(0);self.status.setCurrentIndex(0);self.pager.filters.reset()
@@ -271,7 +291,7 @@ class Registry(QWidget):
             source='stock_acts' if mode=='acts' else 'defect_acts';cols='id,act_date,number,object_name,'+('status,basis' if mode=='acts' else 'reason,notes');query=f'SELECT {cols} FROM {source}';headers=['Дата','Номер','Объект','Статус' if mode=='acts' else 'Основание','Основание' if mode=='acts' else 'Примечание'];fields=['number','object_name','basis' if mode=='acts' else 'reason'];datecol='act_date'
         elif mode=='norms':query="SELECT id,name,diameter,thickness,basis,(SELECT count(*) FROM norm_items i WHERE i.profile_id=norm_profiles.id AND i.rate IS NOT NULL)||' из '||(SELECT count(*) FROM norm_items i WHERE i.profile_id=norm_profiles.id) filled,notes FROM norm_profiles";headers=['Название нормы','Диаметр','Стенка','На единицу','Нормы заданы','Источник / примечание'];fields=['name','diameter','notes'];datecol=None
         elif mode in ('materials','balances'):
-            query='SELECT m.id,m.name,m.category,m.unit,coalesce(b.qty,0)/1000000.0 balance,m.notes FROM stock_materials m LEFT JOIN (SELECT material_id,sum(qty) qty FROM stock_moves GROUP BY material_id) b ON b.material_id=m.id';headers=['Материал','Категория','Ед.','Остаток','Примечание'];fields=['name','category','notes'];datecol=None
+            query='SELECT m.id,m.name,m.category,m.unit,coalesce(b.qty,0)/1000000.0 balance,m.notes FROM stock_materials m LEFT JOIN (SELECT material_id,sum(qty) qty FROM stock_moves GROUP BY material_id) b ON b.material_id=m.id WHERE coalesce(m.active,1)=1';headers=['Материал','Категория','Ед.','Остаток','Примечание'];fields=['name','category','notes'];datecol=None
         else:
             query="SELECT v.id,v.move_date,m.name,m.category,m.unit,v.qty/1000000.0 qty,CASE v.kind WHEN 'receipt' THEN 'Поступление' WHEN 'correction' THEN 'Корректировка' WHEN 'writeoff' THEN 'Списание' ELSE 'Отмена' END kind,coalesce(a.number,'') number,coalesce(a.object_name,'') object_name,v.note FROM stock_moves v JOIN stock_materials m ON m.id=v.material_id LEFT JOIN stock_acts a ON a.id=v.act_id";headers=['Дата','Материал','Категория','Ед.','Количество','Операция','Акт','Объект','Примечание'];fields=['name','object_name','number','note'];datecol='move_date'
         where=[];params=[]
@@ -296,6 +316,32 @@ class Registry(QWidget):
         {'acts':ActDialog,'defects':DefectDialog,'materials':MaterialDialog,'norms':NormDialog}[self.mode](parent=self).exec();self.load_data()
     def edit(self):
         if self.selected() and self.mode in ('acts','defects','materials','balances','norms'):{'acts':ActDialog,'defects':DefectDialog,'materials':MaterialDialog,'balances':MaterialDialog,'norms':NormDialog}[self.mode](self.selected(),self).exec();self.load_data()
+    def edit_item(self):
+        if self.selected():MaterialDialog(self.selected(),self).exec();self.load_data()
+    def history(self):
+        if self.selected():MaterialHistoryDialog(self.selected(),self).exec();self.load_data()
+    def copy_defect(self):
+        if self.selected():
+            try:new=domain.copy_defect(db,self.selected());self.load_data();DefectDialog(new,self).exec();self.load_data()
+            except Exception as e:error(self,e)
+    def delete_defect(self):
+        rid=self.selected()
+        if rid and QMessageBox.question(self,'Удаление','Удалить дефектный акт? Это действие нельзя отменить (запись останется в «Журнале и корзине»).')==QMessageBox.StandardButton.Yes:
+            try:domain.delete_defect(db,rid);self.load_data()
+            except Exception as e:error(self,e)
+    def delete_material(self):
+        rid=self.selected()
+        if not rid:return
+        try:
+            usage=domain.material_usage(db,rid);name=domain.material(db,rid)[0]
+            if usage['acts']:
+                box=QMessageBox(self);box.setWindowTitle('Материал используется');box.setText(f'«{name}» есть в актах списания ({len(usage["acts"])}): '+', '.join(usage['acts'][:6])+('…' if len(usage['acts'])>6 else '')+'.\nУдалить его нельзя, чтобы не нарушить акты. Можно скрыть материал: он пропадёт из списков и остатков, но останется в актах.')
+                hide=box.addButton('Скрыть материал',QMessageBox.ButtonRole.AcceptRole);box.addButton('Отмена',QMessageBox.ButtonRole.RejectRole);box.exec()
+                if box.clickedButton() is hide:domain.delete_material(db,rid,True);self.load_data()
+                return
+            extra=(f' Будут удалены также поступления и движения ({usage["moves"]}).' if usage['moves'] else '')+(f' Он будет убран из норм: {len(usage["norms"])}.' if usage['norms'] else '')
+            if QMessageBox.question(self,'Удаление',f'Удалить материал «{name}»?'+extra)==QMessageBox.StandardButton.Yes:domain.delete_material(db,rid);self.load_data()
+        except Exception as e:error(self,e)
     def copy_norm(self):
         pid=self.selected()
         if not pid:return
@@ -314,9 +360,13 @@ class Registry(QWidget):
     def receive(self):ReceiptDialog(self.selected(),self).exec();self.load_data()
     def delete(self):
         rid=self.selected()
-        if rid and QMessageBox.question(self,'Удаление','Удалить черновик? Проведённые акты остаются в истории.')==QMessageBox.StandardButton.Yes:
-            if db.fetchone('SELECT status FROM stock_acts WHERE id=?',(rid,))[0]!='draft':error(self,'Можно удалить только черновик');return
-            db.execute("DELETE FROM stock_acts WHERE id=? AND status='draft'",(rid,));self.load_data()
+        if not rid:return
+        row=db.fetchone('SELECT number,status FROM stock_acts WHERE id=?',(rid,))
+        if not row:return
+        warn='Удалить акт списания №'+row[0]+'?'+(' Он проведён: материалы вернутся на остаток.' if row[1]=='posted' else '')
+        if QMessageBox.question(self,'Удаление',warn)==QMessageBox.StandardButton.Yes:
+            try:domain.delete_act(db,rid);self.load_data()
+            except Exception as e:error(self,e)
     def writeoff(self):
         if self.selected():
             try:ActDialog(domain.from_defect(db,self.selected()),self).exec();self.load_data()
@@ -330,6 +380,84 @@ class WriteoffView(QWidget):
     def __init__(self):
         super().__init__();l=QVBoxLayout(self);self.tabs=QTabWidget();l.addWidget(self.tabs,1)
         for mode,label in [('acts','Акты списания'),('defects','Дефектные акты'),('norms','Справочник норм'),('materials','Материалы'),('balances','Остатки'),('moves','Движение материалов')]:self.tabs.addTab(Registry(mode),label)
+        self.tabs.addTab(ObjectsView(),'Объекты списания')
         from .workspace_view import WorkspaceView
         self.tabs.addTab(WorkspaceView('writeoffs'),'Прежние записи');self.tabs.currentChanged.connect(lambda _:self.load_data())
     def load_data(self):self.tabs.currentWidget().load_data()
+
+
+class MaterialHistoryDialog(QDialog):
+    """Все поступления и списания выбранного материала с нарастающим остатком."""
+    def __init__(self,mid,parent=None):
+        super().__init__(parent);name,category,unit=domain.material(db,mid);self.setWindowTitle(f'Движение материала · {name}');self.resize(1000,560);l=QVBoxLayout(self)
+        self.summary=QLabel();self.summary.setWordWrap(True);l.addWidget(self.summary)
+        self.table=table(['Дата','Операция','Количество','Остаток после','Акт №','Объект','Примечание']);l.addWidget(self.table,1)
+        rows=domain.material_history(db,mid);self.table.setRowCount(len(rows));received=written=0
+        for r,h in enumerate(reversed(rows)):
+            qty=h['qty']
+            if qty>0:received+=qty
+            else:written+=-qty
+            for c,v in enumerate([h['date'],h['kind'],('+' if qty>0 else '')+domain.fmt(qty)+' '+unit,domain.fmt(h['balance'])+' '+unit,h['act'],h['object'],h['note']]):
+                i=item(self.table,r,c,v,False)
+                if c==2:i.setForeground(__import__('PyQt6.QtGui',fromlist=['QColor']).QColor('#15803D' if qty>0 else '#B91C1C'))
+        self.summary.setText(f'{category} · остаток сейчас: {domain.fmt(domain.balance(db,mid))} {unit}. Всего поступило: {domain.fmt(received)} {unit}, списано: {domain.fmt(written)} {unit}. Новые записи сверху.')
+        from .registry_tools import autofit_columns;autofit_columns(self.table)
+        bar=QHBoxLayout();button(bar,'Поступление / остаток',lambda:(ReceiptDialog(mid,self).exec(),self.accept()));bar.addStretch();button(bar,'Закрыть',self.accept);l.addLayout(bar)
+
+
+class ObjectDialog(QDialog):
+    def __init__(self,oid=None,parent=None,link=False):
+        super().__init__(parent);self.oid=oid;self.setWindowTitle('Объект списания');self.resize(620,420);l=QVBoxLayout(self);f=QFormLayout();l.addLayout(f)
+        self.name=QLineEdit();self.address=QLineEdit();self.organization=QLineEdit();self.approved_by=QLineEdit();self.commission=QLineEdit();self.notes=QLineEdit()
+        self.reference=ObjectField();self.reference.changed.connect(self.from_reference)
+        f.addRow('Название *',self.name);f.addRow('Адрес',self.address)
+        f.addRow('Связать с объектом услуг (ГСВ / ГСН)',self.reference)
+        for label,w in [('Организация (если отличается от общей)',self.organization),('Утверждает (если отличается)',self.approved_by),('Комиссия (если отличается)',self.commission),('Примечание',self.notes)]:f.addRow(label,w)
+        l.addWidget(QLabel('Пустые поля реквизитов берутся из «Значений по умолчанию». Объект можно не связывать с договорами — например, собственное здание.'))
+        if oid:
+            row=db.fetchone('SELECT name,owner_type,owner_id,address,organization,approved_by,commission,notes FROM writeoff_objects WHERE id=?',(oid,))
+            self.name.setText(row[0]);self.address.setText(row[3] or '');self.organization.setText(row[4] or '');self.approved_by.setText(row[5] or '');self.commission.setText(row[6] or '');self.notes.setText(row[7] or '')
+            if row[1]:self.reference.set_reference(row[1],row[2])
+        elif link:QTimer.singleShot(0,self.reference.choose if hasattr(self.reference,'choose') else (lambda:None))
+        b=QDialogButtonBox(QDialogButtonBox.StandardButton.Save|QDialogButtonBox.StandardButton.Cancel);b.accepted.connect(self.save);b.rejected.connect(self.reject);l.addWidget(b)
+    def from_reference(self):
+        if self.reference.reference[0] and not self.name.text().strip():self.name.setText(owner_label(db,*self.reference.reference))
+    def save(self):
+        try:
+            owner,rid=self.reference.reference
+            self.oid=domain.save_object(db,self.name.text(),self.address.text().strip(),owner,rid,self.organization.text().strip(),self.approved_by.text().strip(),self.commission.text().strip(),self.notes.text().strip(),self.oid);self.accept()
+        except Exception as e:error(self,e)
+
+
+class ObjectsView(QWidget):
+    """Объекты списания (свои и связанные с услугами) и значения по умолчанию для актов."""
+    FIELDS=(('organization','Организация'),('approved_by','Утверждает (должность, ФИО)'),('commission','Комиссия / ответственные (ФИО)'),('basis','Основание акта списания'),('reason','Основание дефектного акта'),('conditions','Условия выполнения работ'))
+    def __init__(self):
+        super().__init__();l=QVBoxLayout(self);bar=QHBoxLayout();self.search=QLineEdit();self.search.setPlaceholderText('Поиск объекта…');bar.addWidget(self.search,1)
+        button(bar,'Добавить свой объект',self.create);button(bar,'Добавить объект услуг…',self.create_linked);button(bar,'Изменить',self.edit);b=button(bar,'Удалить',self.delete);b.setProperty('type','danger');l.addLayout(bar)
+        self.table=table(['Объект','Связь','Адрес','Организация','Утверждает','Комиссия','Примечание']);l.addWidget(self.table,1)
+        from PyQt6.QtWidgets import QGroupBox
+        box=QGroupBox('Значения по умолчанию для новых актов (комиссия, кто утверждает и т. д.)');form=QFormLayout(box);self.defaults={}
+        for key,label in self.FIELDS:self.defaults[key]=QLineEdit();form.addRow(label,self.defaults[key])
+        row=QHBoxLayout();button(row,'Сохранить значения',self.save_defaults);self.status=QLabel();row.addWidget(self.status,1);form.addRow(row);l.addWidget(box)
+        self.search.textChanged.connect(self.load_data);self.table.cellDoubleClicked.connect(lambda *_:self.edit());self.load_data()
+    def selected(self):
+        r=self.table.currentRow();return self.table.item(r,0).data(Qt.ItemDataRole.UserRole) if r>=0 else None
+    def load_data(self,*_):
+        q=self.search.text().casefold();rows=[r for r in domain.objects(db) if not q or q in (r[1]+' '+(r[4] or '')).casefold()];self.table.setRowCount(len(rows))
+        for r,(oid,name,owner,rid,address,org,appr,comm,notes) in enumerate(rows):
+            link=('связан: '+owner_label(db,owner,rid)) if owner else 'свой объект'
+            for c,v in enumerate([name,link,address,org,appr,comm,notes]):item(self.table,r,c,v,False).setData(Qt.ItemDataRole.UserRole,oid)
+        for key,value in domain.get_defaults(db).items():self.defaults[key].setText(value)
+        from .registry_tools import autofit_columns;autofit_columns(self.table)
+    def save_defaults(self):
+        domain.set_defaults(db,{k:w.text() for k,w in self.defaults.items()});self.status.setText('Значения сохранены: они подставляются в новые акты и дефектные акты.')
+    def create(self):
+        if ObjectDialog(parent=self).exec():self.load_data()
+    def create_linked(self):
+        if ObjectDialog(parent=self,link=True).exec():self.load_data()
+    def edit(self):
+        if self.selected() and ObjectDialog(self.selected(),self).exec():self.load_data()
+    def delete(self):
+        rid=self.selected()
+        if rid and QMessageBox.question(self,'Удаление','Удалить объект из списка? Ранее созданные акты не изменятся.')==QMessageBox.StandardButton.Yes:domain.delete_object(db,rid);self.load_data()

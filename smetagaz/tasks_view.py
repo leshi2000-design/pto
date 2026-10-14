@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLa
 from PyQt6.QtCore import Qt, QDate, QLocale, pyqtSignal, QTime
 from PyQt6.QtGui import QColor, QAction
 
+from .date_widgets import DateEdit
 from .database import db
 from .agenda_domain import due_state, due_label, norm_date
 from .task_catalog import status_rows, chip_html
@@ -187,7 +188,7 @@ class TaskEditDialog(QDialog):
         # Срок выполнения
         row_due = QHBoxLayout()
         self.chk_due = QCheckBox("Срок выполнения:")
-        self.dt_due = QDateEdit(QDate.currentDate())
+        self.dt_due = DateEdit(QDate.currentDate())
         self.dt_due.setCalendarPopup(True)
         self.dt_due.setLocale(QLocale(QLocale.Language.Russian))
         self.dt_due.setDisplayFormat("dd.MM.yyyy")

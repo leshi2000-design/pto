@@ -518,6 +518,8 @@ def render_xlsx(template, out_path, tags, payments, normalize=None):
             for cell in row:
                 if isinstance(cell.value, str):
                     cell.data_type = 's'
+    from .dates import localize_workbook
+    localize_workbook(wb)
     _save_atomic(lambda p: wb.save(p), out_path)
 
 
@@ -553,8 +555,16 @@ def folder_name(number, address='', client=''):
     return safe_name(name)
 
 
+def custom_root(section):
+    """Папка раздела, выбранная пользователем в «Настройках» (Path) или None, если не задана или недоступна."""
+    from .database import db
+    value = str(db.get_setting(f'folder_root_{section}', '') or '').strip()
+    return Path(value) if value else None
+
+
 def section_root(section):
-    return PROJECTS_DIR / SECTION_DIRS[section]
+    """Где создаются папки договоров раздела: выбранная пользователем папка или стандартная внутри данных программы."""
+    return custom_root(section) or (PROJECTS_DIR / SECTION_DIRS[section])
 
 
 def project_folder_name(db, pid):
@@ -690,6 +700,8 @@ def export_cards(db, destination):
             if isinstance(cell.value, str):
                 cell.data_type = 's'
     from .contracts_excel_export import keep_version
+    from .dates import localize_workbook
+    localize_workbook(wb)
     keep_version(destination)
     _save_atomic(lambda p: wb.save(p), destination)
     return len(ids)

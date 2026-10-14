@@ -66,7 +66,8 @@ def export_record(db,table,rid,path,options=None):
             def append(values):
                 cells=[]
                 for value in values:
-                    cell=WriteOnlyCell(ws,value=value if isinstance(value,(int,float)) else str(value or ''))
+                    from .dates import display_date
+                    cell=WriteOnlyCell(ws,value=value if isinstance(value,(int,float)) else display_date(str(value or '')))
                     if isinstance(value,str):cell.data_type='s' # no spreadsheet formula injection
                     cell.font=Font(name=opts['font'],size=size);cells.append(cell)
                 ws.append(cells)

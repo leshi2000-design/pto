@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLa
 from PyQt6.QtCore import Qt, QDate, QLocale, QSize, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen, QBrush, QTextCharFormat, QFont
 
+from .date_widgets import DateEdit
 from .database import db
 from . import board_domain as board
 from . import agenda_domain as agenda
@@ -73,7 +74,7 @@ class RecurringEditDialog(QDialog):
         form.addRow('Если выходной', self.shift)
         self.note = QLineEdit()
         form.addRow('Заметка', self.note)
-        self.start = QDateEdit(QDate.currentDate())
+        self.start = DateEdit(QDate.currentDate())
         self.start.setLocale(QLocale(QLocale.Language.Russian))
         self.start.setCalendarPopup(True)
         self.start.setDisplayFormat('MMMM yyyy')

@@ -174,3 +174,13 @@ class RegistryTools(QObject):
         saved = self.filters()
         saved.pop(name, None)
         self.db.set_setting(f'filters_{self.key}', json.dumps(saved, ensure_ascii=False))
+
+
+def autofit_columns(table, max_width=460, min_width=70, stretch_last=True):
+    """Ширина колонок по содержимому (с пределом), чтобы данные читались без захода в карточку; пользователь может менять ширину вручную."""
+    header = table.horizontalHeader()
+    table.resizeColumnsToContents()
+    for col in range(table.columnCount()):
+        header.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
+        table.setColumnWidth(col, max(min_width, min(max_width, table.columnWidth(col) + 14)))
+    header.setStretchLastSection(stretch_last)

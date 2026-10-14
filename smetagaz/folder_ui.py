@@ -12,7 +12,8 @@ def choose_folder(parent, section, suggested_name, current=''):
     box.setWindowTitle('Папка договора')
     box.setIcon(QMessageBox.Icon.Question)
     box.setText('Папка договора ещё не привязана.' if not current else f'Сейчас привязана папка:\n{current}')
-    box.setInformativeText('Привязать существующую папку или создать новую?\n\nИмя новой папки:\n' + suggested_name)
+    where = gd.custom_root(section)
+    box.setInformativeText('Привязать существующую папку или создать новую?\n\nИмя новой папки:\n' + suggested_name + (f'\n\nНовая папка будет создана в:\n{where}' if where else ''))
     new_button = box.addButton('Создать новую', QMessageBox.ButtonRole.AcceptRole)
     existing_button = box.addButton('Привязать существующую…', QMessageBox.ButtonRole.ActionRole)
     box.addButton('Отмена', QMessageBox.ButtonRole.RejectRole)
@@ -23,9 +24,17 @@ def choose_folder(parent, section, suggested_name, current=''):
         path = QFileDialog.getExistingDirectory(parent, 'Выберите существующую папку договора', start)
         return (path, False) if path else (None, False)
     if clicked is new_button:
+        custom = gd.custom_root(section)
+        if custom is not None:              # корневая папка раздела выбрана в «Настройках»: новая папка создаётся в ней
+            try:
+                custom.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                QMessageBox.warning(parent, 'Папка договора', f'Папка раздела недоступна:\n{custom}\n{e}\n\nУкажите другую в «Настройках».')
+                return None, False
+            return os.path.join(str(custom), suggested_name), True
         root = gd.section_root(section)
         root.mkdir(parents=True, exist_ok=True)
-        place = QFileDialog.getExistingDirectory(parent, 'Где создать новую папку?', str(root))
+        place = QFileDialog.getExistingDirectory(parent, 'Где создать новую папку? (постоянное место можно задать в «Настройках»)', str(root))
         if not place:
             return None, False
         return os.path.join(place, suggested_name), True

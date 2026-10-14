@@ -72,6 +72,10 @@ def initialize(db):
         gsv_project_migrate(db)
         from .gsvm_domain import migrate as gsvm_migrate
         gsvm_migrate(db)
+        from .price_sync import migrate as price_migrate
+        price_migrate(db)
+        from .gsvm_statuses import migrate as gsvm_statuses_migrate
+        gsvm_statuses_migrate(db)
         from .dossier_domain import migrate as dossier_migrate
         dossier_migrate(db)
         from .legal_entities_domain import migrate as legal_entities_migrate

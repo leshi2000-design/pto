@@ -786,6 +786,8 @@ class EstimateEditorDialog(QDialog):
 
                             if isinstance(cell.value, str): cell.data_type = "s"
 
+                from .dates import localize_workbook
+                localize_workbook(wb)
                 wb.save(save_path)
                 QMessageBox.information(self, "Успех", "Смета выгружена в Excel.")
             except Exception as e:

@@ -39,6 +39,7 @@ def migrate(db):
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_defect_active_writeoff ON stock_acts(defect_id) WHERE defect_id IS NOT NULL AND status<>'reversed'",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_stock_post_once ON stock_moves(act_id,material_id,kind) WHERE act_id IS NOT NULL",
     ]
+    statements.append("CREATE TABLE IF NOT EXISTS writeoff_objects(id INTEGER PRIMARY KEY,name TEXT NOT NULL UNIQUE,owner_type TEXT,owner_id INTEGER,address TEXT DEFAULT '',organization TEXT DEFAULT '',approved_by TEXT DEFAULT '',commission TEXT DEFAULT '',notes TEXT DEFAULT '')")
     for sql in statements:db.execute(sql)
     for key in ('object_text','welder_text'):
         if key not in [r[1] for r in db.fetchall('PRAGMA table_info(welding_jobs)')]:db.execute(f"ALTER TABLE welding_jobs ADD COLUMN {key} TEXT DEFAULT ''")
@@ -222,3 +223,111 @@ def from_defect(db,did):
         data['notes']='Материалы вне норм заполнить вручную: '+ '; '.join(manual) if manual else ''
         data['calculation']=json.dumps(snapshots,ensure_ascii=False)
         return save_act(db,data,lines)
+
+
+# --- УДАЛЕНИЕ, КОПИРОВАНИЕ, ИСТОРИЯ ----------------------------------------------------------
+
+def copy_defect(db,did):
+    """Новый дефектный акт на основании существующего: те же реквизиты и работы, новый номер и сегодняшняя дата."""
+    with db.transaction():
+        cur=db.execute('SELECT * FROM defect_acts WHERE id=?',(did,));row=cur.fetchone()
+        if not row:raise ValueError('Дефектный акт не найден')
+        data=dict(zip([c[0] for c in cur.description],row))
+        nxt=db.fetchone('SELECT coalesce(max(id),0)+1 FROM defect_acts')[0]
+        data.update(number='ДА-'+date.today().strftime('%Y%m%d')+'-'+str(nxt),act_date=date.today().isoformat())
+        lines=[dict(defect=r[0],work=r[1],unit=r[2],quantity=r[3],profile_id=r[4],notes=r[5]) for r in db.fetchall('SELECT defect,work,unit,quantity,profile_id,notes FROM defect_lines WHERE act_id=? ORDER BY id',(did,))]
+        return save_defect(db,data,lines)
+
+def delete_defect(db,did):
+    """Удаляет дефектный акт. Если по нему есть действующее списание — отказ; отменённые списания отвязываются."""
+    with db.transaction():
+        row=db.fetchone('SELECT number FROM defect_acts WHERE id=?',(did,))
+        if not row:raise ValueError('Дефектный акт не найден')
+        active=db.fetchone("SELECT number FROM stock_acts WHERE defect_id=? AND status<>'reversed'",(did,))
+        if active:raise ValueError(f'По акту есть списание №{active[0]}. Сначала удалите его.')
+        db.execute('UPDATE stock_acts SET defect_id=NULL WHERE defect_id=?',(did,))
+        db.execute('DELETE FROM defect_acts WHERE id=?',(did,))
+
+def delete_act(db,aid):
+    """Удаляет акт списания любого статуса; у проведённого материалы возвращаются на остаток (движения акта удаляются)."""
+    with db.transaction():
+        row=db.fetchone('SELECT number FROM stock_acts WHERE id=?',(aid,))
+        if not row:raise ValueError('Акт не найден')
+        materials=[r[0] for r in db.fetchall('SELECT DISTINCT material_id FROM stock_moves WHERE act_id=?',(aid,))]
+        db.execute('DELETE FROM stock_moves WHERE act_id=?',(aid,))
+        db.execute('DELETE FROM stock_acts WHERE id=?',(aid,))
+        for mid in materials:check_timeline(db,mid)
+
+def material_usage(db,mid):
+    """Сведения для подтверждения удаления: движения, акты, нормы."""
+    return dict(moves=db.fetchone('SELECT count(*) FROM stock_moves WHERE material_id=?',(mid,))[0],
+                acts=[r[0] for r in db.fetchall('SELECT DISTINCT a.number FROM stock_act_lines l JOIN stock_acts a ON a.id=l.act_id WHERE l.material_id=? ORDER BY a.number',(mid,))],
+                norms=[r[0] for r in db.fetchall('SELECT p.name FROM norm_items i JOIN norm_profiles p ON p.id=i.profile_id WHERE i.material_id=? ORDER BY p.name',(mid,))])
+
+def delete_material(db,mid,archive_if_used=False):
+    """Удаляет материал вместе с поступлениями и строками норм. Если он есть в актах — удалить нельзя (можно скрыть: archive_if_used).
+    Возвращает 'deleted' или 'archived'."""
+    with db.transaction():
+        material(db,mid)
+        usage=material_usage(db,mid)
+        if usage['acts']:
+            if not archive_if_used:raise ValueError('Материал есть в актах списания: '+', '.join(usage['acts'][:8])+('…' if len(usage['acts'])>8 else '')+'. Удалите эти акты или скройте материал.')
+            db.execute('UPDATE stock_materials SET active=0 WHERE id=?',(mid,));return 'archived'
+        db.execute('DELETE FROM norm_items WHERE material_id=?',(mid,))
+        db.execute('DELETE FROM stock_moves WHERE material_id=?',(mid,))
+        db.execute('DELETE FROM stock_materials WHERE id=?',(mid,))
+        return 'deleted'
+
+MOVE_KINDS={'receipt':'Поступление','correction':'Корректировка','writeoff':'Списание','reversal':'Отмена списания'}
+
+def material_history(db,mid):
+    """Все поступления и списания материала с нарастающим остатком: [dict(date, kind, qty, act, object, note, balance)]."""
+    rows=db.fetchall("SELECT v.move_date,v.kind,v.qty,coalesce(a.number,''),coalesce(a.object_name,''),coalesce(v.note,'') FROM stock_moves v LEFT JOIN stock_acts a ON a.id=v.act_id WHERE v.material_id=? ORDER BY v.move_date,v.id",(mid,))
+    result,running=[],0
+    for day,kind,qty,number,obj,note in rows:
+        running+=qty
+        result.append(dict(date=day,kind=MOVE_KINDS.get(kind,kind),qty=qty,act=number,object=obj,note=note,balance=running))
+    return result
+
+# --- ОБЪЕКТЫ СПИСАНИЯ И ЗНАЧЕНИЯ ПО УМОЛЧАНИЮ ----------------------------------------------------
+
+DEFAULT_KEYS=('organization','approved_by','commission','basis','reason','conditions')
+
+def get_defaults(db):
+    try:data=json.loads(db.get_setting('writeoff_defaults','') or '{}')
+    except ValueError:data={}
+    return {k:str(data.get(k,'')) for k in DEFAULT_KEYS}
+
+def set_defaults(db,values):
+    db.set_setting('writeoff_defaults',json.dumps({k:str(values.get(k,'')).strip() for k in DEFAULT_KEYS},ensure_ascii=False))
+
+def objects(db):
+    return db.fetchall('SELECT id,name,owner_type,owner_id,address,organization,approved_by,commission,notes FROM writeoff_objects ORDER BY name')
+
+def save_object(db,name,address='',owner_type=None,owner_id=None,organization='',approved_by='',commission='',notes='',oid=None):
+    name=str(name or '').strip()
+    if not name:raise ValueError('Введите название объекта')
+    if owner_type:
+        from .gsv_domain import require_owner
+        require_owner(db,owner_type,owner_id)
+    try:
+        with db.transaction():
+            args=(name,owner_type or None,owner_id if owner_type else None,address,organization,approved_by,commission,notes)
+            if oid:db.execute('UPDATE writeoff_objects SET name=?,owner_type=?,owner_id=?,address=?,organization=?,approved_by=?,commission=?,notes=? WHERE id=?',(*args,oid));return oid
+            return db.execute('INSERT INTO writeoff_objects(name,owner_type,owner_id,address,organization,approved_by,commission,notes) VALUES(?,?,?,?,?,?,?,?)',args).lastrowid
+    except Exception as e:
+        if 'UNIQUE' in str(e):raise ValueError('Объект с таким названием уже есть') from None
+        raise
+
+def delete_object(db,oid):
+    db.execute('DELETE FROM writeoff_objects WHERE id=?',(oid,))
+
+def object_defaults(db,oid=None):
+    """Реквизиты по умолчанию для нового документа: общие значения; заполненные поля объекта их заменяют."""
+    values=get_defaults(db)
+    if oid:
+        row=db.fetchone('SELECT organization,approved_by,commission FROM writeoff_objects WHERE id=?',(oid,))
+        if row:
+            for key,value in zip(('organization','approved_by','commission'),row):
+                if value:values[key]=value
+    return values
