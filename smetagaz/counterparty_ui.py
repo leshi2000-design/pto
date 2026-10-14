@@ -373,6 +373,7 @@ class ContractDialog(QDialog):
             for key, value in (preset or {}).items():
                 self.apply_preset(key, value)
         self.refresh_all()
+        self.tabs.currentChanged.connect(self.on_tab_changed)
 
     def apply_preset(self, key, value):
         if key == 'legal_id' and value:
@@ -599,6 +600,11 @@ class ContractDialog(QDialog):
 
     def ensure_saved(self):
         return bool(self.contract_id) or self.save()
+
+    def on_tab_changed(self, index):
+        """Вкладки «Акты и справки» и «Документы» доступны всегда: у нового договора он сначала сохраняется (если данные не заполнены — возврат на «Договор»)."""
+        if index > 0 and not self.contract_id and not self.save():
+            self.tabs.setCurrentIndex(0)
 
     # --- акты
     def build_acts(self):
@@ -909,8 +915,6 @@ class ContractDialog(QDialog):
         self.refresh_acts()
         self.refresh_docs()
         self.refresh_estimate()
-        self.tabs.setTabEnabled(1, bool(self.contract_id))
-        self.tabs.setTabEnabled(2, bool(self.contract_id))
 
 
 # --- Реестры -----------------------------------------------------------------------------------

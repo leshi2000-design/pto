@@ -240,7 +240,7 @@ class DatabaseManager:
                 ('export_font', 'Segoe UI'), ('export_font_size', '13'),
                 ('export_company_name', 'ООО "ГазМонтаж"'),
                 ('export_excel_template', ''), ('export_word_template', ''),
-                ('app_name', 'ПТО 3.6.1'), ('tabs_config', json.dumps(default_tabs))
+                ('app_name', 'ПТО 3.6.2'), ('tabs_config', json.dumps(default_tabs))
             ]
             c.executemany("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", defaults)
 

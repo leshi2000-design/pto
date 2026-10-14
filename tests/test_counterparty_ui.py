@@ -330,3 +330,24 @@ def test_settings_offsite_group(env, tmp_path, monkeypatch):
     assert path.exists()
     view.off_refresh()
     assert 'копия создана' in view.off_status.text() and ob.verify_latest(db).count('восстановление проверено') == 1
+
+
+def test_new_contract_tabs_are_clickable(env, monkeypatch):
+    """Вкладки «Акты и справки» и «Документы» доступны у нового договора: он сохраняется при переходе, а при ошибке данных возвращает на «Договор»."""
+    db, ui = env
+    from PyQt6.QtWidgets import QMessageBox
+    lid = cc.save_legal(db, dict(name='ООО Ромашка', unp='123456789'))
+    for mod in ('le', 'smr'):
+        d = ui.ContractDialog(mod)
+        assert all(d.tabs.isTabEnabled(i) for i in range(d.tabs.count()))
+        d.tabs.setCurrentIndex(1)                  # данные не заполнены — остаёмся на «Договор»
+        assert d.tabs.currentIndex() == 0 and not d.contract_id
+        if mod == 'le':
+            d.set_party('legal', lid)
+        else:
+            d.rb_legal.setChecked(True); d.toggle_party(); d.set_party('legal', lid)
+        d.amount.setValue(500); d.subject.setText('Работы')
+        d.tabs.setCurrentIndex(2)                  # заполнено — договор сохраняется и вкладка открывается
+        assert d.contract_id and d.tabs.currentIndex() == 2
+        d.tabs.setCurrentIndex(1)
+        assert d.tabs.currentIndex() == 1
