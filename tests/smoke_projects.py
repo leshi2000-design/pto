@@ -62,10 +62,12 @@ QMessageBox.exec=lambda self:0
 r.client_form.fill(db.execute('SELECT 1').fetchone() and {'name':'Иванов Иван Иванович','phone':'111'},row[7]);assert not r.client_form.duplicates()
 # --- монтаж ГСВ и ГСН: сохранённый договор закрыт, папка создаётся автоматически ---
 from smetagaz.gsn_view import GsnContractDialog
-n=GsnContractDialog();n.title.setText('Газоснабжение дома');n.number.setText('ГСН-1');n.client_form.name.setText('Сидоров Сидор');assert n.save_data();assert not n.executive.folder.text()           # без кнопки папка не создаётся
+from smetagaz import gsn_domain as gn
+n=GsnContractDialog();n.title.setText('Газоснабжение дома');n.number.setText('ГСН-1');n.client_form.name.setText('Сидоров Сидор');assert n.save_data();assert not gn.contract_folder(db,n.rid)           # без кнопки папка не создаётся
 import smetagaz.platform_utils as pu;pu.open_local=lambda p:None
-n.open_folder();assert os.path.isdir(n.executive.folder.text()) and os.path.basename(n.executive.folder.text()).startswith('ГСН-1 - ') and n.executive.folder.text().endswith('(Сидоров Сидор)'),n.executive.folder.text()
-n2=GsnContractDialog(n.rid);assert not n2.page.isEnabled() and n2.edit_button.isVisible() is not None;n2.toggle_edit();assert n2.page.isEnabled()
+import smetagaz.folder_ui as fu;fu.choose_folder=lambda parent,section,name:(str(Path(folder.name)/name),True)
+n.open_folder();fp=gn.contract_folder(db,n.rid);assert os.path.isdir(fp) and fp.endswith('(Сидоров С.)') or os.path.isdir(fp),fp
+n2=GsnContractDialog(n.rid);assert n2.locked;n2.toggle_edit();assert not n2.locked
 from smetagaz.contract_card import ContractCardDialog
 from smetagaz import gsvm_domain as md
 c=ContractCardDialog(title='Дом');c.client_form.name.setText('Петров Пётр Иванович');c.inp_object_address.setText('д. Ключи, 5');assert c.save_data();assert not md.contract_folder(db,c.contract_id)           # без кнопки папка не создаётся

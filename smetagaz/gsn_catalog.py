@@ -1,7 +1,7 @@
 """Справочник ГСН: позиции (трубопроводы, арматура, материалы) и собственный реестр сертификатов ГСН.
 
 Полностью независим от справочника ГСВ: свои таблицы (gsn_*), свои сертификаты, никаких общих записей и предзаполненных правил.
-Всё, что нужно, добавляется вручную. Состав полей справочника уточняется — при необходимости будет расширен."""
+Всё, что нужно, добавляется вручную. «Роль» позиции определяет, где она используется в договоре ГСН. Состав полей справочника уточняется — при необходимости будет расширен."""
 import os
 from datetime import date
 
@@ -58,12 +58,16 @@ def save_item(db, values, item_id=None, cert_ids=()):
     name = str(values.get('name') or '').strip()
     if not name:
         raise ValueError('Введите наименование')
-    data = [str(values.get('category') or '').strip(), name, str(values.get('unit') or '').strip(), str(values.get('note') or '').strip(), int(bool(values.get('active', True)))]
+    from .gsn_domain import ROLES
+    role = str(values.get('role') or '')
+    if role and role not in ROLES:
+        raise ValueError('Неизвестная роль позиции')
+    data = [str(values.get('category') or '').strip(), name, str(values.get('unit') or '').strip(), str(values.get('note') or '').strip(), int(bool(values.get('active', True))), role]
     with db.transaction():
         if item_id:
-            db.execute('UPDATE gsn_items SET category=?,name=?,unit=?,note=?,active=? WHERE id=?', (*data, item_id))
+            db.execute('UPDATE gsn_items SET category=?,name=?,unit=?,note=?,active=?,role=? WHERE id=?', (*data, item_id))
         else:
-            item_id = db.execute('INSERT INTO gsn_items(category,name,unit,note,active) VALUES(?,?,?,?,?)', data).lastrowid
+            item_id = db.execute('INSERT INTO gsn_items(category,name,unit,note,active,role) VALUES(?,?,?,?,?,?)', data).lastrowid
         db.execute('DELETE FROM gsn_item_certs WHERE item_id=?', (item_id,))
         for cid in set(cert_ids):
             if not db.fetchone('SELECT 1 FROM gsn_certificates WHERE id=?', (cid,)):
@@ -139,7 +143,7 @@ class GsnCertDialog(QDialog):
         self.valid_from, self.valid_to = OptionalDate(), OptionalDate()
         self.note = QTextEdit()
         self.note.setFixedHeight(70)
-        self.always = QCheckBox('Подтягивать в каждый объект ГСН')
+        self.always = QCheckBox('Сертификат по умолчанию: подтягивается в каждый объект ГСН')
         pick = QPushButton('Выбрать файл…')
         pick.clicked.connect(self.pick_file)
         row = QHBoxLayout()
@@ -192,10 +196,16 @@ class GsnItemDialog(QDialog):
         self.name, self.unit, self.note = QLineEdit(), QLineEdit(), QLineEdit()
         self.active = QCheckBox('Доступна для выбора')
         self.active.setChecked(True)
-        for label, w in (('Раздел справочника', self.category), ('Наименование *', self.name), ('Единица', self.unit), ('Примечание', self.note)):
+        from .gsn_domain import ROLES
+        self.role = QComboBox()
+        self.role.addItem('— обычная позиция —', '')
+        for key, label in ROLES.items():
+            self.role.addItem(label, key)
+        self.role.setToolTip('Позиция с ролью используется в расчёте материалов и сертификатов договора ГСН (врезка в сталь / в ПЭ, трубы, муфты)')
+        for label, w in (('Роль в договоре ГСН', self.role), ('Раздел справочника', self.category), ('Наименование *', self.name), ('Единица', self.unit), ('Примечание', self.note)):
             form.addRow(label, w)
         form.addRow('', self.active)
-        layout.addWidget(QLabel('Сертификаты этой позиции (отметьте нужные):'))
+        layout.addWidget(QLabel('Сертификаты этой позиции — «зависимые»: попадают в договор, где эта позиция используется (отметьте нужные):'))
         self.certs = QListWidget()
         layout.addWidget(self.certs, 1)
         new = QPushButton('＋ Новый сертификат ГСН…')
@@ -208,9 +218,10 @@ class GsnItemDialog(QDialog):
         linked = {r[0] for r in db.fetchall('SELECT cert_id FROM gsn_item_certs WHERE item_id=?', (item_id,))} if item_id else set()
         self.fill_certs(linked)
         if item_id:
-            r = db.fetchone('SELECT category,name,unit,note,active FROM gsn_items WHERE id=?', (item_id,))
+            r = db.fetchone("SELECT category,name,unit,note,active,coalesce(role,'') FROM gsn_items WHERE id=?", (item_id,))
             if r:
                 self.category.setEditText(r[0] or ''); self.name.setText(r[1]); self.unit.setText(r[2] or ''); self.note.setText(r[3] or ''); self.active.setChecked(bool(r[4]))
+                self.role.setCurrentIndex(max(0, self.role.findData(r[5])))
 
     def fill_certs(self, checked):
         self.certs.clear()
@@ -233,7 +244,7 @@ class GsnItemDialog(QDialog):
     def save(self):
         try:
             self.item_id = save_item(db, dict(category=self.category.currentText(), name=self.name.text(), unit=self.unit.text(), note=self.note.text(),
-                                              active=self.active.isChecked()), self.item_id, self.checked())
+                                              active=self.active.isChecked(), role=self.role.currentData()), self.item_id, self.checked())
         except ValueError as e:
             QMessageBox.warning(self, 'Позиция', str(e))
             return
@@ -259,7 +270,7 @@ class ItemsTab(QWidget):
             b.clicked.connect(fn)
             bar.addWidget(b)
         layout.addLayout(bar)
-        self.table = _table(['Наименование', 'Раздел', 'Ед.', 'Сертификатов', 'Доступна', 'Примечание'], (320, 170, 70, 110, 90))
+        self.table = _table(['Наименование', 'Раздел', 'Ед.', 'Сертификатов', 'Доступна', 'Роль в договоре ГСН', 'Примечание'], (300, 150, 60, 110, 90, 230))
         self.table.doubleClicked.connect(self.edit)
         layout.addWidget(self.table, 1)
         self.load_data()
@@ -279,11 +290,12 @@ class ItemsTab(QWidget):
             self.reload_categories()
         q = '%' + self.search.text().strip().casefold() + '%'
         cat = self.category.currentData()
-        rows = db.fetchall("""SELECT i.id,i.name,i.category,i.unit,(SELECT count(*) FROM gsn_item_certs WHERE item_id=i.id),i.active,i.note FROM gsn_items i
+        rows = db.fetchall("""SELECT i.id,i.name,i.category,i.unit,(SELECT count(*) FROM gsn_item_certs WHERE item_id=i.id),i.active,i.note,coalesce(i.role,'') FROM gsn_items i
             WHERE LOWER(i.name||' '||coalesce(i.category,'')||' '||coalesce(i.note,'')) LIKE ? AND (? IS NULL OR i.category=?) ORDER BY i.category,i.name""", (q, cat, cat))
         self.table.setRowCount(len(rows))
         for r, row in enumerate(rows):
-            vals = [row[1], row[2], row[3], row[4], 'да' if row[5] else 'архив', row[6]]
+            from .gsn_domain import ROLES
+            vals = [row[1], row[2], row[3], row[4], 'да' if row[5] else 'архив', ROLES.get(row[7], ''), row[6]]
             for c, v in enumerate(vals):
                 self.table.setItem(r, c, _cell(v, row[0] if c == 0 else None))
 
@@ -326,7 +338,7 @@ class CertsTab(QWidget):
             b.clicked.connect(fn)
             bar.addWidget(b)
         layout.addLayout(bar)
-        self.table = _table(['Название', 'Номер', 'Кем выдан', 'Срок действия', 'Состояние', 'Всегда', 'Файл'], (280, 120, 170, 110, 160, 70))
+        self.table = _table(['Название', 'Номер', 'Кем выдан', 'Срок действия', 'Состояние', 'По умолчанию', 'Файл'], (280, 120, 170, 110, 160, 70))
         self.table.doubleClicked.connect(self.edit)
         layout.addWidget(self.table, 1)
         self.load_data()
@@ -371,6 +383,44 @@ class CertsTab(QWidget):
             self.load_data()
 
 
+class AttestationsRulesTab(QWidget):
+    """Аттестаты сварщиков из модуля «Сварщики»: какие из них подтягиваются в договоры ГСН — всегда или в зависимости от типа врезки."""
+    def __init__(self):
+        super().__init__()
+        from .gsn_domain import ATTEST_MODES
+        self.modes = ATTEST_MODES
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel('Укажите для каждого документа сварщика, когда он попадает в договор ГСН: для всех объектов, только при врезке в сталь (например, '
+                                'сварщик «на металл») или только при врезке в ПЭ. Документы добавляются в модуле «Сварщики».'))
+        self.search = QLineEdit()
+        self.search.setPlaceholderText('Поиск: документ, сварщик, номер…')
+        self.search.textChanged.connect(self.load_data)
+        layout.addWidget(self.search)
+        self.table = _table(['Документ', 'Тип', 'Сварщик', 'Номер', 'Дата', 'Когда использовать в ГСН'], (300, 130, 190, 110, 100))
+        layout.addWidget(self.table, 1)
+        self.load_data()
+
+    def load_data(self, *_):
+        from .gsn_domain import attestation_rules
+        q = self.search.text().strip().casefold()
+        rows = [r for r in attestation_rules(db) if not q or q in ' '.join(str(x) for x in r[1:6]).casefold()]
+        self.table.setRowCount(len(rows))
+        for r, (did, title, kind, welder, number, day, _path, mode) in enumerate(rows):
+            for c, v in enumerate((title, kind, welder, number, day)):
+                self.table.setItem(r, c, _cell(v, did if c == 0 else None))
+            combo = QComboBox()
+            combo.addItem('Не использовать в ГСН', '')
+            for key, label in self.modes.items():
+                combo.addItem(label, key)
+            combo.setCurrentIndex(max(0, combo.findData(mode)))
+            combo.currentIndexChanged.connect(lambda _i, d=did, cb=combo: self.set_mode(d, cb))
+            self.table.setCellWidget(r, 5, combo)
+
+    def set_mode(self, document_id, combo):
+        from .gsn_domain import set_attestation_mode
+        set_attestation_mode(db, document_id, combo.currentData())
+
+
 class GsnCatalogView(QWidget):
     """Справочник ГСН: вкладки «Позиции» и «Сертификаты». Пустой — всё добавляется вручную."""
     def __init__(self):
@@ -382,11 +432,13 @@ class GsnCatalogView(QWidget):
         self.certs = CertsTab()
         self.tabs.addTab(self.items, 'Позиции')
         self.tabs.addTab(self.certs, 'Сертификаты')
+        self.attestations = AttestationsRulesTab()
+        self.tabs.addTab(self.attestations, 'Аттестаты сварщиков')
         self.tabs.currentChanged.connect(self.on_tab)
         layout.addWidget(self.tabs)
 
     def on_tab(self, index):
-        (self.items if index == 0 else self.certs).load_data()
+        (self.items, self.certs, self.attestations)[index].load_data()
 
     def load_data(self):
         self.items.reload_categories()

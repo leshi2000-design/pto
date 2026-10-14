@@ -92,6 +92,8 @@ def initialize(db):
         estimates_migrate(db)
         from .gsn_project_import import migrate as gsn_import_migrate
         gsn_import_migrate(db)
+        from .gsn_domain import migrate as gsn_domain_migrate
+        gsn_domain_migrate(db)
         from .secret_store import migrate as secret_migrate
         secret_migrate(db)
         from .audit_domain import migrate as audit_migrate
