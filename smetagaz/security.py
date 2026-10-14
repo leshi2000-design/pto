@@ -16,6 +16,10 @@ def verify(password,stored):
         return hmac.compare_digest(actual,expected)
     except (ValueError,TypeError):return False
 
+def _sync(handle):
+    try:os.fsync(handle.fileno())
+    except OSError:pass         # сброс на диск — по возможности; файл уже записан
+
 def _atomic_target(destination):
     """Временный файл в той же папке: конечный файл заменяется только после успешной записи."""
     import tempfile
@@ -37,7 +41,7 @@ def encrypt_backup(source,destination,password):
             dst.write(header)
             for chunk in iter(lambda:src.read(1024*1024),b''):dst.write(encryptor.update(chunk))
             dst.write(encryptor.finalize());dst.write(encryptor.tag)
-            dst.flush();os.fsync(dst.fileno())
+            dst.flush();_sync(dst)
         os.replace(tmp,destination)
     finally:
         tmp.unlink(missing_ok=True)
@@ -56,7 +60,7 @@ def decrypt_backup(source,destination,password):
             with dst:
                 while src.tell()<end:dst.write(decryptor.update(src.read(min(1024*1024,end-src.tell()))))
                 dst.write(decryptor.finalize())     # проверка AES-GCM: при неверном пароле здесь исключение
-                dst.flush();os.fsync(dst.fileno())
+                dst.flush();_sync(dst)
         os.replace(tmp,destination);tmp=None
     except Exception:
         raise ValueError('Неверный пароль или повреждённая копия') from None

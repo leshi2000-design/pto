@@ -11,6 +11,15 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 
+def flush_to_disk(path):
+    """Сбрасывает файл на диск. В Windows fsync допустим только для файла, открытого на запись («r+b»); на чтение он даёт [Errno 9].
+    Сбой сброса не должен ломать копию — файл уже записан и закрыт."""
+    try:
+        with open(path,'r+b') as f:os.fsync(f.fileno())
+    except OSError:
+        pass
+
+
 def digest(path):
     h=hashlib.sha256()
     with open(path,'rb') as f:
@@ -89,7 +98,7 @@ def create_backup(db, destination, progress=None):
             for n, name in enumerate(names, 1):
                 step(n, len(names), 'Архивирование: ' + name)
                 z.write(stage/name, name)
-        with open(temp_archive,'rb') as f:os.fsync(f.fileno())
+        flush_to_disk(temp_archive)
         os.replace(temp_archive,destination)
         try:destination.chmod(0o600)
         except OSError:pass

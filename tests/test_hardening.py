@@ -180,3 +180,20 @@ def test_import_cancel_returns_partial_report(tmp_path):
     report = imp.import_rows(d, rows, 'skip', ctx)
     assert report['created'] == 2 and report['cancelled'] == 3
     d.close()
+
+
+def test_backup_survives_fsync_errors(tmp_path, monkeypatch):
+    """В Windows fsync на файле, открытом для чтения, даёт [Errno 9]; копия не должна из-за этого падать."""
+    import errno
+    from smetagaz import backup, security
+
+    def bad_fsync(fd):
+        raise OSError(errno.EBADF, 'Bad file descriptor')
+    monkeypatch.setattr(os, 'fsync', bad_fsync)
+    d = DatabaseManager(tmp_path / 'smetagaz.db'); d.init_db()
+    backup.create_backup(d, tmp_path / 'b.zip')
+    assert (tmp_path / 'b.zip').stat().st_size > 0
+    security.encrypt_backup(tmp_path / 'b.zip', tmp_path / 'b.sgb', 'correct-password-1')
+    security.decrypt_backup(tmp_path / 'b.sgb', tmp_path / 'out.zip', 'correct-password-1')
+    assert (tmp_path / 'out.zip').read_bytes() == (tmp_path / 'b.zip').read_bytes()
+    d.close()
