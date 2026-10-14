@@ -1,7 +1,7 @@
 """Writeoff workspace: documents, defects, rate profiles, material ledger and balances."""
 import json
 from datetime import date
-from PyQt6.QtWidgets import (QWidget,QDialog,QVBoxLayout,QHBoxLayout,QFormLayout,QLineEdit,QLabel,QPushButton,QComboBox,QTableWidget,QTableWidgetItem,QAbstractItemView,QDialogButtonBox,QMessageBox,QTabWidget,QScrollArea)
+from PyQt6.QtWidgets import (QWidget,QDialog,QVBoxLayout,QHBoxLayout,QFormLayout,QLineEdit,QLabel,QPushButton,QComboBox,QTableWidget,QTableWidgetItem,QAbstractItemView,QDialogButtonBox,QMessageBox,QTabWidget,QScrollArea,QTextEdit)
 from PyQt6.QtCore import Qt,QTimer
 from .database import db
 from .domain_widgets import OptionalDate,ObjectField
@@ -381,6 +381,8 @@ class WriteoffView(QWidget):
         super().__init__();l=QVBoxLayout(self);self.tabs=QTabWidget();l.addWidget(self.tabs,1)
         for mode,label in [('acts','Акты списания'),('defects','Дефектные акты'),('norms','Справочник норм'),('materials','Материалы'),('balances','Остатки'),('moves','Движение материалов')]:self.tabs.addTab(Registry(mode),label)
         self.tabs.addTab(ObjectsView(),'Объекты списания')
+        self.tabs.addTab(RegisterView('orders'),'Приказы')
+        self.tabs.addTab(RegisterView('transfers'),'Акты перевода материалов')
         from .workspace_view import WorkspaceView
         self.tabs.addTab(WorkspaceView('writeoffs'),'Прежние записи');self.tabs.currentChanged.connect(lambda _:self.load_data())
     def load_data(self):self.tabs.currentWidget().load_data()
@@ -461,3 +463,134 @@ class ObjectsView(QWidget):
     def delete(self):
         rid=self.selected()
         if rid and QMessageBox.question(self,'Удаление','Удалить объект из списка? Ранее созданные акты не изменятся.')==QMessageBox.StandardButton.Yes:domain.delete_object(db,rid);self.load_data()
+
+
+def _pick_file(parent,line_edit,title):
+    from PyQt6.QtWidgets import QFileDialog
+    path,_=QFileDialog.getOpenFileName(parent,title,line_edit.text() or '','Все файлы (*)')
+    if path:line_edit.setText(path)
+
+def _open_file(parent,path):
+    import os
+    if not path or not os.path.isfile(path):QMessageBox.information(parent,'Файл','Файл не найден: '+(path or 'не прикреплён'));return
+    from .platform_utils import open_local
+    open_local(path)
+
+
+class OrderDialog(QDialog):
+    """Приказ по модулю «Списание»: номер, дата, содержание, кто издал, срок действия, скан/файл."""
+    def __init__(self,oid=None,parent=None):
+        super().__init__(parent);self.oid=oid;self.setWindowTitle('Приказ');self.resize(700,560);l=QVBoxLayout(self);f=QFormLayout();l.addLayout(f)
+        from . import stock_registers as reg
+        self.number=QLineEdit();self.day=OptionalDate();self.day.set_value(date.today().isoformat());self.title=QLineEdit();self.title.setPlaceholderText('О чём приказ: например, «О создании комиссии по списанию материалов»')
+        self.content=QTextEdit();self.content.setPlaceholderText('Содержание, пункты приказа, основание');self.content.setMinimumHeight(140);self.issued_by=QLineEdit();self.valid_until=OptionalDate();self.notes=QLineEdit()
+        self.file=QLineEdit();self.file.setReadOnly(True);fb=QHBoxLayout();fb.addWidget(self.file,1);button(fb,'Прикрепить…',lambda:_pick_file(self,self.file,'Файл приказа (скан, Word, PDF)'));button(fb,'Открыть',lambda:_open_file(self,self.file.text()));button(fb,'Убрать',self.file.clear)
+        for label,w in [('Номер *',self.number),('Дата *',self.day),('О чём приказ *',self.title),('Содержание',self.content),('Кто издал / подписал',self.issued_by),('Действует до',self.valid_until),('Примечание',self.notes)]:f.addRow(label,w)
+        f.addRow('Файл приказа',fb)
+        if oid:
+            d=record('stock_orders',oid);self.number.setText(d['number']);self.day.set_value(d['order_date']);self.title.setText(d['title']);self.content.setPlainText(d['content'] or '');self.issued_by.setText(d['issued_by'] or '');self.valid_until.set_value(d['valid_until']);self.notes.setText(d['notes'] or '');self.file.setText(d['file_path'] or '')
+        else:self.number.setText(reg.next_order_number(db))
+        b=QDialogButtonBox(QDialogButtonBox.StandardButton.Save|QDialogButtonBox.StandardButton.Cancel);b.accepted.connect(self.save);b.rejected.connect(self.reject);l.addWidget(b)
+    def save(self):
+        from . import stock_registers as reg
+        try:
+            self.oid=reg.save_order(db,dict(number=self.number.text(),order_date=self.day.value(),title=self.title.text(),content=self.content.toPlainText(),issued_by=self.issued_by.text(),valid_until=self.valid_until.value(),file_path=self.file.text(),notes=self.notes.text()),self.oid);self.accept()
+        except Exception as e:error(self,e)
+
+
+class TransferDialog(QDialog):
+    """Акт перевода (передачи) материалов: откуда, куда, материалы и количества, основание, комиссия, файл."""
+    def __init__(self,tid=None,parent=None):
+        super().__init__(parent);self.tid=tid;self.setWindowTitle('Акт перевода материалов');self.resize(980,720);l=QVBoxLayout(self);f=QFormLayout();l.addLayout(f)
+        from . import stock_registers as reg
+        self.number=QLineEdit();self.day=OptionalDate();self.day.set_value(date.today().isoformat())
+        self.from_place=self.place_box('Откуда: склад, объект, ответственное лицо');self.to_place=self.place_box('Куда: склад, объект, ответственное лицо')
+        self.reason=QLineEdit();self.approved_by=QLineEdit();self.commission=QLineEdit();self.notes=QLineEdit()
+        self.file=QLineEdit();self.file.setReadOnly(True);fb=QHBoxLayout();fb.addWidget(self.file,1);button(fb,'Прикрепить…',lambda:_pick_file(self,self.file,'Файл акта (скан, Word, PDF)'));button(fb,'Открыть',lambda:_open_file(self,self.file.text()));button(fb,'Убрать',self.file.clear)
+        defaults=domain.get_defaults(db)
+        for label,w in [('Номер *',self.number),('Дата *',self.day),('Откуда *',self.from_place),('Куда *',self.to_place),('Основание / причина',self.reason),('Утверждает',self.approved_by),('Комиссия / ответственные',self.commission),('Примечание',self.notes)]:f.addRow(label,w)
+        f.addRow('Файл акта',fb)
+        self.lines=table(['Материал','Ед.','Количество','Примечание'],True);self.lines.setColumnWidth(0,380);l.addWidget(self.lines,1)
+        bar=QHBoxLayout();button(bar,'Добавить материал',self.add_line);button(bar,'Удалить строку',lambda:self.lines.removeRow(self.lines.currentRow()));bar.addStretch();l.addLayout(bar)
+        l.addWidget(QLabel('Акт только фиксирует перевод: остатки склада он не меняет. Материал можно выбрать из списка или вписать свой.'))
+        if tid:
+            d=record('stock_transfers',tid);self.number.setText(d['number']);self.day.set_value(d['transfer_date']);self.from_place.setEditText(d['from_place']);self.to_place.setEditText(d['to_place']);self.reason.setText(d['reason'] or '');self.approved_by.setText(d['approved_by'] or '');self.commission.setText(d['commission'] or '');self.notes.setText(d['notes'] or '');self.file.setText(d['file_path'] or '')
+            for mid,name,unit,qty,note in reg.transfer_lines(db,tid):self.add_line(mid,name,unit,qty,note)
+        else:
+            self.number.setText(reg.next_transfer_number(db));self.approved_by.setText(defaults.get('approved_by',''));self.commission.setText(defaults.get('commission',''));self.add_line()
+        bb=QHBoxLayout();button(bb,'Сохранить',self.save);button(bb,'Закрыть',self.reject);l.addLayout(bb)
+    def place_box(self,hint):
+        box=QComboBox();box.setEditable(True);box.setInsertPolicy(QComboBox.InsertPolicy.NoInsert);box.lineEdit().setPlaceholderText(hint);box.addItem('')
+        for _id,name,*_ in domain.objects(db):box.addItem(name)
+        box.setCurrentIndex(0);return box
+    def add_line(self,mid=None,name='',unit='',qty='',note=''):
+        if isinstance(mid,bool):mid=None
+        r=self.lines.rowCount();self.lines.insertRow(r);combo=QComboBox();combo.setEditable(True);combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert);combo.addItem('',None)
+        for rid,mname,munit in db.fetchall('SELECT id,name,unit FROM stock_materials WHERE coalesce(active,1)=1 ORDER BY name'):combo.addItem(mname,(rid,munit))
+        combo.setCurrentIndex(0)
+        if mid and combo.findData((mid,unit))>=0:combo.setCurrentIndex(combo.findData((mid,unit)))
+        else:combo.setEditText(name)
+        self.lines.setCellWidget(r,0,combo);item(self.lines,r,1,unit);item(self.lines,r,2,qty);item(self.lines,r,3,note)
+        def changed():
+            data=combo.currentData()
+            if data and combo.currentText()==combo.itemText(combo.currentIndex()):
+                for row in range(self.lines.rowCount()):
+                    if self.lines.cellWidget(row,0) is combo and not text(self.lines,row,1):item(self.lines,row,1,data[1])
+        combo.currentIndexChanged.connect(changed)
+    def save(self):
+        from . import stock_registers as reg
+        try:
+            rows=[]
+            for r in range(self.lines.rowCount()):
+                combo=self.lines.cellWidget(r,0);data=combo.currentData() if combo.currentText()==combo.itemText(combo.currentIndex()) else None
+                rows.append(dict(material_id=data[0] if data else None,material_name=combo.currentText(),unit=text(self.lines,r,1),quantity=text(self.lines,r,2),note=text(self.lines,r,3)))
+            self.tid=reg.save_transfer(db,dict(number=self.number.text(),transfer_date=self.day.value(),from_place=self.from_place.currentText(),to_place=self.to_place.currentText(),reason=self.reason.text(),approved_by=self.approved_by.text(),commission=self.commission.text(),file_path=self.file.text(),notes=self.notes.text()),rows,self.tid);self.accept()
+        except Exception as e:error(self,e)
+
+
+class RegisterView(QWidget):
+    """Журнал приказов (mode='orders') или актов перевода материалов (mode='transfers')."""
+    def __init__(self,mode):
+        super().__init__();self.mode=mode;self.pager=RegistryPager(self);l=QVBoxLayout(self);bar=QHBoxLayout();self.search=QLineEdit();self.search.setPlaceholderText('Поиск по номеру, содержанию, объекту, материалу…');bar.addWidget(self.search,1)
+        self.date_from=OptionalDate();self.date_to=OptionalDate();bar.addWidget(QLabel('с'));bar.addWidget(self.date_from);bar.addWidget(QLabel('по'));bar.addWidget(self.date_to);button(bar,'Сбросить',self.reset);l.addLayout(bar)
+        actions=QHBoxLayout();l.addLayout(actions)
+        button(actions,'Создать приказ' if mode=='orders' else 'Создать акт перевода',self.create);button(actions,'Изменить / открыть',self.edit)
+        if mode=='transfers':button(actions,'Копия на основании',self.copy)
+        button(actions,'Открыть файл',self.open_file);b=button(actions,'Удалить',self.delete);b.setProperty('type','danger');actions.addStretch()
+        self.table=table([]);l.addWidget(self.table,1);self.summary=QLabel();l.addWidget(self.summary)
+        self.table.cellDoubleClicked.connect(lambda *_:self.edit());self.search.textChanged.connect(self.load_data);self.date_from.dateChanged.connect(self.load_data);self.date_to.dateChanged.connect(self.load_data);self.load_data()
+    def reset(self):self.search.clear();self.date_from.set_value('');self.date_to.set_value('')
+    def selected(self):
+        r=self.table.currentRow();return self.table.item(r,0).data(Qt.ItemDataRole.UserRole) if r>=0 else None
+    def load_data(self,*_):
+        orders=self.mode=='orders';words=[w for w in self.search.text().casefold().split() if w];params=[];where=[]
+        if orders:
+            headers=['Дата','№','О чём приказ','Кто издал','Действует до','Файл','Примечание'];base="SELECT id,order_date,number,title,issued_by,valid_until,CASE WHEN coalesce(file_path,'')<>'' THEN 'есть' ELSE '' END,notes,order_date dt,number||' '||title||' '||coalesce(content,'')||' '||coalesce(issued_by,'')||' '||coalesce(notes,'') hay FROM stock_orders"
+        else:
+            headers=['Дата','№','Откуда','Куда','Материалы','Основание','Файл'];base="SELECT t.id,t.transfer_date,t.number,t.from_place,t.to_place,coalesce((SELECT group_concat(material_name||' — '||quantity||' '||unit,'; ') FROM stock_transfer_lines l WHERE l.transfer_id=t.id),'') materials,t.reason,CASE WHEN coalesce(t.file_path,'')<>'' THEN 'есть' ELSE '' END,t.transfer_date dt,t.number||' '||t.from_place||' '||t.to_place||' '||coalesce(t.reason,'')||' '||coalesce(t.notes,'')||' '||coalesce((SELECT group_concat(material_name,' ') FROM stock_transfer_lines l WHERE l.transfer_id=t.id),'') hay FROM stock_transfers t"
+        for w in words:where.append('LOWER(hay) LIKE ?');params.append('%'+w+'%')
+        if self.date_from.value():where.append('dt>=?');params.append(self.date_from.value())
+        if self.date_to.value():where.append('dt<=?');params.append(self.date_to.value())
+        query='SELECT * FROM ('+base+') WHERE '+(' AND '.join(where) if where else '1=1')+' ORDER BY dt DESC,id DESC';rows=self.pager.fetch(query,params)
+        self.table.setColumnCount(len(headers));self.table.setHorizontalHeaderLabels(headers);self.table.setRowCount(len(rows))
+        for r,row in enumerate(rows):
+            for c,v in enumerate(row[1:len(headers)+1]):item(self.table,r,c,v,False).setData(Qt.ItemDataRole.UserRole,row[0])
+        from .registry_tools import autofit_columns;autofit_columns(self.table,max_width=520)
+        total=db.fetchone('SELECT count(*) FROM '+('stock_orders' if orders else 'stock_transfers'))[0];self.summary.setText(f'Записей в журнале: {total}')
+    def create(self):
+        if (OrderDialog if self.mode=='orders' else TransferDialog)(parent=self).exec():self.load_data()
+    def edit(self):
+        if self.selected() and (OrderDialog if self.mode=='orders' else TransferDialog)(self.selected(),self).exec():self.load_data()
+    def copy(self):
+        from . import stock_registers as reg
+        if self.selected():
+            try:new=reg.copy_transfer(db,self.selected());self.load_data();TransferDialog(new,self).exec();self.load_data()
+            except Exception as e:error(self,e)
+    def open_file(self):
+        rid=self.selected()
+        if rid:_open_file(self,db.fetchone('SELECT file_path FROM '+('stock_orders' if self.mode=='orders' else 'stock_transfers')+' WHERE id=?',(rid,))[0])
+    def delete(self):
+        rid=self.selected()
+        if rid and QMessageBox.question(self,'Удаление','Удалить запись из журнала? Её можно вернуть через «Журнал и корзину».')==QMessageBox.StandardButton.Yes:
+            from . import stock_registers as reg
+            (reg.delete_order if self.mode=='orders' else reg.delete_transfer)(db,rid);self.load_data()

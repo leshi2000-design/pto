@@ -70,9 +70,40 @@ class _DarkTextFix(QObject):
     dark = False
 
     def eventFilter(self, obj, event):
-        if self.dark and event.type() == QEvent.Type.Polish and isinstance(obj, QWidget):
-            _fix_widget(obj, True)
+        if event.type() == QEvent.Type.Polish and isinstance(obj, QWidget):
+            if self.dark:
+                _fix_widget(obj, True)
+            if not getattr(self, 'russian', True):      # запасной путь, если файлы перевода Qt не найдены
+                _russian_buttons(obj)
         return False
+
+
+BUTTON_RU = {'Save': 'Сохранить', 'Cancel': 'Отмена', 'Ok': 'OK', 'OK': 'OK', 'Close': 'Закрыть', 'Yes': 'Да', 'No': 'Нет', 'Apply': 'Применить',
+             'Discard': 'Не сохранять', 'Open': 'Открыть', 'Reset': 'Сбросить', 'Help': 'Справка', 'Abort': 'Прервать', 'Retry': 'Повторить', 'Ignore': 'Пропустить'}
+
+
+def install_russian(app):
+    """Стандартные кнопки и окна Qt (Сохранить, Отмена, Да, Нет, выбор файла) — на русском."""
+    if getattr(app, '_ru_translators', None) is not None:
+        return
+    from PyQt6.QtCore import QTranslator, QLibraryInfo, QLocale
+    folder = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
+    app._ru_translators = []
+    for name in ('qt', 'qtbase'):
+        tr = QTranslator(app)
+        if tr.load(QLocale(QLocale.Language.Russian), name, '_', folder):
+            app.installTranslator(tr)
+            app._ru_translators.append(tr)
+    app._ru_loaded = bool(app._ru_translators)
+
+
+def _russian_buttons(widget):
+    from PyQt6.QtWidgets import QDialogButtonBox
+    if isinstance(widget, QDialogButtonBox):
+        for button in widget.buttons():
+            clean = button.text().replace('&', '')
+            if clean in BUTTON_RU:
+                button.setText(BUTTON_RU[clean])
 
 
 def _install_filter(app, dark):
@@ -82,6 +113,8 @@ def _install_filter(app, dark):
         app.installEventFilter(fix)
         app._dark_text_fix = fix
     fix.dark = dark
+    install_russian(app)
+    fix.russian = getattr(app, '_ru_loaded', False)
     for w in app.allWidgets():       # уже созданные виджеты: подмена в тёмной теме, возврат исходного стиля в светлой
         _fix_widget(w, dark)
 

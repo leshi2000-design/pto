@@ -67,10 +67,16 @@ class WeldersRegistry(QWidget):
         if rid and QMessageBox.question(self,'Удаление','Удалить карточку сварщика? Работы и документы останутся, но без привязки к этому сварщику.')==QMessageBox.StandardButton.Yes:db.execute('DELETE FROM welders WHERE id=?',(rid,));self.load_data()
 
 class JobDialog(QDialog):
-    def __init__(self,job_id=None,reference=None,parent=None):
-        super().__init__(parent);self.job_id=job_id;self.setWindowTitle('Запись сварочных работ');self.resize(760,540)
+    def __init__(self,job_id=None,reference=None,parent=None,planned=False):
+        super().__init__(parent);self.job_id=job_id;self.setWindowTitle('Планирование сварочных работ' if planned and not job_id else 'Запись сварочных работ');self.resize(760,580)
         layout=QVBoxLayout(self);form=QFormLayout();layout.addLayout(form)
-        self.work_date=OptionalDate();self.work_date.set_value(date.today().isoformat());form.addRow('Дата выполнения *',self.work_date)
+        self.work_date=OptionalDate();self.work_date.set_value(date.today().isoformat());form.addRow('Дата работ *',self.work_date)
+        self.status=QComboBox();self.status.addItem('Выполнено (уже сделано)','done');self.status.addItem('Запланировано (ещё предстоит)','planned');form.addRow('Статус',self.status)
+        self.work_time=QLineEdit();self.work_time.setPlaceholderText('ЧЧ:ММ — необязательно');self.work_time.setMaximumWidth(160);form.addRow('Время',self.work_time)
+        if planned:
+            self.status.setCurrentIndex(1)
+            if self.work_date.value()<=date.today().isoformat():self.work_date.set_value((date.today()+__import__('datetime').timedelta(days=1)).isoformat())
+        self.work_date.dateChanged.connect(self.suggest_status)
         self.object_text=QLineEdit();self.object_text.setPlaceholderText('Введите объект, адрес или место работ');form.addRow('Где выполнялись работы *',self.object_text)
         self.title=QLineEdit();self.title.setPlaceholderText('Любое наименование сварочных работ');form.addRow('Выполненные работы *',self.title)
         self.welder=QComboBox();self.welder.setEditable(True);self.welder.addItem('',None)
@@ -86,11 +92,17 @@ class JobDialog(QDialog):
         buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Save|QDialogButtonBox.StandardButton.Cancel);buttons.accepted.connect(self.save);buttons.rejected.connect(self.reject);layout.addWidget(buttons)
         if reference:self.object.set_reference(*reference)
         if job_id:
-            row=db.fetchone('SELECT title,owner_type,owner_id,estimate_item_id,welder_id,notes,object_text,welder_text FROM welding_jobs WHERE id=?',(job_id,))
+            row=db.fetchone('SELECT title,owner_type,owner_id,estimate_item_id,welder_id,notes,object_text,welder_text,coalesce(status,\'done\'),coalesce(work_time,\'\') FROM welding_jobs WHERE id=?',(job_id,))
+            self.status.blockSignals(True);self.status.setCurrentIndex(max(0,self.status.findData(row[8])));self.status.blockSignals(False);self.work_time.setText(row[9])
             self.object.set_reference(row[1],row[2]);self.source.setCurrentIndex(max(0,self.source.findData(row[3])));self.title.setText(row[0]);self.welder.setCurrentIndex(max(0,self.welder.findData(row[4])))
             if row[7]:self.welder.setEditText(row[7])
             self.notes.setText(row[5] or '');self.object_text.setText(row[6] or (owner_label(db,row[1],row[2]) if row[1] else ''))
             day=db.fetchone('SELECT work_date FROM welding_days WHERE job_id=? ORDER BY work_date LIMIT 1',(job_id,));self.work_date.set_value(day[0] if day else '')
+    def suggest_status(self,*_):
+        """Для новой записи: будущая дата — «Запланировано», сегодняшняя или прошедшая — «Выполнено»."""
+        if self.job_id:return
+        day=self.work_date.value()
+        if day:self.status.setCurrentIndex(1 if day>date.today().isoformat() else 0)
     def reuse(self):
         d=JobPicker(self)
         if d.exec():
@@ -111,12 +123,14 @@ class JobDialog(QDialog):
         if self.source.currentData():self.title.setText(self.source.currentText())
     def save(self):
         try:
-            if not self.object_text.text().strip():raise ValueError('Укажите, где выполнялись работы')
+            if not self.object_text.text().strip():raise ValueError('Укажите, где выполняются (выполнялись) работы')
             day=self.work_date.value();date.fromisoformat(day)
             wid=self.welder.currentData() if self.welder.currentIndex()>=0 and self.welder.currentText()==self.welder.itemText(self.welder.currentIndex()) else None
             with db.transaction():
                 jid=save_job(db,self.title.text(),*self.object.reference,wid,self.notes.text(),self.source.currentData(),self.job_id)
-                db.execute('UPDATE welding_jobs SET object_text=?,welder_text=? WHERE id=?',(self.object_text.text().strip(),self.welder.currentText().strip(),jid))
+                time_text=self.work_time.text().strip()
+                if time_text and not __import__('re').fullmatch(r'([01]?\d|2[0-3]):[0-5]\d',time_text):raise ValueError('Время укажите как ЧЧ:ММ, например 09:30')
+                db.execute('UPDATE welding_jobs SET object_text=?,welder_text=?,status=?,work_time=? WHERE id=?',(self.object_text.text().strip(),self.welder.currentText().strip(),self.status.currentData(),time_text,jid))
                 db.execute('DELETE FROM welding_days WHERE job_id=?',(jid,));set_work_day(db,jid,day,True)
             self.job_id=jid;self.accept()
         except Exception as e:QMessageBox.warning(self,'Запись работ',str(e))
@@ -136,20 +150,20 @@ class ScheduleView(QWidget):
         super().__init__();self.reference=reference;self.pager=RegistryPager(self);layout=QVBoxLayout(self)
         bar=QHBoxLayout();self.date_from=OptionalDate();self.date_to=OptionalDate();bar.addWidget(QLabel('Дата с'));bar.addWidget(self.date_from);bar.addWidget(QLabel('по'));bar.addWidget(self.date_to)
         self.search=QLineEdit();self.search.setPlaceholderText('Поиск: объект, работа, сварщик…');bar.addWidget(self.search,1)
+        self.status_filter=QComboBox();self.status_filter.addItem('Все работы','');self.status_filter.addItem('Запланированные','planned');self.status_filter.addItem('Выполненные','done');self.status_filter.addItem('Просроченный план','late');bar.addWidget(self.status_filter)
         reset=QPushButton('Все даты');reset.clicked.connect(self.clear_dates);bar.addWidget(reset);layout.addLayout(bar)
         actions=QHBoxLayout()
-        for label,fn in [('Добавить запись',self.create),('Изменить',self.edit),('Открыть объект',self.open_object),('Удалить запись',self.delete)]:b=QPushButton(label);b.clicked.connect(fn);actions.addWidget(b)
+        for label,fn in [('Запланировать работы',self.plan),('Записать выполненные',self.create),('Отметить выполненными',self.mark_done),('Изменить',self.edit),('Открыть объект',self.open_object),('Удалить запись',self.delete)]:b=QPushButton(label);b.clicked.connect(fn);actions.addWidget(b)
         actions.addStretch();layout.addLayout(actions)
-        self.table=QTableWidget(0,5);self.table.setHorizontalHeaderLabels(['Дата','Объект / место работ','Выполненные работы','Сварщик','Объём / примечания']);self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows);self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers);self.table.setAlternatingRowColors(True);self.table.verticalHeader().setDefaultSectionSize(34);self.table.horizontalHeader().setStretchLastSection(True)
-        for c,w in enumerate([110,280,330,190]):self.table.setColumnWidth(c,w)
-        layout.addWidget(self.table,1);self.table.cellDoubleClicked.connect(lambda *_:self.edit())
+        self.table=QTableWidget(0,7);self.table.setHorizontalHeaderLabels(['Дата','Время','Статус','Объект / место работ','Работы','Сварщик','Объём / примечания']);self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows);self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers);self.table.setAlternatingRowColors(True);self.table.verticalHeader().setDefaultSectionSize(34);self.table.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(self.table,1);self.table.cellDoubleClicked.connect(lambda *_:self.edit());self.status_filter.currentIndexChanged.connect(self.load_data)
         self.search.textChanged.connect(self.load_data);self.date_from.dateChanged.connect(self.load_data);self.date_to.dateChanged.connect(self.load_data);self.load_data()
     def clear_dates(self):self.date_from.set_value('');self.date_to.set_value('');self.load_data()
     def selected(self):
         r=self.table.currentRow();return self.table.item(r,0).data(Qt.ItemDataRole.UserRole) if r>=0 else None
     def load_data(self,*_):
         q='%'+self.search.text().casefold()+'%'
-        query="""SELECT j.id,d.work_date,coalesce(nullif(j.object_text,''),c.object_name,p.object_name,'') object_text,j.title,
+        query="""SELECT j.id,d.work_date,coalesce(j.work_time,'') work_time,coalesce(j.status,'done') status,coalesce(nullif(j.object_text,''),c.object_name,p.object_name,'') object_text,j.title,
           coalesce(nullif(j.welder_text,''),w.name,'') welder_text,j.notes FROM welding_jobs j
           LEFT JOIN welding_days d ON d.job_id=j.id LEFT JOIN welders w ON w.id=j.welder_id
           LEFT JOIN contracts c ON j.owner_type='contracts' AND c.id=j.owner_id
@@ -158,15 +172,27 @@ class ScheduleView(QWidget):
         if self.reference:query+=' AND j.owner_type=? AND j.owner_id=?';params.extend(self.reference)
         if self.date_from.value():query+=' AND d.work_date>=?';params.append(self.date_from.value())
         if self.date_to.value():query+=' AND d.work_date<=?';params.append(self.date_to.value())
+        mode=self.status_filter.currentData()
+        if mode in ('planned','done'):query+=' AND coalesce(j.status,\'done\')=?';params.append(mode)
+        if mode=='late':query+=" AND coalesce(j.status,'done')='planned' AND d.work_date<?";params.append(date.today().isoformat())
         query="SELECT * FROM ("+query+") WHERE LOWER(object_text||' '||title||' '||welder_text||' '||coalesce(notes,'')) LIKE ? ORDER BY work_date DESC,id DESC";params.append(q)
         rows=self.pager.fetch(query,params);self.table.setRowCount(len(rows))
+        today=date.today().isoformat()
         for r,row in enumerate(rows):
+            late=row[3]=='planned' and bool(row[1]) and row[1]<today
             for c,value in enumerate(row[1:]):
                 text=str(value or '')
                 if c==0:text=QDate.fromString(text,'yyyy-MM-dd').toString('dd.MM.yyyy') if text else 'Дата не задана'
-                item=QTableWidgetItem(text);item.setData(Qt.ItemDataRole.UserRole,row[0]);self.table.setItem(r,c,item)
+                if c==2:text='Просрочено: не отмечено выполненным' if late else ('Запланировано' if value=='planned' else 'Выполнено')
+                item=QTableWidgetItem(text);item.setData(Qt.ItemDataRole.UserRole,row[0])
+                if c==2:item.setForeground(QColor('#B91C1C' if late else '#B45309' if value=='planned' else '#15803D'))
+                self.table.setItem(r,c,item)
         autofit_columns(self.table)
     def create(self):JobDialog(reference=self.reference,parent=self).exec();self.load_data()
+    def plan(self):JobDialog(reference=self.reference,parent=self,planned=True).exec();self.load_data()
+    def mark_done(self):
+        rid=self.selected()
+        if rid:db.execute("UPDATE welding_jobs SET status='done' WHERE id=?",(rid,));self.load_data()
     def edit(self):
         if self.selected():JobDialog(self.selected(),parent=self).exec();self.load_data()
     def delete(self):

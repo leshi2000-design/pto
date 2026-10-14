@@ -41,7 +41,7 @@ est=db.execute('INSERT INTO estimates(title) VALUES("Работы ГСВ")').las
 db.execute('UPDATE contracts SET estimate_id=? WHERE id=?',(est,rid))
 item=db.execute('INSERT INTO estimate_items(estimate_id,item_type,name) VALUES(?,?,?)',(est,'Работа','Сварка трубопровода')).lastrowid
 job=JobDialog(reference=('contracts',rid));job.source.setCurrentIndex(job.source.findData(item));job.welder.setCurrentIndex(job.welder.findData(welder.welder_id));job.work_date.set_value('2026-09-17');job.save();assert job.job_id
-schedule=ScheduleView();schedule.load_data();assert schedule.table.columnCount()==5
+schedule=ScheduleView();schedule.load_data();assert schedule.table.columnCount()==7
 assert db.fetchone('SELECT work_date FROM welding_days WHERE job_id=?',(job.job_id,))[0]=='2026-09-17'
 from smetagaz.today_view import TodayView
 calendar=TodayView();calendar.show_date_str('2026-09-17');assert any('Сварка трубопровода' in t for t in calendar.day.texts())

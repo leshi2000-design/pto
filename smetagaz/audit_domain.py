@@ -14,6 +14,7 @@ AUDITED = {
     'clients': ('crm', 'Клиент'),
     'defect_acts': ('main', 'Дефектный акт'), 'defect_lines': ('main', 'Дефектный акт · работа'), 'stock_materials': ('main', 'Материал списания'),
     'stock_moves': ('main', 'Движение материала'), 'writeoff_objects': ('main', 'Объект списания'),
+    'stock_orders': ('main', 'Приказ (Списание)'), 'stock_transfers': ('main', 'Акт перевода материалов'), 'stock_transfer_lines': ('main', 'Акт перевода · материал'),
 }
 NOISY = {'est_synced_at', 'est_rev_synced', 'est_materials', 'est_works', 'updated_at'}      # служебные поля: их смена не считается изменением
 LABEL_COLUMNS = ('contract_number', 'pd_number', 'number', 'name', 'title', 'object_name', 'client_name', 'text')

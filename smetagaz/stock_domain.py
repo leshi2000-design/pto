@@ -40,9 +40,14 @@ def migrate(db):
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_stock_post_once ON stock_moves(act_id,material_id,kind) WHERE act_id IS NOT NULL",
     ]
     statements.append("CREATE TABLE IF NOT EXISTS writeoff_objects(id INTEGER PRIMARY KEY,name TEXT NOT NULL UNIQUE,owner_type TEXT,owner_id INTEGER,address TEXT DEFAULT '',organization TEXT DEFAULT '',approved_by TEXT DEFAULT '',commission TEXT DEFAULT '',notes TEXT DEFAULT '')")
+    statements.append("CREATE TABLE IF NOT EXISTS stock_orders(id INTEGER PRIMARY KEY,number TEXT NOT NULL,order_date TEXT NOT NULL,title TEXT NOT NULL,content TEXT DEFAULT '',issued_by TEXT DEFAULT '',valid_until TEXT DEFAULT '',file_path TEXT DEFAULT '',notes TEXT DEFAULT '')")
+    statements.append("CREATE TABLE IF NOT EXISTS stock_transfers(id INTEGER PRIMARY KEY,number TEXT NOT NULL,transfer_date TEXT NOT NULL,from_place TEXT NOT NULL,to_place TEXT NOT NULL,reason TEXT DEFAULT '',approved_by TEXT DEFAULT '',commission TEXT DEFAULT '',file_path TEXT DEFAULT '',notes TEXT DEFAULT '')")
+    statements.append("CREATE TABLE IF NOT EXISTS stock_transfer_lines(id INTEGER PRIMARY KEY,transfer_id INTEGER NOT NULL REFERENCES stock_transfers(id) ON DELETE CASCADE,material_id INTEGER REFERENCES stock_materials(id) ON DELETE SET NULL,material_name TEXT NOT NULL,unit TEXT DEFAULT '',quantity TEXT NOT NULL,note TEXT DEFAULT '')")
+    statements.append('CREATE INDEX IF NOT EXISTS idx_stock_orders_date ON stock_orders(order_date)')
+    statements.append('CREATE INDEX IF NOT EXISTS idx_stock_transfers_date ON stock_transfers(transfer_date)')
     for sql in statements:db.execute(sql)
-    for key in ('object_text','welder_text'):
-        if key not in [r[1] for r in db.fetchall('PRAGMA table_info(welding_jobs)')]:db.execute(f"ALTER TABLE welding_jobs ADD COLUMN {key} TEXT DEFAULT ''")
+    for key,ddl in (('object_text',"TEXT DEFAULT ''"),('welder_text',"TEXT DEFAULT ''"),('status',"TEXT DEFAULT 'done'"),('work_time',"TEXT DEFAULT ''")):
+        if key not in [r[1] for r in db.fetchall('PRAGMA table_info(welding_jobs)')]:db.execute(f"ALTER TABLE welding_jobs ADD COLUMN {key} {ddl}")
     # Expand old multi-day jobs into independently editable journal entries, retaining first ID.
     if db.get_setting('stock_schema')!='1':
         from .gsv_domain import owner_label

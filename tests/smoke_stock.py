@@ -11,7 +11,7 @@ from smetagaz.stock_view import WriteoffView,NormDialog,ActDialog,ReceiptDialog,
 from smetagaz.welding_view import JobDialog,ScheduleView
 # All free-form fields work without a contract or welder card.
 j=JobDialog();j.object_text.setText('Котельная на ул. Лесной');j.title.setText('Переварка ввода');j.welder.setEditText('Петров, приглашённый сварщик');j.work_date.set_value('2026-09-17');j.save();assert j.job_id and not warnings
-journal=ScheduleView();assert journal.table.rowCount()==1 and journal.table.columnCount()==5
+journal=ScheduleView();assert journal.table.rowCount()==1 and journal.table.columnCount()==7
 journal.search.setText('лесной');assert journal.table.rowCount()==1
 journal.date_from.set_value('2026-09-18');assert journal.table.rowCount()==0
 journal.clear_dates();journal.search.clear()
@@ -30,7 +30,7 @@ b=ActDialog();b.header.object_name.setText('Нехватка');b.header.day.set_
 # Defect -> quantities -> linked writeoff; duplicate click resolves same document.
 d=DefectDialog();d.header.object_name.setText('Ремонт узла');d.header.day.set_value('2026-09-17');d.add_row(dict(defect='Течь стыка',work='Сварить стык Ду15',unit='стык',quantity='2',profile_id=1));assert d.save()
 aid=s.from_defect(db,d.did);derived=ActDialog(aid);assert derived.defect_id==d.did and derived.lines.rowCount()==4;derived.post();assert derived.status=='posted'
-module=WriteoffView();module.resize(1380,820);module.show();app.processEvents();assert module.tabs.count()==8
+module=WriteoffView();module.resize(1380,820);module.show();app.processEvents();assert module.tabs.count()==10
 acts=module.tabs.widget(0);acts.status.setCurrentIndex(acts.status.findData('posted'));assert acts.table.rowCount()==2
 acts.search.setText('лесной');assert acts.table.rowCount()==1
 acts.date_to.set_value('2026-09-16');assert acts.table.rowCount()==0;acts.reset()

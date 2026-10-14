@@ -16,13 +16,14 @@ KINDS = {
     'act': ('Акт', '#0D9488', '✅'),
     'payment': ('Оплата', '#16A34A', '💰'),
     'work': ('Работы', '#EA580C', '🛠'),
+    'weld_plan': ('Плановые работы', '#CA8A04', '🗓'),
     'project': ('Проект / срок', '#0891B2', '📐'),
     'event': ('Событие', '#64748B', '🕒'),
     'recurring': ('Ежемесячная дата', '#DB2777', '🔁'),
     'note': ('Заметка', '#CA8A04', '📝'),
 }
 # Порядок маркеров в ячейке календаря и в списке дня
-KIND_ORDER = ['overdue', 'task', 'contract', 'payment', 'work', 'act', 'project', 'recurring', 'note', 'event']
+KIND_ORDER = ['overdue', 'task', 'contract', 'payment', 'weld_plan', 'work', 'act', 'project', 'recurring', 'note', 'event']
 
 SHIFTS = [('none', 'Не переносить'), ('prev', 'Перенести на пятницу, если выходной'), ('next', 'Перенести на понедельник, если выходной')]
 RECURRING_PRESETS = ['Зарплата', 'Аванс', 'Сдача актов', 'Оплата аренды', 'Налоги и взносы', 'Другое']
@@ -262,11 +263,14 @@ def events_between(db, start, end, today=None):
     except (KeyError, ValueError):
         pass
     # --- сварочные и иные работы ---
-    for jid, day, title, welder, place in db.fetchall(
-            "SELECT j.id,d.work_date,j.title,coalesce(nullif(j.welder_text,''),w.name),j.object_text FROM welding_days d "
+    for jid, day, title, welder, place, status, at in db.fetchall(
+            "SELECT j.id,d.work_date,j.title,coalesce(nullif(j.welder_text,''),w.name),j.object_text,coalesce(j.status,'done'),coalesce(j.work_time,'') FROM welding_days d "
             "JOIN welding_jobs j ON j.id=d.job_id LEFT JOIN welders w ON w.id=j.welder_id WHERE d.work_date BETWEEN ? AND ? ORDER BY j.title", (s, e)):
-        out.append(_event(date.fromisoformat(day), 'work', f'Работы: {title}',
-                          ' · '.join(x for x in (welder or 'Сварщик не назначен', place) if x), ('welding_jobs', jid)))
+        planned = status == 'planned'
+        late = planned and day < date.today().isoformat()
+        detail = ' · '.join(x for x in (welder or 'Сварщик не назначен', place, 'не отмечено выполненным' if late else '') if x)
+        out.append(_event(date.fromisoformat(day), 'weld_plan' if planned else 'work', f'{"План" if planned else "Работы"}: {title}', detail, ('welding_jobs', jid),
+                          color='#DC2626' if late else None, time=at))
     # --- заметки (независимые и привязанные к договорам, клиентам) ---
     from . import notes_domain
     for nid, day, title, body, ltable, lid in db.fetchall("SELECT id,note_date,title,body,link_table,link_id FROM notes WHERE note_date BETWEEN ? AND ?", (s, e)):
