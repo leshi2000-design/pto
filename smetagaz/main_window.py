@@ -41,6 +41,7 @@ from .legal_entities_view import LegalEntitiesView
 from .audit_view import AuditView
 from .error_view import ErrorLogView
 from .staff_view import StaffView
+from .incoming_view import IncomingView, process_files
 from . import error_log
 from .counterparty_ui import SmrView
 
@@ -87,7 +88,7 @@ NAV_SECTIONS = [
     ('Услуги', ['gsv', 'contracts', 'gsn', 'smr']),
     ('Сметы', ['estimates']),
     ('Контрагенты', ['clients', 'legal_entities']),
-    ('Дополнительно', ['welders', 'writeoff', 'calculators', 'stats', 'exec', 'workspace', 'staff', 'audit', 'errors']),
+    ('Дополнительно', ['welders', 'writeoff', 'calculators', 'stats', 'exec', 'workspace', 'staff', 'incoming', 'audit', 'errors']),
     ('Справочники', ['gsv_catalog', 'gsn_catalog', 'materials']),
     ('Настройки', ['settings']),
 ]
@@ -95,7 +96,7 @@ KNOWN_TABS = [
     ("tasks", "Сегодня"), ("gsv", "Проекты ГСВ"), ("contracts", "Монтаж ГСВ"), ("gsn", "Монтаж ГСН"), ("smr", "СМР"),
     ("clients", "Клиенты"), ("legal_entities", "Юрлица"),
     ("welders", "Сварщики"), ("writeoff", "Списание"), ("calculators", "Калькуляторы"), ("stats", "Статистика"),
-    ("estimates", "Реестр смет"), ("exec", "Исполнительная док."), ("workspace", "Все реестры · быстрый обзор"), ("audit", "Журнал и корзина"), ("errors", "Журнал ошибок"), ("staff", "Сотрудники и бригады"),
+    ("estimates", "Реестр смет"), ("exec", "Исполнительная док."), ("workspace", "Все реестры · быстрый обзор"), ("audit", "Журнал и корзина"), ("errors", "Журнал ошибок"), ("staff", "Сотрудники и бригады"), ("incoming", "Входящие документы"),
     ("gsv_catalog", "Справочники ГСВ"), ("gsn_catalog", "Справочник ГСН"), ("materials", "Справочник"),
     ("settings", "Настройки"),
 ]
@@ -106,6 +107,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.app_name = db.get_setting("app_name", "ПТО")
         self.setWindowTitle(self.app_name)
+        self.setAcceptDrops(True)       # файлы можно перетаскивать в любое место окна: откроется проверка входящего документа
         self.err_timer = QTimer(self); self.err_timer.setInterval(20000); self.err_timer.timeout.connect(self.update_error_badge); self.err_timer.start()
         self.resize(1350, 820)
         self.backup_service = AutoBackupService()
@@ -157,6 +159,7 @@ class MainWindow(QMainWindow):
             "audit": AuditView,
             "errors": ErrorLogView,
             "staff": StaffView,
+            "incoming": IncomingView,
             "clients": lambda: WorkspaceView("crm.clients"),
             "tasks": TodayView,
             "estimates": EstimatesModule,
@@ -323,6 +326,18 @@ class MainWindow(QMainWindow):
         view = self.views[idx]
         if hasattr(view, 'load_data'): view.load_data()
         elif hasattr(view, 'calculate'): view.calculate()
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        paths = [u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()]
+        event.acceptProposedAction()
+        if paths and process_files(self, paths):
+            for view in self.views:
+                if isinstance(view, IncomingView):
+                    view.load_data()
 
     def update_error_badge(self):
         n = error_log.unseen_count()

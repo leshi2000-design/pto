@@ -162,6 +162,8 @@ def icon_color(dark=False):
 
 
 def apply(app, dark=False, family='Segoe UI', size=10, accent=''):
+    from . import qt_cleanup
+    qt_cleanup.install(app)
     c = colors(dark, accent)
     app.setStyle('Fusion')
     font = QFont(family or FONT_FALLBACKS[0])

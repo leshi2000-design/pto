@@ -47,6 +47,14 @@ def _selected(table):
     return item.data(Qt.ItemDataRole.UserRole) if item else None
 
 
+def _find(combo, value):
+    """Индекс элемента с данными value (findData не сравнивает кортежи надёжно)."""
+    for i in range(combo.count()):
+        if combo.itemData(i) == value:
+            return i
+    return -1
+
+
 def _iso(qdate):
     return qdate.toString('yyyy-MM-dd')
 
@@ -292,19 +300,26 @@ class AssignDialog(QDialog):
         ok.setProperty('type', 'primary')
         ok.clicked.connect(self.save)
         f.addRow(ok)
+        self.object.currentIndexChanged.connect(self.show_readiness)
         self.load_objects()
         if owner:
-            i = self.object.findData(owner)
+            i = _find(self.object, owner)
             if i >= 0:
                 self.object.setCurrentIndex(i)
         if aid:
             r = db.fetchone('SELECT staff_id,crew_id,owner_type,owner_id,object_text,start_date,end_date,note FROM staff_assign WHERE id=?', (aid,))
-            self.who.setCurrentIndex(max(0, self.who.findData(('staff', r[0]) if r[0] else ('crew', r[1]))))
-            self.object.setCurrentIndex(max(0, self.object.findData((r[2], r[3]))))
+            self.who.setCurrentIndex(max(0, _find(self.who, ('staff', r[0]) if r[0] else ('crew', r[1]))))
+            self.object.setCurrentIndex(max(0, _find(self.object, (r[2], r[3]))))
             self.free.setText(r[4] or '')
             self.start.setDate(QDate.fromString(r[5], 'yyyy-MM-dd'))
             self.end.setDate(QDate.fromString(r[6], 'yyyy-MM-dd'))
             self.note.setText(r[7] or '')
+
+    def show_readiness(self, *_):
+        obj = self.object.currentData()
+        issues = sd.readiness(db, obj[0], obj[1]) if obj else []
+        icon = {'error': '⛔', 'warn': '⚠', 'info': 'ℹ'}
+        self.info.setText(('<b>Готовность объекта:</b><br>' + '<br>'.join(f'{icon[s]} {t}' for s, t in issues[:8]) + ('<br>…' if len(issues) > 8 else '')) if issues else ('Замечаний по готовности объекта нет.' if obj else ''))
 
     def load_objects(self):
         keep = self.object.currentData()
@@ -313,7 +328,7 @@ class AssignDialog(QDialog):
         for table, rid, label in sd.objects(db, self.search.text().strip()):
             self.object.addItem(label, (table, rid))
         if keep:
-            self.object.setCurrentIndex(max(0, self.object.findData(keep)))
+            self.object.setCurrentIndex(max(0, _find(self.object, keep)))
 
     def save(self):
         kind, ident = self.who.currentData()
@@ -432,6 +447,49 @@ class StaffView(QWidget):
         self.grid.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         v.addWidget(self.grid, 1)
         self.tabs.addTab(page, 'График')
+        # загрузка
+        page = QWidget()
+        v = QVBoxLayout(page)
+        bar = QHBoxLayout()
+        today = QDate.currentDate()
+        self.l_from = DateEdit(QDate(today.year(), today.month(), 1))
+        self.l_to = DateEdit(QDate(today.year(), today.month(), today.daysInMonth()))
+        self.only_free = QCheckBox('Только свободные')
+        for w in (QLabel('Период с'), self.l_from, QLabel('по'), self.l_to, self.only_free):
+            bar.addWidget(w)
+        bar.addStretch()
+        v.addLayout(bar)
+        self.load_table = _table(['Сотрудник', 'Роль', 'Загрузка', 'Рабочих дней занят', 'Дней на двух объектах', 'Допуски', 'Объекты'], 6)
+        v.addWidget(self.load_table, 2)
+        v.addWidget(QLabel('<b>Пересечения назначений</b> — человек в одни и те же дни назначен на разные объекты'))
+        self.overlap_table = _table(['Сотрудник', 'С', 'По', 'Объекты'], 3)
+        v.addWidget(self.overlap_table, 1)
+        self.tabs.addTab(page, 'Загрузка')
+        for w in (self.l_from, self.l_to):
+            w.dateChanged.connect(self.load_data)
+        self.only_free.toggled.connect(self.load_data)
+        # готовность
+        page = QWidget()
+        v = QVBoxLayout(page)
+        bar = QHBoxLayout()
+        self.ready_days = QSpinBox()
+        self.ready_days.setRange(1, 120)
+        self.ready_days.setValue(14)
+        self.ready_days.setSuffix(' дн.')
+        self.ready_days.valueChanged.connect(self.load_data)
+        bar.addWidget(QLabel('Работы начинаются в ближайшие'))
+        bar.addWidget(self.ready_days)
+        bar.addStretch()
+        v.addLayout(bar)
+        self.ready_table = _table(['Начало', 'Объект', 'Замечаний', 'Главное'], 3)
+        self.ready_table.itemSelectionChanged.connect(self.show_issues)
+        v.addWidget(self.ready_table, 2)
+        self.ready_details = QTextEdit()
+        self.ready_details.setReadOnly(True)
+        self.ready_details.setPlaceholderText('Выберите объект, чтобы увидеть, что не готово к началу работ')
+        v.addWidget(self.ready_details, 2)
+        self.ready_rows = []
+        self.tabs.addTab(page, 'Готовность к работам')
         for w in (self.search, self.a_search):
             w.textChanged.connect(self.load_data)
         self.only_active.toggled.connect(self.load_data)
@@ -464,8 +522,37 @@ class StaffView(QWidget):
         elif i == 3:
             rows = sd.assignments(db, search=self.a_search.text().strip())
             _fill(self.assign, [(r['start'], r['end'], r['who'], r['object'], r['note']) for r in rows], [r['id'] for r in rows])
-        else:
+        elif i == 4:
             self.load_grid()
+        elif i == 5:
+            a, b = self.l_from.date().toPyDate(), self.l_to.date().toPyDate()
+            rows = [r for r in sd.workload(db, a, b) if not self.only_free.isChecked() or r['free']]
+            colors = ['#DC2626' if r['overlap_days'] or r['expired'] else ('#15803D' if r['free'] else None) for r in rows]
+            _fill(self.load_table, [(r['name'], r['role'], f'{r["percent"]}%' + (' · свободен' if r['free'] else ''), f'{r["busy"]} из {r["workdays"]}', r['overlap_days'] or '',
+                                     ', '.join(r['expired']), '; '.join(r['objects'])) for r in rows], [r['staff_id'] for r in rows])
+            for k, color in enumerate(colors):
+                if color:
+                    self.load_table.item(k, 0).setForeground(QColor(color))
+            ov = sd.overlaps(db, a, b)
+            _fill(self.overlap_table, [(n, s.strftime('%d.%m.%Y'), e.strftime('%d.%m.%Y'), ' ⟷ '.join(o)) for n, s, e, o in ov])
+        else:
+            self.ready_rows = sd.upcoming(db, self.ready_days.value())
+            order = {'error': 0, 'warn': 1, 'info': 2}
+            self.ready_rows.sort(key=lambda r: (min([order[s] for s, _t in r['issues']] or [3]), r['start']))
+            _fill(self.ready_table, [(r['start'], r['label'], len(r['issues']) or 'всё готово', (r['issues'][0][1] if r['issues'] else '')) for r in self.ready_rows])
+            for k, r in enumerate(self.ready_rows):
+                sev = min([order[s] for s, _t in r['issues']] or [3])
+                self.ready_table.item(k, 2).setForeground(QColor({0: '#DC2626', 1: '#D97706', 2: '#605E5C', 3: '#15803D'}[sev]))
+            self.ready_details.clear()
+
+    def show_issues(self):
+        r = self.ready_table.currentRow()
+        if not 0 <= r < len(self.ready_rows):
+            return
+        icon = {'error': '⛔', 'warn': '⚠', 'info': 'ℹ'}
+        item = self.ready_rows[r]
+        lines = [f'<b>{item["label"]}</b> — начало {item["start"] or "не указано"}'] + [f'{icon[s]} {t}' for s, t in item['issues']] if item['issues'] else [f'<b>{item["label"]}</b>: замечаний нет']
+        self.ready_details.setHtml('<br>'.join(lines))
 
     def load_grid(self):
         first = self.month

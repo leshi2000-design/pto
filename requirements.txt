@@ -8,3 +8,4 @@ cryptography>=42
 requests>=2.31,<3
 beautifulsoup4>=4.12,<5
 lxml>=5,<7
+pypdf>=4

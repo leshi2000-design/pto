@@ -98,6 +98,8 @@ def initialize(db):
         numbering_migrate(db)
         from .staff_domain import migrate as staff_migrate
         staff_migrate(db)
+        from .incoming_domain import migrate as incoming_migrate
+        incoming_migrate(db)
         from .secret_store import migrate as secret_migrate
         secret_migrate(db)
         from .audit_domain import migrate as audit_migrate

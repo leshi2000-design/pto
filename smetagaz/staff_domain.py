@@ -285,3 +285,167 @@ def agenda_events(db, start, end, today=None):
             "SELECT a.id,coalesce(s.name,''),coalesce(c.name,''),a.owner_type,a.owner_id,a.object_text,a.start_date FROM staff_assign a LEFT JOIN staff s ON s.id=a.staff_id LEFT JOIN crews c ON c.id=a.crew_id WHERE a.start_date BETWEEN ? AND ?", (s, e)):
         out.append((_day(a), 'crew', f'На объект: {sname or "бригада «" + cname + "»"}', object_label(db, otype, oid, text), ('staff_assign', aid)))
     return out
+
+
+# --- ЗАГРУЗКА, ПЕРЕСЕЧЕНИЯ, ГОТОВНОСТЬ ------------------------------------------------------------
+
+def _daterange(a, b):
+    d = a
+    while d <= b:
+        yield d
+        d += timedelta(days=1)
+
+
+def _expanded(db, start, end):
+    """{сотрудник: {день: [(id назначения, объект)]}} за период."""
+    out = {}
+    for aid, sid, cid, otype, oid, text, a, b in db.fetchall('SELECT id,staff_id,crew_id,owner_type,owner_id,object_text,start_date,end_date FROM staff_assign WHERE start_date<=? AND end_date>=?',
+                                                              (end.strftime(ISO), start.strftime(ISO))):
+        label = object_label(db, otype, oid, text)
+        for m in members_of(db, sid, cid):
+            for day in _daterange(max(_day(a), start), min(_day(b), end)):
+                out.setdefault(m, {}).setdefault(day, []).append((aid, label))
+    return out
+
+
+def overlaps(db, start, end):
+    """Пересечения назначений: [(сотрудник, с, по, [объекты])] — человек в одни и те же дни назначен на разные объекты."""
+    found = []
+    for sid, days in _expanded(db, start, end).items():
+        name = db.fetchone('SELECT name FROM staff WHERE id=?', (sid,))[0]
+        run = None
+        for day in sorted(days):
+            labels = sorted({l for _a, l in days[day]})
+            if len({a for a, _l in days[day]}) < 2:
+                run = None
+                continue
+            if run and run[2] == labels and (day - run[1]).days == 1:
+                run[1] = day
+            else:
+                run = [day, day, labels, name]
+                found.append(run)
+    return [(r[3], r[0], r[1], r[2]) for r in found]
+
+
+def workload(db, start, end, today=None):
+    """Загрузка работающих сотрудников за период: [{'staff_id','name','role','busy','workdays','percent','overlap_days','objects','expired','free'}].
+    free — нет назначений в периоде и нет просроченных на конец периода допусков."""
+    today = today or date.today()
+    days = list(_daterange(start, end))
+    workdays = sum(1 for d in days if d.weekday() < 5) or 1
+    grid = _expanded(db, start, end)
+    expired = {}
+    for r in all_deadlines(db, end):
+        if r['state'] == 'expired':
+            expired.setdefault(r['staff_id'], []).append(r['title'])
+    out = []
+    for sid, name, role in db.fetchall('SELECT id,name,role FROM staff WHERE active=1 ORDER BY name'):
+        mine = grid.get(sid, {})
+        busy = sum(1 for d in mine if d.weekday() < 5)
+        objs = sorted({l for v in mine.values() for _a, l in v})
+        over = sum(1 for v in mine.values() if len({a for a, _l in v}) > 1)
+        out.append(dict(staff_id=sid, name=name, role=role, busy=busy, workdays=workdays, percent=round(100 * busy / workdays), overlap_days=over, objects=objs,
+                        expired=expired.get(sid, []), free=not mine and sid not in expired))
+    return out
+
+
+def _start_date(db, owner_type, owner_id):
+    col = {'contracts': 'work_start_date', 'gsn_projects': 'work_start_date', 'gsv_projects': 'contract_date'}[owner_type]
+    r = db.fetchone(f'SELECT {col} FROM {owner_type} WHERE id=?', (owner_id,))
+    return _day(r[0]) if r else None
+
+
+def readiness(db, owner_type, owner_id, today=None):
+    """Что не готово к началу работ на объекте: [(важность 'error'|'warn'|'info', текст)]; пустой список — всё готово."""
+    today = today or date.today()
+    issues = []
+    add = lambda sev, text: issues.append((sev, text))
+    start = _start_date(db, owner_type, owner_id)
+    start_iso = (start or today).strftime(ISO)
+    # люди
+    team = db.fetchall('SELECT staff_id,crew_id,start_date,end_date FROM staff_assign WHERE owner_type=? AND owner_id=?', (owner_type, owner_id))
+    if not team:
+        add('warn', 'На объект никто не назначен (раздел «Сотрудники» → «Назначения»)')
+    people = {m for sid, cid, _a, _b in team for m in members_of(db, sid, cid)}
+    for m in sorted(people):
+        name = db.fetchone('SELECT name FROM staff WHERE id=?', (m,))[0]
+        bad = expired_for(db, m, _day(start_iso))
+        if bad:
+            add('error', f'{name}: просрочен допуск на начало работ — {", ".join(bad)}')
+    for sid, cid, a, b in team:
+        for name, obj, s, e in conflicts(db, sid, cid, a, b):
+            if obj != object_label(db, owner_type, owner_id):
+                add('warn', f'{name} в эти же дни ({s} — {e}) занят на объекте «{obj}»')
+    # документы и договор
+    if owner_type == 'gsn_projects':
+        c = db.fetchone('SELECT contract_signed,estimate_id,pe_length,steel_length,tie_in FROM gsn_projects WHERE id=?', (owner_id,))
+        if c and not c[0]:
+            add('warn', 'Договор не отмечен подписанным')
+        if c and not (c[2] or c[3]):
+            add('warn', 'Не указана протяжённость трубопроводов')
+        from . import gsn_domain as gn
+        if c and not c[1]:
+            add('warn', 'Смета не привязана')
+        elif c and gn.estimate_state(db, owner_id) in ('unsynced', 'stale'):
+            add('warn', 'Данные сметы не получены или устарели')
+        for m in gn.materials(db, owner_id):
+            if not m['item_id']:
+                add('warn', f'Материал «{m["label"]}» не выбран в справочнике ГСН')
+        for cert in gn.certificates(db, owner_id):
+            if not cert['path']:
+                add('warn', f'Сертификат «{cert["name"]}»: не приложен файл')
+            if cert['state'] == 'expired':
+                add('error', f'Сертификат «{cert["name"]}» просрочен ({cert["valid_to"]})')
+            elif cert['state'] == 'soon':
+                add('info', f'Сертификат «{cert["name"]}» скоро истекает ({cert["valid_to"]})')
+        for att in gn.attestations(db, owner_id):
+            if not att['path']:
+                add('info', f'Аттестат «{att["title"]}»: не приложен файл')
+        eid = c[1] if c else None
+    elif owner_type == 'contracts':
+        c = db.fetchone('SELECT contract_signed,estimate_id FROM contracts WHERE id=?', (owner_id,))
+        if c and not c[0]:
+            add('warn', 'Договор не отмечен подписанным')
+        if c and not c[1]:
+            add('warn', 'Смета не привязана')
+        for kind, model, path in db.fetchall("SELECT kind,model,file_path FROM gsvm_equipment WHERE contract_id=?", (owner_id,)):
+            if not path:
+                add('info', f'Оборудование «{kind} {model}»: не приложен сертификат')
+        eid = c[1] if c else None
+    else:
+        c = db.fetchone('SELECT contract_signed FROM gsv_projects WHERE id=?', (owner_id,))
+        if c and not c[0]:
+            add('warn', 'Договор не отмечен подписанным')
+        eid = None
+    # материалы по смете и остатки склада
+    if eid:
+        unmatched = 0
+        for name, unit, qty in db.fetchall("SELECT name,unit,quantity FROM estimate_items WHERE estimate_id=? AND coalesce(item_type,'Материал')='Материал'", (eid,)):
+            row = db.fetchone('SELECT id FROM stock_materials WHERE LOWER(name)=LOWER(?) AND active=1', (str(name or '').strip(),))
+            if not row:
+                unmatched += 1
+                continue
+            have = db.fetchone('SELECT coalesce(sum(qty),0) FROM stock_moves WHERE material_id=?', (row[0],))[0]
+            if float(qty or 0) > have:
+                add('warn', f'На складе не хватает «{name}»: нужно {qty:g} {unit or ""}, есть {have:g}')
+        if unmatched:
+            add('info', f'{unmatched} материалов сметы не найдено в складском справочнике (остатки не проверены)')
+    return issues
+
+
+def upcoming(db, days=14, today=None):
+    """Объекты, где работы начинаются в ближайшие days дней (по дате начала работ или назначению): [{'owner_type','owner_id','label','start','issues'}]."""
+    today = today or date.today()
+    end = today + timedelta(days=days)
+    seen, out = {}, []
+    for table in OWNERS:
+        col = 'work_start_date' if table != 'gsv_projects' else 'contract_date'
+        act = 'act_signed' if table != 'gsv_projects' else 'act_signed'
+        for (rid,) in db.fetchall(f"SELECT id FROM {table} WHERE coalesce({col},'') BETWEEN ? AND ? AND coalesce({act},0)=0", (today.strftime(ISO), end.strftime(ISO))):
+            seen[(table, rid)] = _start_date(db, table, rid)
+    for otype, oid, a in db.fetchall("SELECT owner_type,owner_id,min(start_date) FROM staff_assign WHERE owner_type<>'' AND owner_id IS NOT NULL AND start_date BETWEEN ? AND ? GROUP BY owner_type,owner_id",
+                                     (today.strftime(ISO), end.strftime(ISO))):
+        seen.setdefault((otype, oid), _day(a))
+    for (otype, oid), start in sorted(seen.items(), key=lambda kv: (kv[1] or today, kv[0])):
+        out.append(dict(owner_type=otype, owner_id=oid, label=object_label(db, otype, oid), start=start.strftime(ISO) if start else '', issues=readiness(db, otype, oid, today)))
+    return out

@@ -69,3 +69,33 @@ def test_delete_staff_cleans_links(d):
     sd.delete_staff(d, a)
     assert d.fetchone('SELECT leader_id FROM crews WHERE id=?', (crew,))[0] is None
     assert d.fetchone('SELECT count(*) FROM staff_assign')[0] == 0 and d.fetchone('SELECT count(*) FROM crew_members')[0] == 0
+
+
+def test_overlaps_workload_and_readiness(d):
+    a, b = person(d, 'А'), person(d, 'Б')
+    o1 = d.execute("INSERT INTO gsn_projects(contract_number,title,work_start_date,contract_signed,pe_length) VALUES('ГСН-1','Дом',?,0,10)", ('2026-03-03',)).lastrowid
+    o2 = d.execute("INSERT INTO gsn_projects(contract_number,title,work_start_date,contract_signed) VALUES('ГСН-2','Баня','2026-03-04',1)").lastrowid
+    sd.add_assignment(d, '2026-03-02', '2026-03-06', staff_id=a, owner_type='gsn_projects', owner_id=o1)
+    sd.add_assignment(d, '2026-03-04', '2026-03-10', staff_id=a, owner_type='gsn_projects', owner_id=o2)
+    sd.save_doc(d, b, dict(title='Допуск', valid_to='2026-02-01'))
+    ov = sd.overlaps(d, date(2026, 3, 1), date(2026, 3, 31))
+    assert len(ov) == 1 and ov[0][0] == 'А' and ov[0][1] == date(2026, 3, 4) and ov[0][2] == date(2026, 3, 6) and len(ov[0][3]) == 2
+    load = {r['name']: r for r in sd.workload(d, date(2026, 3, 2), date(2026, 3, 6))}
+    assert load['А']['percent'] == 100 and load['А']['overlap_days'] == 3 and not load['А']['free']
+    assert not load['Б']['free'] and load['Б']['expired']      # свободен по графику, но допуск просрочен
+    sd.add_assignment(d, '2026-03-02', '2026-03-03', staff_id=b, owner_type='gsn_projects', owner_id=o1)
+    texts = ' | '.join(t for _s, t in sd.readiness(d, 'gsn_projects', o1, date(2026, 3, 1)))
+    assert 'не отмечен подписанным' in texts and 'Б: просрочен допуск' in texts and 'Смета не привязана' in texts and 'занят на объекте' in texts
+    soon = sd.upcoming(d, 14, date(2026, 3, 1))
+    assert {x['owner_id'] for x in soon} == {o1, o2}
+
+
+def test_readiness_stock_shortage(d):
+    eid = d.execute("INSERT INTO estimates(title,date,total,paid) VALUES('С','2026-03-01',0,0)").lastrowid
+    d.execute("INSERT INTO estimate_items(estimate_id,name,unit,quantity,item_type) VALUES(?,?,?,?,?)", (eid, 'Муфта ПЭ', 'шт', 5, 'Материал'))
+    d.execute("INSERT INTO estimate_items(estimate_id,name,unit,quantity,item_type) VALUES(?,?,?,?,?)", (eid, 'Редкий материал', 'шт', 1, 'Материал'))
+    mid = d.execute("INSERT INTO stock_materials(name,category,unit) VALUES('муфта пэ','Фитинги','шт')").lastrowid
+    d.execute("INSERT INTO stock_moves(material_id,move_date,qty,kind) VALUES(?,?,?,?)", (mid, '2026-02-01', 2, 'receipt'))
+    cid = d.execute("INSERT INTO contracts(contract_number,estimate_id,contract_signed) VALUES('01-02/26',?,1)", (eid,)).lastrowid
+    texts = ' | '.join(t for _s, t in sd.readiness(d, 'contracts', cid))
+    assert 'не хватает «Муфта ПЭ»' in texts and 'нужно 5' in texts and 'есть 2' in texts and '1 материалов сметы не найдено' in texts
