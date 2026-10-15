@@ -27,6 +27,7 @@ class ContractsRegistryView(QWidget):
         btn_new.clicked.connect(self.new_contract)
         top_bar.addWidget(btn_new)
         payments=QPushButton("Оплаты");payments.clicked.connect(self.open_payments);top_bar.addWidget(payments)
+        reserve=QPushButton("Зарезервировать номера…");reserve.setToolTip("Создать пустые карточки с очередными номерами под резерв");reserve.clicked.connect(self.reserve_numbers);top_bar.addWidget(reserve)
         acts=QPushButton("Ведомость актов…");acts.setToolTip("Подписанные акты за календарный месяц для бухгалтерии");acts.clicked.connect(lambda:__import__("smetagaz.acts_statement_view",fromlist=["x"]).ActsStatementDialog("contracts",self).exec());top_bar.addWidget(acts)
         st_btn=QPushButton("Статусы…");st_btn.setToolTip("Редактировать свои статусы договоров Монтаж ГСВ");st_btn.clicked.connect(self.edit_statuses);top_bar.addWidget(st_btn)
         imp_btn=QPushButton("Импорт из Excel…");imp_btn.setToolTip("Загрузить договоры монтажа ГСВ из таблицы Excel");imp_btn.clicked.connect(self.import_excel);top_bar.addWidget(imp_btn)
@@ -81,6 +82,11 @@ class ContractsRegistryView(QWidget):
         act_del.triggered.connect(self.delete_contract)
         menu.addAction(act_del)
         menu.exec(self.table.viewport().mapToGlobal(pos))
+
+    def reserve_numbers(self):
+        from .number_ui import ReserveDialog
+        if ReserveDialog('contracts', self).exec():
+            self.load_data()
 
     def load_data(self):
         self.table.setUpdatesEnabled(False)

@@ -52,7 +52,13 @@ class ContractCardDialog(QDialog):
         self.inp_object = QLineEdit(title)
         self.inp_object.setPlaceholderText('Согласно названию проекта и технических условий')
         self.inp_object_address = QLineEdit()
-        form.addRow('Номер договора', self.inp_number)
+        num_row = QHBoxLayout()
+        num_row.addWidget(self.inp_number, 1)
+        self.btn_number = QPushButton('Изменить номер…')
+        self.btn_number.setToolTip('Изменить номер или поменяться номерами с другой карточкой')
+        self.btn_number.clicked.connect(self.change_number)
+        num_row.addWidget(self.btn_number)
+        form.addRow('Номер договора', num_row)
         form.addRow('Дата заключения договора', row)
         form.addRow('Наименование объекта', self.inp_object)
         form.addRow('Адрес объекта', self.inp_object_address)
@@ -357,6 +363,16 @@ class ContractCardDialog(QDialog):
         if legal and hasattr(self, 'status'):
             self.status.setText('Заказчик — юрлицо: договор, акт, справка и оплаты оформляются в разделе «Юрлица».')
 
+    def change_number(self):
+        if not self.contract_id and not self.save_data():
+            return
+        from .number_ui import NumberDialog
+        d = NumberDialog('contracts', self.contract_id, self)
+        d.exec()
+        if d.changed:
+            self.inp_number.setText(db.fetchone('SELECT contract_number FROM contracts WHERE id=?', (self.contract_id,))[0] or '')
+            self.refresh_docs()
+
     def save_data(self):
         try:
             legal = self.customer.is_legal()
@@ -390,6 +406,8 @@ class ContractCardDialog(QDialog):
                     fields.update(seq_num=seq, year_num=year)
                     rid = db.execute('INSERT INTO contracts(' + ','.join(fields) + ') VALUES(' + ','.join('?' for _ in fields) + ')', tuple(fields.values())).lastrowid
                 self.contract_id = rid
+                from . import numbering
+                numbering.release_if_filled(db, 'contracts', rid)
                 from . import gsvm_statuses
                 gsvm_statuses.set_contract_statuses(db, rid, self.status_picker.ids())
                 self.equipment_tab.save(rid)

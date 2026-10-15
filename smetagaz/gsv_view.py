@@ -588,6 +588,10 @@ class ProjectEditDialog(QDialog):
         self.txt_contract_num = QLineEdit()
         self.txt_contract_num.setReadOnly(True)
         l_sys.addWidget(self.txt_contract_num, 0, 3)
+        self.btn_number = QPushButton("Изменить номер…")
+        self.btn_number.setToolTip("Изменить номер или поменяться номерами с другой карточкой")
+        self.btn_number.clicked.connect(self.change_number)
+        l_sys.addWidget(self.btn_number, 0, 4)
         l_sys.addWidget(QLabel("Стоимость:"), 1, 0)
         self.spn_cost = QDoubleSpinBox()
         self.spn_cost.setRange(0.0, 1000000.0)
@@ -857,6 +861,18 @@ class ProjectEditDialog(QDialog):
             return
         self.save_data()
 
+    def change_number(self):
+        if not self.project_id and not self.save_data():
+            return
+        from .number_ui import NumberDialog
+        d = NumberDialog('gsv_projects', self.project_id, self)
+        d.exec()
+        if d.changed:
+            row = db.fetchone('SELECT pd_number,contract_number FROM gsv_projects WHERE id=?', (self.project_id,))
+            self.txt_pd.setText(row[0])
+            self.txt_contract_num.setText(row[1])
+            self.refresh_docs()
+
     def save_data(self):
         try:
             legal = self.customer.is_legal()
@@ -882,6 +898,8 @@ class ProjectEditDialog(QDialog):
                     values += [f'{seq:02}-{year:02} ГСВ', seq, year, f'{seq:02}-03/{year:02}']
                     rid = db.execute('INSERT INTO gsv_projects(' + ','.join(fields) + ') VALUES(' + ','.join('?' for _ in fields) + ')', values).lastrowid
                 gsvdom.set_project_statuses(db, rid, self.checked_status_ids())
+                from . import numbering
+                numbering.release_if_filled(db, 'gsv_projects', rid)
             self.project_id = rid
             self.is_new = False
             if not legal:
@@ -1167,7 +1185,10 @@ class GsvProjectsView(QWidget):
         btn_acts = QPushButton("Ведомость актов…")
         btn_acts.setToolTip("Подписанные акты за календарный месяц для бухгалтерии")
         btn_acts.clicked.connect(lambda: __import__("smetagaz.acts_statement_view", fromlist=["x"]).ActsStatementDialog("gsv_projects", self).exec())
-        for w in (btn_acts, btn_import, btn_statuses, btn_tpl, btn_tags, btn_excel, payments): tools_bar.addWidget(w)
+        btn_reserve = QPushButton("Зарезервировать номера…")
+        btn_reserve.setToolTip("Создать пустые карточки с очередными номерами под резерв")
+        btn_reserve.clicked.connect(self.reserve_numbers)
+        for w in (btn_acts, btn_reserve, btn_import, btn_statuses, btn_tpl, btn_tags, btn_excel, payments): tools_bar.addWidget(w)
         tools_bar.addStretch()
         layout.addLayout(tools_bar)
 
@@ -1210,6 +1231,12 @@ class GsvProjectsView(QWidget):
 
     def update_order_button(self):
         self.btn_order.setText("№ ПД ↓ новые сверху" if self.order_desc else "№ ПД ↑ старые сверху")
+
+    def reserve_numbers(self):
+        from .number_ui import ReserveDialog
+        d = ReserveDialog('gsv_projects', self)
+        if d.exec():
+            self.load_data()
 
     def toggle_order(self):
         self.order_desc = not self.order_desc
