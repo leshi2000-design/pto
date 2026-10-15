@@ -195,6 +195,9 @@ class GsnContractDialog(QDialog):
             b = QPushButton(text)
             b.clicked.connect(fn)
             bottom.addWidget(b)
+        from .print_ui import make_buttons, gsn_card
+        for b in make_buttons(self, lambda: gsn_card(db, self.contract_id), lambda: 'Договор ГСН ' + (self.number.text() or str(self.contract_id)), self.ensure_saved):
+            bottom.addWidget(b)
         self.edit_button = QPushButton('Изменить')
         self.edit_button.clicked.connect(self.toggle_edit)
         bottom.addWidget(self.edit_button)

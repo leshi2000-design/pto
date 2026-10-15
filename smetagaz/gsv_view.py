@@ -724,6 +724,9 @@ class ProjectEditDialog(QDialog):
         self.btn_folder_change = QPushButton("Сменить папку…")
         self.btn_folder_change.clicked.connect(self.change_folder)
         btn_layout.addWidget(self.btn_folder_change)
+        from .print_ui import make_buttons, gsv_project_card
+        for b in make_buttons(self, lambda: gsv_project_card(db, self.project_id), lambda: 'Проект ГСВ ' + (self.txt_pd.text() or str(self.project_id)), lambda: bool(self.project_id) or self.save_data()):
+            btn_layout.addWidget(b)
         self.btn_edit_toggle = QPushButton("Изменить")
         self.btn_edit_toggle.clicked.connect(self.toggle_edit)
         if self.is_new:

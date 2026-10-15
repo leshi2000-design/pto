@@ -38,6 +38,9 @@ def _load(db, key, default):
         return default
 
 
+TITLES = {'contracts': 'Реестр · Монтаж ГСВ', 'gsv_projects': 'Реестр · Проекты ГСВ', 'welders': 'Сварщики', 'contracts_le': 'Реестр · Юрлица', 'contracts_smr': 'Реестр · СМР'}
+
+
 class RegistryTools(QObject):
     """Подключается к таблице и строке поиска реестра: кнопки «Выборки» и «Колонки», меню заголовка."""
 
@@ -66,10 +69,22 @@ class RegistryTools(QObject):
                 index -= 1
             bar_layout.insertWidget(index, self.filters_button)
             bar_layout.insertWidget(index + 1, self.columns_button)
+            from .print_ui import make_buttons
+            title = TITLES.get(key, 'Реестр')
+            self.pdf_button, self.print_button = make_buttons(table, lambda: self.print_data(title), title)
+            for k, button in enumerate((self.pdf_button, self.print_button)):
+                button.setProperty('registryTool', True)
+                button.setMinimumHeight(30)
+                bar_layout.insertWidget(index + 2 + k, button)
         header = table.horizontalHeader()
         header.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         header.customContextMenuRequested.connect(self.show_header_menu)
         self.apply_columns()
+
+    def print_data(self, title):
+        from .print_ui import table_html
+        q = self.search.text().strip() if hasattr(self.search, 'text') else ''
+        return table_html(title, self.table, f'поиск: {q}' if q else '')
 
     def show_header_menu(self, pos):
         self.build_columns_menu()
