@@ -68,3 +68,22 @@ def test_summary_updates_after_change(db):
     bd.add_quick(db, 'Просрочено давно 01.10.2026')
     s2 = bd.summary(db, date(2026, 10, 8))
     assert s2['overdue'] == s1['overdue'] + 1
+
+
+def test_manual_order_move_task(tmp_path):
+    from smetagaz.database import DatabaseManager
+    from smetagaz import board_domain as b
+    d = DatabaseManager(tmp_path / 'x.db')
+    d.init_db()
+    ids = [d.execute("INSERT INTO kanban_tasks(title,status,is_archived) VALUES(?,?,0)", (f'T{i}', 'todo')).lastrowid for i in range(4)]
+    order = lambda s='todo': [r[0] for r in d.fetchall(f'SELECT id FROM kanban_tasks WHERE status=? AND is_archived=0 {b.MANUAL_ORDER}', (s,))]
+    assert order() == ids[::-1]                        # новые сверху, пока порядок не задан
+    b.move_task(d, ids[0], 'todo', after_id=ids[3])    # самую старую — под самую новую
+    assert order() == [ids[3], ids[0], ids[2], ids[1]]
+    b.move_task(d, ids[1], 'todo', before_id=ids[3])   # наверх
+    assert order() == [ids[1], ids[3], ids[0], ids[2]]
+    b.move_task(d, ids[2], 'doing', None, None)        # в другую колонку
+    assert order('doing') == [ids[2]] and ids[2] not in order()
+    new = d.execute("INSERT INTO kanban_tasks(title,status,is_archived) VALUES('N','todo',0)").lastrowid
+    assert order()[0] == new
+    d.close()

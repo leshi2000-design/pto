@@ -16,11 +16,34 @@ LEAD_WORDS = {'до', 'в', 'во', 'на', 'к', 'числа'}
 
 def migrate(db):
     cols = {r[1] for r in db.fetchall('PRAGMA table_info(kanban_tasks)')}
-    for name, ddl in (('link_table', "TEXT DEFAULT ''"), ('link_id', 'INTEGER'), ('auto_key', "TEXT DEFAULT ''")):
+    for name, ddl in (('link_table', "TEXT DEFAULT ''"), ('link_id', 'INTEGER'), ('auto_key', "TEXT DEFAULT ''"), ('sort_pos', 'REAL')):
         if name not in cols:
             db.execute(f'ALTER TABLE kanban_tasks ADD COLUMN {name} {ddl}')
     db.execute("CREATE INDEX IF NOT EXISTS idx_kanban_auto ON kanban_tasks(auto_key)")
     db.execute('CREATE TABLE IF NOT EXISTS board_dismissed(auto_key TEXT PRIMARY KEY)')
+
+
+MANUAL_ORDER = "ORDER BY coalesce(sort_pos, -1e12 - id), id DESC"
+
+
+def move_task(db, task_id, status, after_id=None, before_id=None):
+    """Переносит задачу в колонку status и ставит её сразу после after_id (или перед before_id; без обоих — наверх).
+    Порядок колонки перенумеровывается целиком, поэтому «ручной» порядок не ломается при повторных перестановках."""
+    rows = db.fetchall(f"SELECT id,sort_pos FROM kanban_tasks WHERE is_archived=0 AND status=? AND id<>? {MANUAL_ORDER}", (status, task_id))
+    ids = [r[0] for r in rows]
+    if after_id in ids:
+        at = ids.index(after_id) + 1
+    elif before_id in ids:
+        at = ids.index(before_id)
+    else:
+        at = 0
+    ids.insert(at, task_id)
+    old = {r[0]: r[1] for r in rows}
+    with db.transaction():
+        db.execute('UPDATE kanban_tasks SET status=? WHERE id=? AND status<>?', (status, task_id, status))
+        for pos, i in enumerate(ids):
+            if old.get(i) != float(pos * 10):
+                db.execute('UPDATE kanban_tasks SET sort_pos=? WHERE id=?', (float(pos * 10), i))
 
 
 # --- БЫСТРОЕ ДОБАВЛЕНИЕ ----------------------------------------------------------------------

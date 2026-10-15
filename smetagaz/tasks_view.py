@@ -132,11 +132,16 @@ class KanbanListWidget(QListWidget):
                            "QListWidget::item:selected { background: transparent; }")
 
     def dropEvent(self, event):
+        source = event.source()
+        dragged = [it.data(Qt.ItemDataRole.UserRole) for it in source.selectedItems()] if hasattr(source, 'selectedItems') else []
         super().dropEvent(event)
-        for i in range(self.count()):
-            task_id = self.item(i).data(Qt.ItemDataRole.UserRole)
-            if task_id is not None:
-                db.execute("UPDATE kanban_tasks SET status=? WHERE id=?", (self.status_code, task_id))
+        for task_id in [t for t in dragged if t is not None]:
+            row = next((r for r in range(self.count()) if self.item(r).data(Qt.ItemDataRole.UserRole) == task_id), None)
+            if row is None:
+                continue
+            prev_id = self.item(row - 1).data(Qt.ItemDataRole.UserRole) if row > 0 else None
+            next_id = self.item(row + 1).data(Qt.ItemDataRole.UserRole) if row + 1 < self.count() else None
+            board.move_task(db, task_id, self.status_code, prev_id, next_id)
         self.status_changed.emit()
 
     def contextMenuEvent(self, event):
@@ -409,7 +414,8 @@ class KanbanTab(QWidget):
         top_bar.addWidget(self.search, 1)
 
         self.cmb_sort = QComboBox()
-        self.cmb_sort.addItems(["Сначала новые (по дате)", "Сначала старые (по дате)", "По срочности (сначала критические)", "По сроку выполнения"])
+        self.cmb_sort.addItems(["Сначала новые (по дате)", "Сначала старые (по дате)", "По срочности (сначала критические)", "По сроку выполнения", "Вручную (перетаскиванием)"])
+        self.cmb_sort.setCurrentIndex(4)
         self.cmb_sort.currentIndexChanged.connect(self.load_boards)
         top_bar.addWidget(self.cmb_sort)
         layout.addLayout(top_bar)
@@ -502,7 +508,10 @@ class KanbanTab(QWidget):
             self.load_boards()
 
     def on_moved(self):
-        self.load_boards()
+        if self.cmb_sort.currentIndex() != 4:      # перетаскивание задаёт ручной порядок: переключаем сортировку на «Вручную»
+            self.cmb_sort.setCurrentIndex(4)
+        else:
+            self.load_boards()
         self.changed.emit()
 
     def manage_columns(self):
@@ -521,6 +530,7 @@ class KanbanTab(QWidget):
             1: "ORDER BY id ASC",
             2: "ORDER BY CASE urgency WHEN 'Критическая' THEN 1 WHEN 'Высокая' THEN 2 WHEN 'Обычная' THEN 3 WHEN 'Низкая' THEN 4 ELSE 5 END, id DESC",
             3: "ORDER BY CASE WHEN coalesce(due_date,'')='' THEN 1 ELSE 0 END, due_date, id DESC",
+            4: board.MANUAL_ORDER,
         }[self.cmb_sort.currentIndex()]
 
         base = ("SELECT id, title, description, status, created_at, urgency, coalesce(due_date,'') AS due_date, coalesce(link_table,''), link_id FROM kanban_tasks WHERE is_archived=0")

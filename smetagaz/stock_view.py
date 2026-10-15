@@ -383,8 +383,7 @@ class WriteoffView(QWidget):
         self.tabs.addTab(ObjectsView(),'Объекты списания')
         self.tabs.addTab(RegisterView('orders'),'Приказы')
         self.tabs.addTab(RegisterView('transfers'),'Акты перевода материалов')
-        from .workspace_view import WorkspaceView
-        self.tabs.addTab(WorkspaceView('writeoffs'),'Прежние записи');self.tabs.currentChanged.connect(lambda _:self.load_data())
+        self.tabs.currentChanged.connect(lambda _:self.load_data())
     def load_data(self):self.tabs.currentWidget().load_data()
 
 
