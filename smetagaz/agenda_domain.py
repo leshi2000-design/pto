@@ -21,9 +21,11 @@ KINDS = {
     'event': ('Событие', '#64748B', '🕒'),
     'recurring': ('Ежемесячная дата', '#DB2777', '🔁'),
     'note': ('Заметка', '#CA8A04', '📝'),
+    'permit': ('Допуск / удостоверение', '#DC2626', '🪪'),
+    'crew': ('Выход бригады', '#0891B2', '👷'),
 }
 # Порядок маркеров в ячейке календаря и в списке дня
-KIND_ORDER = ['overdue', 'task', 'contract', 'payment', 'weld_plan', 'work', 'act', 'project', 'recurring', 'note', 'event']
+KIND_ORDER = ['overdue', 'permit', 'task', 'crew', 'contract', 'payment', 'weld_plan', 'work', 'act', 'project', 'recurring', 'note', 'event']
 
 SHIFTS = [('none', 'Не переносить'), ('prev', 'Перенести на пятницу, если выходной'), ('next', 'Перенести на понедельник, если выходной')]
 RECURRING_PRESETS = ['Зарплата', 'Аванс', 'Сдача актов', 'Оплата аренды', 'Налоги и взносы', 'Другое']
@@ -272,6 +274,13 @@ def events_between(db, start, end, today=None):
         detail = ' · '.join(x for x in (welder or 'Сварщик не назначен', place, 'не отмечено выполненным' if late else '') if x)
         out.append(_event(date.fromisoformat(day), 'weld_plan' if planned else 'work', f'{"План" if planned else "Работы"}: {title}', detail, ('welding_jobs', jid),
                           color='#DC2626' if late else None, time=at))
+    # --- допуски сотрудников и выход бригад на объекты ---
+    try:
+        from . import staff_domain
+        for day, kind, title, detail, ref in staff_domain.agenda_events(db, start, end, today):
+            out.append(_event(day, kind, title, detail, ref))
+    except Exception:
+        pass
     # --- заметки (независимые и привязанные к договорам, клиентам) ---
     from . import notes_domain
     for nid, day, title, body, ltable, lid in db.fetchall("SELECT id,note_date,title,body,link_table,link_id FROM notes WHERE note_date BETWEEN ? AND ?", (s, e)):

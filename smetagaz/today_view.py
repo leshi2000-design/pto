@@ -695,6 +695,9 @@ class TodayView(QWidget):
             self.notes.show_note(rid)
             self.notes.load_list()
             return
+        elif table in ('staff', 'staff_assign'):
+            from .staff_view import StaffDialog, AssignDialog
+            (StaffDialog(rid, self) if table == 'staff' else AssignDialog(rid, self)).exec()
         elif table == 'welding_jobs':
             from .welding_view import JobDialog
             JobDialog(rid, parent=self).exec()

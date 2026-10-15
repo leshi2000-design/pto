@@ -40,6 +40,7 @@ from .extra_views import GsnProjectsView, WeldersView, CalculatorsView, Writeoff
 from .legal_entities_view import LegalEntitiesView
 from .audit_view import AuditView
 from .error_view import ErrorLogView
+from .staff_view import StaffView
 from . import error_log
 from .counterparty_ui import SmrView
 
@@ -86,7 +87,7 @@ NAV_SECTIONS = [
     ('Услуги', ['gsv', 'contracts', 'gsn', 'smr']),
     ('Сметы', ['estimates']),
     ('Контрагенты', ['clients', 'legal_entities']),
-    ('Дополнительно', ['welders', 'writeoff', 'calculators', 'stats', 'exec', 'workspace', 'audit', 'errors']),
+    ('Дополнительно', ['welders', 'writeoff', 'calculators', 'stats', 'exec', 'workspace', 'staff', 'audit', 'errors']),
     ('Справочники', ['gsv_catalog', 'gsn_catalog', 'materials']),
     ('Настройки', ['settings']),
 ]
@@ -94,7 +95,7 @@ KNOWN_TABS = [
     ("tasks", "Сегодня"), ("gsv", "Проекты ГСВ"), ("contracts", "Монтаж ГСВ"), ("gsn", "Монтаж ГСН"), ("smr", "СМР"),
     ("clients", "Клиенты"), ("legal_entities", "Юрлица"),
     ("welders", "Сварщики"), ("writeoff", "Списание"), ("calculators", "Калькуляторы"), ("stats", "Статистика"),
-    ("estimates", "Реестр смет"), ("exec", "Исполнительная док."), ("workspace", "Все реестры · быстрый обзор"), ("audit", "Журнал и корзина"), ("errors", "Журнал ошибок"),
+    ("estimates", "Реестр смет"), ("exec", "Исполнительная док."), ("workspace", "Все реестры · быстрый обзор"), ("audit", "Журнал и корзина"), ("errors", "Журнал ошибок"), ("staff", "Сотрудники и бригады"),
     ("gsv_catalog", "Справочники ГСВ"), ("gsn_catalog", "Справочник ГСН"), ("materials", "Справочник"),
     ("settings", "Настройки"),
 ]
@@ -155,6 +156,7 @@ class MainWindow(QMainWindow):
             "workspace": WorkspaceView,
             "audit": AuditView,
             "errors": ErrorLogView,
+            "staff": StaffView,
             "clients": lambda: WorkspaceView("crm.clients"),
             "tasks": TodayView,
             "estimates": EstimatesModule,
