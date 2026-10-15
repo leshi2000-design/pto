@@ -39,6 +39,8 @@ from .estimates_ui import EstimatesModule
 from .extra_views import GsnProjectsView, WeldersView, CalculatorsView, WriteoffView
 from .legal_entities_view import LegalEntitiesView
 from .audit_view import AuditView
+from .error_view import ErrorLogView
+from . import error_log
 from .counterparty_ui import SmrView
 
 class GlobalSearchDialog(QDialog):
@@ -84,7 +86,7 @@ NAV_SECTIONS = [
     ('Услуги', ['gsv', 'contracts', 'gsn', 'smr']),
     ('Сметы', ['estimates']),
     ('Контрагенты', ['clients', 'legal_entities']),
-    ('Дополнительно', ['welders', 'writeoff', 'calculators', 'stats', 'exec', 'workspace', 'audit']),
+    ('Дополнительно', ['welders', 'writeoff', 'calculators', 'stats', 'exec', 'workspace', 'audit', 'errors']),
     ('Справочники', ['gsv_catalog', 'gsn_catalog', 'materials']),
     ('Настройки', ['settings']),
 ]
@@ -92,7 +94,7 @@ KNOWN_TABS = [
     ("tasks", "Сегодня"), ("gsv", "Проекты ГСВ"), ("contracts", "Монтаж ГСВ"), ("gsn", "Монтаж ГСН"), ("smr", "СМР"),
     ("clients", "Клиенты"), ("legal_entities", "Юрлица"),
     ("welders", "Сварщики"), ("writeoff", "Списание"), ("calculators", "Калькуляторы"), ("stats", "Статистика"),
-    ("estimates", "Реестр смет"), ("exec", "Исполнительная док."), ("workspace", "Все реестры · быстрый обзор"), ("audit", "Журнал и корзина"),
+    ("estimates", "Реестр смет"), ("exec", "Исполнительная док."), ("workspace", "Все реестры · быстрый обзор"), ("audit", "Журнал и корзина"), ("errors", "Журнал ошибок"),
     ("gsv_catalog", "Справочники ГСВ"), ("gsn_catalog", "Справочник ГСН"), ("materials", "Справочник"),
     ("settings", "Настройки"),
 ]
@@ -103,6 +105,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.app_name = db.get_setting("app_name", "ПТО")
         self.setWindowTitle(self.app_name)
+        self.err_timer = QTimer(self); self.err_timer.setInterval(20000); self.err_timer.timeout.connect(self.update_error_badge); self.err_timer.start()
         self.resize(1350, 820)
         self.backup_service = AutoBackupService()
         QShortcut(QKeySequence("Ctrl+K"), self).activated.connect(lambda: GlobalSearchDialog(self).exec())
@@ -151,6 +154,7 @@ class MainWindow(QMainWindow):
         self.view_classes = {
             "workspace": WorkspaceView,
             "audit": AuditView,
+            "errors": ErrorLogView,
             "clients": lambda: WorkspaceView("crm.clients"),
             "tasks": TodayView,
             "estimates": EstimatesModule,
@@ -312,10 +316,16 @@ class MainWindow(QMainWindow):
         for b in self.tabs_buttons: b.setChecked(False)
         target_btn.setChecked(True)
         self.page_title.setText(target_btn.text())
+        error_log.set_section(target_btn.text())
 
         view = self.views[idx]
         if hasattr(view, 'load_data'): view.load_data()
         elif hasattr(view, 'calculate'): view.calculate()
+
+    def update_error_badge(self):
+        n = error_log.unseen_count()
+        base = self.windowTitle().split('  ·  новых ошибок')[0]
+        self.setWindowTitle(f'{base}  ·  новых ошибок: {n}  (Дополнительно → Журнал ошибок)' if n else base)
 
     def closeEvent(self, event):
         """Закрытие без зависания: окно скрывается сразу, нужная копия (если последней больше 30 минут) делается в фоне, затем программа завершается."""
@@ -379,6 +389,7 @@ def global_exception_handler(exc_type, exc_value, exc_traceback):
 
 def main():
     sys.excepthook = global_exception_handler
+    error_log.install()
     app = QApplication(sys.argv)
     from pathlib import Path as _P
     for name in ('icon.ico', 'icon.png'):      # свой значок: положите файл в smetagaz/assets

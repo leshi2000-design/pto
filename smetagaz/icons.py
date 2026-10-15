@@ -2,6 +2,7 @@ from PyQt6.QtGui import QIcon,QPixmap,QPainter
 from PyQt6.QtCore import QByteArray,Qt
 from PyQt6.QtSvg import QSvgRenderer
 PATHS={
+'errors':'M12 3 2 20h20z M12 10v5 M12 17.5v.5',
 'audit':'M3 12a9 9 0 1 0 3-6.7 M3 4v5h5 M12 7v5l3 2',
 'workspace':'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',
 'clients':'M9 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M2 21v-2a7 7 0 0 1 14 0v2 M17 4a4 4 0 0 1 0 8 M19 15a5 5 0 0 1 3 5',

@@ -1,7 +1,7 @@
 ; Inno Setup: установщик PTO_Setup.exe (jrsoftware.org/isinfo.php). Данные программы хранятся в %USERPROFILE%\.smetagaz и при обновлении не затрагиваются.
 [Setup]
 AppName=ПТО
-AppVersion=3.9.0
+AppVersion=3.10.0
 DefaultDirName={autopf}\ПТО
 DefaultGroupName=ПТО
 OutputDir=..\dist

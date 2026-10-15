@@ -22,4 +22,4 @@
     settings_view.py      — вкладка "Настройки"
     main_window.py        — главное окно и точка входа main()
 """
-__version__ = "3.9.0"
+__version__ = "3.10.0"
