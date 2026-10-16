@@ -240,7 +240,7 @@ class DatabaseManager:
                 ('export_font', 'Segoe UI'), ('export_font_size', '13'),
                 ('export_company_name', 'ООО "ГазМонтаж"'),
                 ('export_excel_template', ''), ('export_word_template', ''),
-                ('app_name', 'ПТО 3.15.0'), ('tabs_config', json.dumps(default_tabs))
+                ('app_name', 'ПТО 4.0.0'), ('tabs_config', json.dumps(default_tabs))
             ]
             c.executemany("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", defaults)
 
@@ -289,7 +289,7 @@ class DatabaseManager:
         renamed=False
         for tab in tabs_data:
             # 2.5: три раздела называются «Монтаж ГСВ», «Монтаж ГСН» и «Проекты ГСВ»; пользовательские названия не трогаем
-            new_names={"contracts":("Монтаж ГСВ",("Реестр договоров","ГСВ")),"gsn":("Монтаж ГСН",("Проекты ГСН",))}
+            new_names={"contracts":("Монтаж ГСВ",("Реестр договоров","ГСВ")),"gsn":("Монтаж ГСН",("Проекты ГСН",)),"smr":("СМР (юрлица)",("СМР",)),"legal_entities":("Справочник юрлиц",("Юрлица",))}
             if tab.get("id") in new_names and tab.get("name") in new_names[tab["id"]][1]:
                 tab["name"]=new_names[tab["id"]][0];renamed=True
         # 2.5: «Задачи и Календарь» стали стартовым экраном «Сегодня» (один раз переносится на первое место).

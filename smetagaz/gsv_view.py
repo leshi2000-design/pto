@@ -850,14 +850,9 @@ class ProjectEditDialog(QDialog):
     def apply_customer_mode(self):
         legal = self.customer.is_legal()
         self.client_form.setVisible(not legal)
-        for kind in gsvdom.DOC_KINDS:
-            self.doc_make[kind].setEnabled(not legal)
-            self.doc_open[kind].setEnabled(not legal)
-        if not legal:
-            self.refresh_docs()
-        self.btn_payments.setEnabled(not legal)
+        self.refresh_docs()
         if legal:
-            self.save_status.setText('Заказчик — юрлицо: договор, акт, справка и оплаты оформляются в разделе «Юрлица».')
+            self.save_status.setText('Заказчик — юрлицо: документы формируются здесь (теги реквизитов юрлица подставятся из справочника), договор виден в досье юрлица.')
 
     def save_clicked(self):
         if self.is_new and not self.customer.is_legal() and not self.client_form.confirm_duplicate():

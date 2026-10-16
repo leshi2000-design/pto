@@ -350,7 +350,7 @@ class EstimatesView(QWidget):
 
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
-        query += " ORDER BY id DESC"
+        query += " ORDER BY coalesce(date,'') DESC, id DESC"
 
         rows = self.pager.fetch(query, tuple(params))
 

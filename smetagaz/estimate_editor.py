@@ -17,9 +17,9 @@ import docx
 from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
                               QTableWidgetItem, QInputDialog, QMessageBox, QFileDialog,
                               QDialog, QLineEdit, QComboBox, QMenu, QCheckBox, QGroupBox,
-                              QDoubleSpinBox, QGridLayout)
+                              QDoubleSpinBox, QGridLayout, QFormLayout)
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QAction, QTextDocument, QShortcut, QKeySequence
+from PyQt6.QtGui import QAction, QTextDocument, QShortcut, QKeySequence, QColor, QBrush
 from PyQt6.QtPrintSupport import QPrinter
 
 from .database import db
@@ -186,6 +186,8 @@ class EstimateEditorDialog(QDialog):
         self.table.setHorizontalHeaderLabels(["Наименование позиции", "Тип", "Ед.", "Кол-во", "Цена (руб)", "Сумма (руб)"])
         self.table_manager = SmartTableManager(self.table, main_col=0)
         self.table.order_changed.connect(self.save_rows_order)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self.table_menu)
         main_h.addWidget(self.table, stretch=7)
 
         right_panel = QVBoxLayout()
@@ -494,6 +496,10 @@ class EstimateEditorDialog(QDialog):
         self.base_mat_total = 0.0
 
         rows = db.fetchall("SELECT id, name, item_type, unit, quantity, price, sum FROM estimate_items WHERE estimate_id=? ORDER BY sort_order ASC, id ASC", (self.estimate_id,))
+        section_sums = ed.section_totals(db, self.estimate_id)
+        from .theme import accent_fg
+        band = QColor(accent_fg())
+        band.setAlpha(46)
         self.table.setRowCount(len(rows))
         for r, (item_id, name, itype, unit, qty, price, sm) in enumerate(rows):
             item_name = QTableWidgetItem(name or "")
@@ -504,17 +510,22 @@ class EstimateEditorDialog(QDialog):
             i_type.setFlags(i_type.flags() & ~Qt.ItemFlag.ItemIsEditable)
 
             if itype == "Раздел":
+                part = section_sums.get(item_id, {})
+                subtotal = part.get('materials', 0.0) + part.get('works', 0.0)
+                tip = f"Позиций: {part.get('count', 0)} · материалы {part.get('materials', 0.0):,.2f} · работы {part.get('works', 0.0):,.2f}".replace(',', ' ')
                 for col_idx in range(6):
-                    bg_col = QTableWidgetItem()
-                    if col_idx == 0: bg_col = item_name
-                    elif col_idx == 1: bg_col = i_type
-                    font = bg_col.font()
+                    cell = item_name if col_idx == 0 else (i_type if col_idx == 1 else QTableWidgetItem(f"{subtotal:,.2f}".replace(',', ' ') if col_idx == 5 else ''))
+                    font = cell.font()
                     font.setBold(True)
-                    bg_col.setFont(font)
+                    font.setPointSize(font.pointSize() + 1)
+                    cell.setFont(font)
+                    cell.setBackground(QBrush(band))
+                    cell.setToolTip(tip)
+                    if col_idx == 5:
+                        cell.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                     if col_idx not in [0, 1]:
-                        bg_col.setFlags(bg_col.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                        self.table.setItem(r, col_idx, bg_col)
-                self.table.setItem(r, 1, i_type)
+                        cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    self.table.setItem(r, col_idx, cell)
             else:
                 self.table.setItem(r, 1, i_type)
 
@@ -549,49 +560,137 @@ class EstimateEditorDialog(QDialog):
         dlg = MaterialSelectionDialog(self)
         if dlg.exec() == QDialog.DialogCode.Accepted and dlg.selected_material:
             mat = dlg.selected_material
-            qty, ok = QInputDialog.getDouble(self, "Количество", f"Укажите объем ({mat['unit']}):", 1.0, 0.001, 1000000.0, 3)
+            qty, section_id, ok = self.ask_quantity("Количество", f"Укажите объем ({mat['unit']}):")
             if ok:
                 sm = qty * mat['price']
                 so = self.get_max_sort_order()
-                db.execute("INSERT INTO estimate_items (estimate_id, item_type, name, unit, quantity, price, sum, sort_order, purchase_price) VALUES (?, 'Материал', ?, ?, ?, ?, ?, ?, ?)",
-                           (self.estimate_id, mat['name'], mat['unit'], qty, mat['price'], sm, so, mat['purchase_price']))
-                self.load_items()
+                new_id = db.execute("INSERT INTO estimate_items (estimate_id, item_type, name, unit, quantity, price, sum, sort_order, purchase_price) VALUES (?, 'Материал', ?, ?, ?, ?, ?, ?, ?)",
+                                    (self.estimate_id, mat['name'], mat['unit'], qty, mat['price'], sm, so, mat['purchase_price'])).lastrowid
+                self.place(new_id, section_id)
 
     def add_work(self):
         dlg = WorkSelectionDialog(self)
         if dlg.exec() == QDialog.DialogCode.Accepted and dlg.selected_work:
             work = dlg.selected_work
-            qty, ok = QInputDialog.getDouble(self, "Объем работ", f"Укажите объем ({work['unit']}):", 1.0, 0.001, 1000000.0, 3)
+            qty, section_id, ok = self.ask_quantity("Объем работ", f"Укажите объем ({work['unit']}):")
             if ok:
                 sm = qty * work['price']
                 so = self.get_max_sort_order()
                 # The cost breakdown is snapshotted here (like price/purchase_price) so a later
                 # edit to the catalog formula never changes an estimate that's already been issued.
-                db.execute("""INSERT INTO estimate_items (estimate_id, item_type, name, unit, quantity, price, sum, sort_order, purchase_price,
+                new_id = db.execute("""INSERT INTO estimate_items (estimate_id, item_type, name, unit, quantity, price, sum, sort_order, purchase_price,
                               labor_hours, hourly_rate, overhead_pct, profit_pct, other_costs) VALUES (?, 'Работа', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                            (self.estimate_id, work['name'], work['unit'], qty, work['price'], sm, so, work['purchase_price'],
-                            work['labor_hours'], work['hourly_rate'], work['overhead_pct'], work['profit_pct'], work['other_costs']))
-                self.load_items()
+                            work['labor_hours'], work['hourly_rate'], work['overhead_pct'], work['profit_pct'], work['other_costs'])).lastrowid
+                self.place(new_id, section_id)
 
     def add_custom(self):
         dlg = CustomItemDialog(self)
         if dlg.exec() == QDialog.DialogCode.Accepted and dlg.result_data:
             d = dlg.result_data
-            qty, ok = QInputDialog.getDouble(self, "Количество", f"Укажите объем ({d['unit']}):", 1.0, 0.001, 1000000.0, 3)
+            qty, section_id, ok = self.ask_quantity("Количество", f"Укажите объем ({d['unit']}):")
             if ok:
                 sm = qty * d['price']
                 so = self.get_max_sort_order()
-                db.execute("INSERT INTO estimate_items (estimate_id, item_type, name, unit, quantity, price, sum, sort_order, purchase_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                           (self.estimate_id, d['type'], d['name'], d['unit'], qty, d['price'], sm, so, d['purchase_price']))
-                self.load_items()
+                new_id = db.execute("INSERT INTO estimate_items (estimate_id, item_type, name, unit, quantity, price, sum, sort_order, purchase_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                    (self.estimate_id, d['type'], d['name'], d['unit'], qty, d['price'], sm, so, d['purchase_price'])).lastrowid
+                self.place(new_id, section_id)
+
+    def ask_quantity(self, title, label):
+        """(количество, id раздела или None, ok): количество и раздел сметы, в который попадёт позиция."""
+        d = QDialog(self)
+        d.setWindowTitle(title)
+        form = QFormLayout(d)
+        qty = QDoubleSpinBox()
+        qty.setDecimals(3)
+        qty.setRange(0.001, 1000000.0)
+        qty.setValue(1.0)
+        section = QComboBox()
+        section.addItem('— в конец сметы —', None)
+        for sid, name in ed.sections(db, self.estimate_id):
+            section.addItem(name, sid)
+        last = self.table.currentRow()
+        if section.count() > 1:                                    # по умолчанию — раздел, в котором стоит курсор, иначе последний
+            current = self.section_of_row(last) if last >= 0 else None
+            section.setCurrentIndex(section.findData(current) if current is not None else section.count() - 1)
+        form.addRow(label, qty)
+        form.addRow('Раздел сметы', section)
+        bar = QHBoxLayout()
+        ok_btn, cancel_btn = QPushButton('Добавить'), QPushButton('Отмена')
+        ok_btn.setProperty('type', 'primary')
+        ok_btn.clicked.connect(d.accept)
+        cancel_btn.clicked.connect(d.reject)
+        bar.addStretch()
+        bar.addWidget(cancel_btn)
+        bar.addWidget(ok_btn)
+        form.addRow(bar)
+        if d.exec() == QDialog.DialogCode.Accepted:
+            return qty.value(), section.currentData(), True
+        return 0.0, None, False
+
+    def section_of_row(self, row):
+        """id раздела, к которому относится строка таблицы (ближайший заголовок выше)."""
+        for r in range(row, -1, -1):
+            it, t = self.table.item(r, 0), self.table.item(r, 1)
+            if it and t and t.text() == 'Раздел':
+                return it.data(Qt.ItemDataRole.UserRole)
+        return None
+
+    def place(self, item_id, section_id):
+        ed.place_item(db, self.estimate_id, item_id, section_id)
+        self.load_items()
 
     def add_section(self):
-        name, ok = QInputDialog.getText(self, "Новый раздел", "Название раздела:")
-        if ok and name.strip():
+        d = QDialog(self)
+        d.setWindowTitle("Новый раздел сметы")
+        form = QFormLayout(d)
+        combo = QComboBox()
+        combo.setEditable(True)
+        combo.addItems(ed.SECTION_PRESETS)
+        combo.setCurrentText('')
+        combo.lineEdit().setPlaceholderText('выберите или впишите своё название')
+        form.addRow('Название раздела', combo)
+        hint = QLabel('Готовые названия: ГСВ, ГСН, СМР, ТО, ДВК. Можно ввести любое своё.')
+        hint.setStyleSheet('color: #605E5C;')
+        form.addRow(hint)
+        bar = QHBoxLayout()
+        ok_btn, cancel_btn = QPushButton('Добавить'), QPushButton('Отмена')
+        ok_btn.setProperty('type', 'primary')
+        ok_btn.clicked.connect(d.accept)
+        cancel_btn.clicked.connect(d.reject)
+        bar.addStretch()
+        bar.addWidget(cancel_btn)
+        bar.addWidget(ok_btn)
+        form.addRow(bar)
+        if d.exec() == QDialog.DialogCode.Accepted and combo.currentText().strip():
             so = self.get_max_sort_order()
             db.execute("INSERT INTO estimate_items (estimate_id, item_type, name, unit, quantity, price, sum, sort_order, purchase_price) VALUES (?, 'Раздел', ?, '', 0, 0, 0, ?, 0.0)",
-                       (self.estimate_id, name.strip(), so))
+                       (self.estimate_id, combo.currentText().strip(), so))
             self.load_items()
+
+    def table_menu(self, pos):
+        """Правый щелчок по позиции: отправить её в существующий раздел сметы."""
+        row = self.table.rowAt(pos.y())
+        if row < 0 or not self.table.item(row, 0):
+            return
+        self.table.selectRow(row)
+        item_id = self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
+        kind = self.table.item(row, 1).text()
+        menu = QMenu(self)
+        if kind != 'Раздел':
+            sub = menu.addMenu('Отправить в раздел')
+            current = self.section_of_row(row)
+            for sid, name in ed.sections(db, self.estimate_id):
+                act = sub.addAction(name)
+                act.setEnabled(sid != current)
+                act.triggered.connect(lambda _=False, s=sid, i=item_id: self.place(i, s))
+            end = sub.addAction('— в конец сметы, без раздела —')
+            end.triggered.connect(lambda _=False, i=item_id: self.place(i, None))
+            if not sub.actions()[:-1]:
+                sub.insertAction(end, QAction('Сначала добавьте раздел', sub))
+        delete = menu.addAction('Удалить')
+        delete.triggered.connect(self.del_item)
+        menu.exec(self.table.viewport().mapToGlobal(pos))
 
     def on_cell_changed(self, item):
         if self._updating: return

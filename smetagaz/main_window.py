@@ -41,9 +41,11 @@ from .legal_entities_view import LegalEntitiesView
 from .audit_view import AuditView
 from .error_view import ErrorLogView
 from .staff_view import StaffView
+from .counterparty_ui import CounterpartyView, LegalDirectoryView
+from .ip_view import IpView
 from .incoming_view import IncomingView, process_files
 from . import error_log
-from .counterparty_ui import SmrView
+from .counterparty_ui import SmrView  # noqa: F401
 
 class GlobalSearchDialog(QDialog):
     def __init__(self, main_window):
@@ -85,16 +87,17 @@ class GlobalSearchDialog(QDialog):
 # Боковое меню по разделам: (название раздела, [модули]). Раздел из одного модуля показывается обычной кнопкой.
 NAV_SECTIONS = [
     ('Сегодня', ['tasks']),
-    ('Услуги', ['gsv', 'contracts', 'gsn', 'smr']),
+    ('Услуги', ['gsv', 'contracts', 'gsn', 'ip']),
     ('Сметы', ['estimates']),
-    ('Контрагенты', ['clients', 'legal_entities']),
+    ('Клиенты', ['clients']),
+    ('Юрлица', ['legal_entities', 'smr', 'to']),
     ('Дополнительно', ['welders', 'writeoff', 'calculators', 'stats', 'exec', 'workspace', 'staff', 'incoming', 'audit', 'errors']),
     ('Справочники', ['gsv_catalog', 'gsn_catalog', 'materials']),
     ('Настройки', ['settings']),
 ]
 KNOWN_TABS = [
-    ("tasks", "Сегодня"), ("gsv", "Проекты ГСВ"), ("contracts", "Монтаж ГСВ"), ("gsn", "Монтаж ГСН"), ("smr", "СМР"),
-    ("clients", "Клиенты"), ("legal_entities", "Юрлица"),
+    ("tasks", "Сегодня"), ("gsv", "Проекты ГСВ"), ("contracts", "Монтаж ГСВ"), ("gsn", "Монтаж ГСН"), ("ip", "СМР (ИП)"),
+    ("clients", "Клиенты"), ("legal_entities", "Справочник юрлиц"), ("smr", "СМР (юрлица)"), ("to", "ТО (юрлица)"),
     ("welders", "Сварщики"), ("writeoff", "Списание"), ("calculators", "Калькуляторы"), ("stats", "Статистика"),
     ("estimates", "Реестр смет"), ("exec", "Исполнительная док."), ("workspace", "Все реестры · быстрый обзор"), ("audit", "Журнал и корзина"), ("errors", "Журнал ошибок"), ("staff", "Сотрудники и бригады"), ("incoming", "Входящие документы"),
     ("gsv_catalog", "Справочники ГСВ"), ("gsn_catalog", "Справочник ГСН"), ("materials", "Справочник"),
@@ -166,8 +169,10 @@ class MainWindow(QMainWindow):
             "contracts": ContractsRegistryView,
             "gsv": GsvProjectsView,
             "gsn": GsnProjectsView,
-            "legal_entities": LegalEntitiesView,
-            "smr": SmrView,
+            "legal_entities": LegalDirectoryView,
+            "smr": lambda: CounterpartyView("smr"),
+            "to": lambda: CounterpartyView("to"),
+            "ip": IpView,
             "exec": ExecutiveDocsView,
             "materials": MaterialsView,
             "welders": WeldersView,

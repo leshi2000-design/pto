@@ -710,7 +710,7 @@ class TodayView(QWidget):
                     open_record('estimates', eid or oid, self)
                 elif owner:
                     open_record(owner, oid, self)
-        elif table in ('contracts', 'gsv_projects', 'gsn_projects', 'le_contracts', 'smr_contracts'):
+        elif table in ('contracts', 'gsv_projects', 'gsn_projects', 'le_contracts', 'smr_contracts', 'to_contracts', 'ip_contracts'):
             from .workspace_view import open_record
             open_record(table, rid, self)
         self.load_data()

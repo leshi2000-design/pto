@@ -8,7 +8,7 @@ from PyQt6.QtCore import Qt
 from .database import db
 from .platform_utils import open_local
 
-SECTIONS = {'gsv_projects': 'Проекты ГСВ', 'contracts': 'Монтаж ГСВ', 'gsn_projects': 'Монтаж ГСН', 'smr_contracts': 'СМР', 'le_contracts': 'Юрлица'}
+SECTIONS = {'gsv_projects': 'Проекты ГСВ', 'contracts': 'Монтаж ГСВ', 'gsn_projects': 'Монтаж ГСН', 'smr_contracts': 'СМР (юрлица)', 'to_contracts': 'ТО (юрлица)', 'ip_contracts': 'СМР (ИП)', 'le_contracts': 'Юрлица (прочие)'}
 MAX_FILES = 500
 
 
@@ -23,8 +23,8 @@ def client_folders(db, cid):
     for rid, number, title in db.fetchall('SELECT id,contract_number,title FROM gsn_projects WHERE client_id=? ORDER BY id DESC', (cid,)):
         row = db.fetchone("SELECT folder_path FROM executive_objects WHERE owner_type='gsn_projects' AND owner_id=?", (rid,))
         result.append((SECTIONS['gsn_projects'], f'№{number or rid} · {title or ""}'.strip(' ·'), row[0] if row else ''))
-    for number, obj, folder in db.fetchall('SELECT contract_number,coalesce(nullif(object_address,\'\'),object_name),folder FROM smr_contracts WHERE person_id=? ORDER BY id DESC', (cid,)):
-        result.append((SECTIONS['smr_contracts'], f'№{number} · {obj or ""}'.strip(' ·'), folder or ''))
+    for number, obj, folder in db.fetchall('SELECT contract_number,coalesce(nullif(object_address,\'\'),object_name),folder FROM ip_contracts WHERE person_id=? ORDER BY id DESC', (cid,)):
+        result.append((SECTIONS['ip_contracts'], f'№{number} · {obj or ""}'.strip(' ·'), folder or ''))
     return result
 
 
@@ -33,8 +33,9 @@ def legal_folders(db, lid):
     result = []
     for number, obj, folder in db.fetchall('SELECT contract_number,coalesce(nullif(object_address,\'\'),object_name),folder FROM le_contracts WHERE client_id=? ORDER BY id DESC', (lid,)):
         result.append((SECTIONS['le_contracts'], f'№{number} · {obj or ""}'.strip(' ·'), folder or ''))
-    for number, obj, folder in db.fetchall('SELECT contract_number,coalesce(nullif(object_address,\'\'),object_name),folder FROM smr_contracts WHERE legal_id=? ORDER BY id DESC', (lid,)):
-        result.append((SECTIONS['smr_contracts'], f'№{number} · {obj or ""}'.strip(' ·'), folder or ''))
+    for table in ('smr_contracts', 'to_contracts'):
+        for number, obj, folder in db.fetchall(f'SELECT contract_number,coalesce(nullif(object_address,\'\'),object_name),folder FROM {table} WHERE legal_id=? ORDER BY id DESC', (lid,)):
+            result.append((SECTIONS[table], f'№{number} · {obj or ""}'.strip(' ·'), folder or ''))
     for number, obj, folder in db.fetchall('SELECT pd_number,object_name,project_folder FROM gsv_projects WHERE le_client_id=? ORDER BY id DESC', (lid,)):
         result.append((SECTIONS['gsv_projects'], f'{number} · {obj or ""}'.strip(' ·'), folder or ''))
     for number, obj, folder in db.fetchall('SELECT contract_number,object_name,contract_folder FROM contracts WHERE le_client_id=? ORDER BY id DESC', (lid,)):

@@ -55,6 +55,8 @@ INDEXES = [
     ('le_contracts', 'idx_perf_le_date', 'contract_date'), ('le_contracts', 'idx_perf_le_status', 'status,signed'), ('le_acts', 'idx_perf_le_acts_date', 'act_date'),
     ('smr_contracts', 'idx_perf_smr_date', 'contract_date'), ('smr_contracts', 'idx_perf_smr_legal', 'legal_id'), ('smr_contracts', 'idx_perf_smr_person', 'person_id'),
     ('smr_contracts', 'idx_perf_smr_estimate', 'estimate_id'), ('smr_acts', 'idx_perf_smr_acts_date', 'act_date'),
+    ('to_contracts', 'idx_perf_to_date', 'contract_date'), ('to_contracts', 'idx_perf_to_legal', 'legal_id'), ('to_acts', 'idx_perf_to_acts_date', 'act_date'),
+    ('ip_contracts', 'idx_perf_ip_date', 'contract_date'), ('ip_contracts', 'idx_perf_ip_person', 'person_id'), ('ip_acts', 'idx_perf_ip_acts_date', 'act_date'),
     ('estimates', 'idx_perf_estimates_folder', 'folder_id'), ('estimates', 'idx_perf_estimates_le', 'le_client_id'),
     ('estimate_items', 'idx_perf_items_type', 'estimate_id,item_type'),
     ('le_clients', 'idx_perf_le_clients_name', 'name'), ('notes', 'idx_perf_notes_title', 'title'),

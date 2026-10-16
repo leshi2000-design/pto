@@ -1,7 +1,9 @@
 """A single payment ledger, shared by an estimate and its linked contract."""
 from decimal import Decimal
 from datetime import date
-OWNERS={'estimates':('total','Сметы'),'contracts':('contract_amount','ГСВ'),'gsn_projects':('contract_amount','ГСН'),'gsv_projects':('cost','Проектирование ГСВ'),'le_contracts':('amount','Юрлица'),'smr_contracts':('amount','СМР')}
+OWNERS={'estimates':('total','Сметы'),'contracts':('contract_amount','ГСВ'),'gsn_projects':('contract_amount','ГСН'),'gsv_projects':('cost','Проектирование ГСВ'),'le_contracts':('amount','Юрлица'),'smr_contracts':('amount','СМР (юрлица)'),'to_contracts':('amount','ТО (юрлица)'),'ip_contracts':('amount','СМР (ИП)'),'client_sales':('amount','Продажа по чеку')}
+ESTIMATE_OWNERS=('contracts','gsn_projects','gsv_projects','smr_contracts','to_contracts','ip_contracts')
+CP_MODS={'le_contracts':'le','smr_contracts':'smr','to_contracts':'to','ip_contracts':'ip'}
 def migrate(db):
     for table,additions in {'payments':{'owner_type':'TEXT','owner_id':'INTEGER','note':"TEXT DEFAULT ''"},'gsn_projects':{'estimate_id':'INTEGER REFERENCES estimates(id)','contract_amount':'REAL DEFAULT 0'},'gsv_projects':{'estimate_id':'INTEGER REFERENCES estimates(id)'},'estimates':{'payment_opening':'REAL DEFAULT 0'}}.items():
         cols={r[1] for r in db.fetchall(f'PRAGMA table_info({table})')}
@@ -53,7 +55,7 @@ def link(db,owner,rid,eid):
         if old and history(db,owner,rid):raise ValueError('У связанной сметы есть оплаты. Перепривязка запрещена, чтобы не переносить деньги между объектами.')
         if eid:
             account(db,'estimates',eid)
-            for table in ('contracts','gsn_projects','gsv_projects','smr_contracts'):
+            for table in ESTIMATE_OWNERS:
                 found=db.fetchone(f'SELECT id FROM {table} WHERE estimate_id=?',(eid,))
                 if found and (table!=owner or found[0]!=rid):raise ValueError('Эта смета уже связана с другим договором')
         db.execute(f'UPDATE {owner} SET estimate_id=? WHERE id=?',(eid,rid))
@@ -65,7 +67,7 @@ def report(db,start,end,section=''):
     for pid,day,amount,owner,rid,eid,note in db.fetchall('SELECT id,date,amount,owner_type,owner_id,estimate_id,note FROM payments WHERE date BETWEEN ? AND ? ORDER BY date,id',(start,end)):
         if eid:
             owner,rid='estimates',eid
-            for table in ('contracts','gsn_projects','gsv_projects','smr_contracts'):
+            for table in ESTIMATE_OWNERS:
                 found=db.fetchone(f'SELECT id FROM {table} WHERE estimate_id=?',(eid,))
                 if found:owner,rid=table,found[0];break
         if owner not in OWNERS:owner,rid='estimates',eid
@@ -75,10 +77,7 @@ def report(db,start,end,section=''):
     return result
 
 def _client_label(db,owner,data):
-    if owner=='le_contracts':
+    if owner in CP_MODS:
         from . import contracts_core as cc
-        return cc.party_label(db,'le',data)
-    if owner=='smr_contracts':
-        from . import contracts_core as cc
-        return cc.party_label(db,'smr',data)
+        return cc.party_label(db,CP_MODS[owner],data)
     return data.get('client_name') or data.get('party_name') or ''

@@ -19,16 +19,20 @@ from .agenda_domain import short_name
 from .gsvm_docs import FORMATS, apply_format, money, norm_tag, tag_text
 
 MODS = {
-    'le': dict(title='Юрлица', contracts='le_contracts', acts='le_acts', tags='le_tags', docs='le_docs', section='Юрлица', code='04', party='legal'),
-    'smr': dict(title='СМР', contracts='smr_contracts', acts='smr_acts', tags='smr_tags', docs='smr_docs', section='СМР', code='05', party='both'),
+    'le': dict(title='Юрлица', contracts='le_contracts', acts='le_acts', tags='le_tags', docs='le_docs', section='Юрлица', code='04', party='legal', estimate=False),
+    'smr': dict(title='СМР (юрлица)', contracts='smr_contracts', acts='smr_acts', tags='smr_tags', docs='smr_docs', section='СМР', code='05', party='legal', estimate=True),
+    'to': dict(title='ТО (юрлица)', contracts='to_contracts', acts='to_acts', tags='to_tags', docs='to_docs', section='ТО', code='06', party='legal', estimate=True),
+    'ip': dict(title='СМР (ИП)', contracts='ip_contracts', acts='ip_acts', tags='ip_tags', docs='ip_docs', section='СМР ИП', code='07', party='person', estimate=True),
 }
+ESTIMATE_MODS = tuple(m for m, c in MODS.items() if c['estimate'])
+CONTRACT_TABLES = {c['contracts']: m for m, c in MODS.items()}      # таблица договоров -> раздел
 DOC_KINDS = {
     'contract': ('Договор', 'contract', 'Договор'),
     'act': ('Акт выполненных работ', 'act', 'Акт'),
     'statement': ('Справка о стоимости выполненных работ', 'act', 'Справка'),
 }
 STATUSES = ('Действует', 'Завершён', 'Расторгнут')
-LEGAL_FIELDS = ('full_name', 'legal_address', 'postal_address', 'bank', 'bic', 'account', 'okpo', 'head_position', 'head_name', 'head_position_gen', 'head_name_gen', 'basis')
+LEGAL_FIELDS = ('full_name', 'legal_address', 'postal_address', 'bank', 'bic', 'bank_address', 'account', 'okpo', 'head_position', 'head_name', 'head_position_gen', 'head_name_gen', 'basis')
 
 
 def cfg(mod):
@@ -59,15 +63,18 @@ def migrate(db):
               ('vat_rate', 'REAL DEFAULT 0'), ('signed', 'INTEGER DEFAULT 0'), ('folder', "TEXT DEFAULT ''"), ('seq_num', 'INTEGER'), ('year_num', 'INTEGER')]
     _add(db, 'le_contracts', common + [('source_type', "TEXT DEFAULT ''"), ('source_id', 'INTEGER')])
     _add(db, 'le_acts', [('signed', 'INTEGER DEFAULT 0')])
-    db.execute("""CREATE TABLE IF NOT EXISTS smr_contracts(id INTEGER PRIMARY KEY, contract_number TEXT DEFAULT '', contract_date TEXT DEFAULT '',
-        party_type TEXT NOT NULL DEFAULT 'person' CHECK(party_type IN ('person','legal')), person_id INTEGER, legal_id INTEGER REFERENCES le_clients(id) ON DELETE RESTRICT,
-        object_name TEXT DEFAULT '', object_address TEXT DEFAULT '', subject TEXT DEFAULT '', start_date TEXT DEFAULT '', end_date TEXT DEFAULT '',
-        amount REAL DEFAULT 0, vat_included INTEGER DEFAULT 0, vat_rate REAL DEFAULT 0, signed INTEGER DEFAULT 0, status TEXT DEFAULT 'Действует', note TEXT DEFAULT '',
-        folder TEXT DEFAULT '', seq_num INTEGER, year_num INTEGER, estimate_id INTEGER UNIQUE REFERENCES estimates(id) ON DELETE SET NULL,
-        est_materials REAL DEFAULT 0, est_works REAL DEFAULT 0, est_rev_synced INTEGER DEFAULT 0, est_synced_at TEXT DEFAULT '')""")
-    db.execute("""CREATE TABLE IF NOT EXISTS smr_acts(id INTEGER PRIMARY KEY, contract_id INTEGER NOT NULL REFERENCES smr_contracts(id) ON DELETE CASCADE,
-        act_number TEXT DEFAULT '', act_date TEXT DEFAULT '', amount REAL DEFAULT 0, vat_included INTEGER DEFAULT 0, description TEXT DEFAULT '', note TEXT DEFAULT '',
-        signed INTEGER DEFAULT 0)""")
+    for mod in ESTIMATE_MODS:
+        c = MODS[mod]
+        default_party = 'legal' if c['party'] == 'legal' else 'person'
+        db.execute(f"""CREATE TABLE IF NOT EXISTS {c['contracts']}(id INTEGER PRIMARY KEY, contract_number TEXT DEFAULT '', contract_date TEXT DEFAULT '',
+            party_type TEXT NOT NULL DEFAULT '{default_party}' CHECK(party_type IN ('person','legal')), person_id INTEGER, legal_id INTEGER REFERENCES le_clients(id) ON DELETE RESTRICT,
+            object_name TEXT DEFAULT '', object_address TEXT DEFAULT '', subject TEXT DEFAULT '', start_date TEXT DEFAULT '', end_date TEXT DEFAULT '',
+            amount REAL DEFAULT 0, vat_included INTEGER DEFAULT 0, vat_rate REAL DEFAULT 0, signed INTEGER DEFAULT 0, status TEXT DEFAULT 'Действует', note TEXT DEFAULT '',
+            folder TEXT DEFAULT '', seq_num INTEGER, year_num INTEGER, estimate_id INTEGER UNIQUE REFERENCES estimates(id) ON DELETE SET NULL,
+            est_materials REAL DEFAULT 0, est_works REAL DEFAULT 0, est_rev_synced INTEGER DEFAULT 0, est_synced_at TEXT DEFAULT '')""")
+        db.execute(f"""CREATE TABLE IF NOT EXISTS {c['acts']}(id INTEGER PRIMARY KEY, contract_id INTEGER NOT NULL REFERENCES {c['contracts']}(id) ON DELETE CASCADE,
+            act_number TEXT DEFAULT '', act_date TEXT DEFAULT '', amount REAL DEFAULT 0, vat_included INTEGER DEFAULT 0, description TEXT DEFAULT '', note TEXT DEFAULT '',
+            signed INTEGER DEFAULT 0)""")
     for mod, c in MODS.items():
         db.execute(f"""CREATE TABLE IF NOT EXISTS {c['tags']}(id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, source TEXT NOT NULL, fmt TEXT NOT NULL DEFAULT 'text',
             empty_text TEXT DEFAULT '', auto_key TEXT UNIQUE, enabled INTEGER NOT NULL DEFAULT 1, note TEXT DEFAULT '')""")
@@ -83,6 +90,10 @@ def migrate(db):
             DELETE FROM {c['docs']} WHERE scope='contract' AND ref_id=old.id; END""")
         db.execute(f"""CREATE TRIGGER IF NOT EXISTS cleanup_act_docs_{c['acts']} AFTER DELETE ON {c['acts']} BEGIN
             DELETE FROM {c['docs']} WHERE scope='act' AND ref_id=old.id; END""")
+    _move_person_contracts_to_ip(db)
+    if db.fetchone("SELECT 1 FROM sqlite_master WHERE type='table' AND name='notes'"):
+        for table in ('to_contracts', 'ip_contracts'):
+            db.execute(f"CREATE TRIGGER IF NOT EXISTS cleanup_notes_{table} AFTER DELETE ON {table} BEGIN DELETE FROM notes WHERE link_table='{table}' AND link_id=old.id; END")
     # заказчик-юрлицо в карточках проектов и монтажа ГСВ
     for table in ('gsv_projects', 'contracts'):
         _add(db, table, [('le_client_id', 'INTEGER'), ('party_name', "TEXT DEFAULT ''")])
@@ -91,6 +102,36 @@ def migrate(db):
         db.execute("UPDATE le_acts SET signed=1 WHERE coalesce(act_date,'')<>''")
         db.set_setting('le_signed_default', '1')
     db.execute("CREATE INDEX IF NOT EXISTS idx_le_contacts_client ON le_contacts(client_id)")
+
+
+def _move_person_contracts_to_ip(db):
+    """Однократно: договоры СМР с физлицами (раньше общий раздел «СМР») переносятся в отдельный раздел «СМР (ИП)» вместе с актами, оплатами, заметками и документами."""
+    if db.get_setting('smr_person_moved', '0') == '1':
+        return
+    cols = [r[1] for r in db.fetchall('PRAGMA table_info(smr_contracts)') if r[1] != 'id']
+    act_cols = [r[1] for r in db.fetchall('PRAGMA table_info(smr_acts)') if r[1] not in ('id', 'contract_id')]
+    with db.transaction():
+        for (old,) in db.fetchall("SELECT id FROM smr_contracts WHERE party_type='person' ORDER BY id"):
+            row = db.fetchone(f"SELECT {','.join(cols)} FROM smr_contracts WHERE id=?", (old,))
+            new = db.execute(f"INSERT INTO ip_contracts({','.join(cols)}) VALUES({','.join('?' for _ in cols)})", row).lastrowid
+            db.execute('UPDATE smr_contracts SET estimate_id=NULL WHERE id=?', (old,))
+            doc_map = {('contract', old): ('contract', new)}
+            for (aid,) in db.fetchall('SELECT id FROM smr_acts WHERE contract_id=? ORDER BY id', (old,)):
+                arow = db.fetchone(f"SELECT {','.join(act_cols)} FROM smr_acts WHERE id=?", (aid,))
+                new_act = db.execute(f"INSERT INTO ip_acts(contract_id,{','.join(act_cols)}) VALUES(?,{','.join('?' for _ in act_cols)})", (new, *arow)).lastrowid
+                doc_map[('act', aid)] = ('act', new_act)
+            for (scope, ref), (nscope, nref) in doc_map.items():
+                for kind, path, h, at, linked in db.fetchall('SELECT kind,file_path,data_hash,generated_at,linked FROM smr_docs WHERE scope=? AND ref_id=?', (scope, ref)):
+                    db.execute('INSERT OR REPLACE INTO ip_docs(scope,ref_id,kind,file_path,data_hash,generated_at,linked) VALUES(?,?,?,?,?,?,?)', (nscope, nref, kind, path, h, at, linked))
+            db.execute("UPDATE payments SET owner_type='ip_contracts', owner_id=? WHERE owner_type='smr_contracts' AND owner_id=?", (new, old))
+            for table in ('notes', 'kanban_tasks'):
+                try:
+                    db.execute(f"UPDATE {table} SET link_table='ip_contracts', link_id=? WHERE link_table='smr_contracts' AND link_id=?", (new, old))
+                except Exception:
+                    pass
+            db.execute('DELETE FROM smr_acts WHERE contract_id=?', (old,))
+            db.execute('DELETE FROM smr_contracts WHERE id=?', (old,))
+        db.set_setting('smr_person_moved', '1')
 
 
 # --- ПРОСТЫЕ ДАННЫЕ --------------------------------------------------------------------------
@@ -145,6 +186,8 @@ def save_legal(db, values, lid=None, contact_rows=()):
             db.execute('UPDATE le_clients SET ' + ','.join(f'{k}=?' for k in keys) + ' WHERE id=?', (*[data[k] for k in keys], lid))
         else:
             lid = db.execute('INSERT INTO le_clients(' + ','.join(keys) + ') VALUES(' + ','.join('?' for _ in keys) + ')', [data[k] for k in keys]).lastrowid
+        if 'bank_id' in values:
+            db.execute('UPDATE le_clients SET bank_id=? WHERE id=?', (int(values['bank_id']) if values.get('bank_id') else None, lid))
         db.execute('DELETE FROM le_contacts WHERE client_id=?', (lid,))
         for c in contact_rows:
             if any(str(c.get(k) or '').strip() for k in ('name', 'phone', 'email')):
@@ -156,12 +199,12 @@ def save_legal(db, values, lid=None, contact_rows=()):
 def party(db, mod, c):
     """Контрагент договора в едином виде (юрлицо или физлицо)."""
     kind = 'legal' if mod == 'le' or c.get('party_type') == 'legal' else 'person'
-    p = dict(kind=kind, name='', full_name='', unp='', okpo='', legal_address='', postal_address='', bank='', bic='', account='', head_position='', head_name='',
+    p = dict(kind=kind, name='', full_name='', unp='', okpo='', legal_address='', postal_address='', bank='', bic='', bank_address='', account='', head_position='', head_name='',
              head_position_gen='', head_name_gen='', basis='', head_short='', contact='', phone='', email='', passport='', passport_issuer='', passport_date='', address='')
     if kind == 'legal':
         l = legal(db, c.get('client_id') if mod == 'le' else c.get('legal_id'))
         if l:
-            p.update({k: l.get(k) or '' for k in ('name', 'unp', 'okpo', 'legal_address', 'postal_address', 'bank', 'bic', 'account', 'head_position', 'head_name',
+            p.update({k: l.get(k) or '' for k in ('name', 'unp', 'okpo', 'legal_address', 'postal_address', 'bank', 'bic', 'bank_address', 'account', 'head_position', 'head_name',
                                                     'head_position_gen', 'head_name_gen', 'basis', 'phone', 'email')})
             p['full_name'] = l.get('full_name') or l.get('name') or ''
             p['address'] = l.get('legal_address') or l.get('address') or ''
@@ -265,8 +308,8 @@ def payments(db, mod, cid):
 
 # --- СМЕТА (только СМР) ----------------------------------------------------------------------
 
-def estimate_state(db, cid):
-    row = db.fetchone('SELECT estimate_id,est_rev_synced,est_synced_at FROM smr_contracts WHERE id=?', (cid,))
+def estimate_state(db, cid, mod='smr'):
+    row = db.fetchone(f"SELECT estimate_id,est_rev_synced,est_synced_at FROM {cfg(mod)['contracts']} WHERE id=?", (cid,))
     if not row or not row[0]:
         return 'none'
     if not row[2]:
@@ -274,26 +317,28 @@ def estimate_state(db, cid):
     return 'stale' if md.last_change(db, row[0]) > (row[1] or 0) else 'fresh'
 
 
-def sync_estimate(db, cid):
-    row = db.fetchone('SELECT estimate_id FROM smr_contracts WHERE id=?', (cid,))
+def sync_estimate(db, cid, mod='smr'):
+    table = cfg(mod)['contracts']
+    row = db.fetchone(f'SELECT estimate_id FROM {table} WHERE id=?', (cid,))
     if not row or not row[0]:
         raise ValueError('К договору не привязана смета')
     s = md.estimate_summary(db, row[0])
     if not s:
         raise ValueError('Смета не найдена')
-    db.execute('UPDATE smr_contracts SET amount=?, est_materials=?, est_works=?, est_rev_synced=?, est_synced_at=? WHERE id=?',
+    db.execute(f'UPDATE {table} SET amount=?, est_materials=?, est_works=?, est_rev_synced=?, est_synced_at=? WHERE id=?',
                (round(s['total'], 2), round(s['materials'], 2), round(s['works'], 2), md.last_change(db, row[0]), datetime.now().isoformat(timespec='seconds'), cid))
     return s
 
 
-def link_estimate(db, cid, eid):
+def link_estimate(db, cid, eid, mod='smr'):
     from . import payments_domain
-    for table in ('contracts', 'smr_contracts'):
-        other = db.fetchone(f'SELECT id FROM {table} WHERE estimate_id=?' + (' AND id<>?' if table == 'smr_contracts' else ''), (eid, cid) if table == 'smr_contracts' else (eid,))
+    table = cfg(mod)['contracts']
+    for other_table in ('contracts', 'gsv_projects', 'gsn_projects') + tuple(MODS[m]['contracts'] for m in ESTIMATE_MODS):
+        other = db.fetchone(f'SELECT id FROM {other_table} WHERE estimate_id=?' + (' AND id<>?' if other_table == table else ''), (eid, cid) if other_table == table else (eid,))
         if other:
             raise ValueError('Эта смета уже привязана к другому договору')
-    payments_domain.link(db, 'smr_contracts', cid, eid)
-    db.execute("UPDATE smr_contracts SET est_synced_at='', est_rev_synced=0 WHERE id=?", (cid,))
+    payments_domain.link(db, table, cid, eid)
+    db.execute(f"UPDATE {table} SET est_synced_at='', est_rev_synced=0 WHERE id=?", (cid,))
 
 
 # --- ТЕГИ -------------------------------------------------------------------------------------
@@ -306,7 +351,7 @@ STATIC_SOURCES = [
     ('payments.dates', 'Оплаты: даты (по строкам)'), ('payments.amounts', 'Оплаты: суммы (по строкам)'),
     ('party.name', 'Контрагент: краткое наименование / ФИО'), ('party.full_name', 'Контрагент: полное наименование / ФИО'), ('party.unp', 'Контрагент: УНП'),
     ('party.okpo', 'Контрагент: ОКПО'), ('party.legal_address', 'Контрагент: юридический адрес'), ('party.postal_address', 'Контрагент: почтовый адрес'),
-    ('party.bank', 'Контрагент: банк'), ('party.bic', 'Контрагент: БИК'), ('party.account', 'Контрагент: расчётный счёт'),
+    ('party.bank', 'Контрагент: банк'), ('party.bic', 'Контрагент: БИК'), ('party.bank_address', 'Контрагент: адрес банка'), ('party.account', 'Контрагент: расчётный счёт'),
     ('party.head_position', 'Контрагент: должность руководителя'), ('party.head_name', 'Контрагент: ФИО руководителя'),
     ('party.head_position_gen', 'Контрагент: должность руководителя (в родительном падеже)'), ('party.head_name_gen', 'Контрагент: ФИО руководителя (в родительном падеже)'),
     ('party.head_short', 'Контрагент: инициалы и фамилия (подпись)'), ('party.basis', 'Контрагент: действует на основании'), ('party.contact', 'Контрагент: контактное лицо'),
@@ -324,7 +369,7 @@ BUILTIN_TAGS = [
     ('СУММА_НДС', 'contract.vat', 'money'), ('СТАВКА_НДС', 'contract.vat_rate', 'text'), ('НДС_ПОЯСНЕНИЕ', 'contract.vat_note', 'text'),
     ('ОПЛАЧЕНО', 'payments.paid', 'money'), ('ОСТАТОК', 'payments.rest', 'money'),
     ('КОНТРАГЕНТ', 'party.full_name', 'text'), ('КОНТРАГЕНТ_КРАТКО', 'party.name', 'text'), ('УНП', 'party.unp', 'text'), ('ОКПО', 'party.okpo', 'text'),
-    ('АДРЕС_ЮРИДИЧЕСКИЙ', 'party.legal_address', 'text'), ('АДРЕС_ПОЧТОВЫЙ', 'party.postal_address', 'text'), ('БАНК', 'party.bank', 'text'), ('БИК', 'party.bic', 'text'),
+    ('АДРЕС_ЮРИДИЧЕСКИЙ', 'party.legal_address', 'text'), ('АДРЕС_ПОЧТОВЫЙ', 'party.postal_address', 'text'), ('БАНК', 'party.bank', 'text'), ('АДРЕС_БАНКА', 'party.bank_address', 'text'), ('БИК', 'party.bic', 'text'),
     ('РАСЧЕТНЫЙ_СЧЕТ', 'party.account', 'text'), ('ДОЛЖНОСТЬ_РУКОВОДИТЕЛЯ', 'party.head_position', 'text'), ('ФИО_РУКОВОДИТЕЛЯ', 'party.head_name', 'text'),
     ('ДОЛЖНОСТЬ_РУКОВОДИТЕЛЯ_РОД', 'party.head_position_gen', 'text'), ('ФИО_РУКОВОДИТЕЛЯ_РОД', 'party.head_name_gen', 'text'),
     ('ФИО_РУКОВОДИТЕЛЯ_СОКР', 'party.head_short', 'text'), ('ОСНОВАНИЕ', 'party.basis', 'text'), ('КОНТАКТНОЕ_ЛИЦО', 'party.contact', 'text'),
@@ -338,13 +383,13 @@ BUILTIN_TAGS = [
 
 
 def available_sources(db, mod):
-    return [s for s in STATIC_SOURCES if mod == 'smr' or not s[0].startswith('estimate.')]
+    return [s for s in STATIC_SOURCES if cfg(mod)['estimate'] or not s[0].startswith('estimate.')]
 
 
 def sync_tags(db, mod):
     table = cfg(mod)['tags']
     for name, source, fmt in BUILTIN_TAGS:
-        if source.startswith('estimate.') and mod != 'smr':
+        if source.startswith('estimate.') and not cfg(mod)['estimate']:
             continue
         if not db.fetchone(f'SELECT 1 FROM {table} WHERE auto_key=?', (f'b:{name}',)):
             base, n, nm = name, 1, name
@@ -554,8 +599,9 @@ def save_contract(db, mod, values, cid=None):
     data = {k: values.get(k) for k in fields if k in values}
     if mod == 'le' and not data.get('client_id'):
         raise ValueError('Выберите юрлицо')
-    if mod == 'smr':
-        kind = data.get('party_type') or 'person'
+    if mod != 'le':
+        kind = {'legal': 'legal', 'person': 'person'}.get(c['party']) or data.get('party_type') or 'person'
+        data['party_type'] = kind
         if kind == 'legal' and not data.get('legal_id'):
             raise ValueError('Выберите юрлицо')
         if kind == 'person' and not data.get('person_id'):
@@ -667,6 +713,6 @@ def check(db, mod, kind, ref_id):
             add('error', 'У акта нулевая сумма')
         if not (a.get('description') or '').strip():
             add('warn', 'Не заполнено описание работ в акте')
-    if mod == 'smr' and estimate_state(db, cid) == 'stale':
+    if cfg(mod)['estimate'] and estimate_state(db, cid, mod) == 'stale':
         add('error', 'Смета изменена после получения данных — обновите стоимость в карточке договора')
     return out

@@ -54,21 +54,21 @@ def test_client_and_contract_choice(db):
     e2 = ed.create_estimate(db, '', client=('legal', lid))
     assert ed.client_label(db, e2) == 'ООО Ромашка' and db.fetchone('SELECT title,client_id,client_name FROM estimates WHERE id=?', (e2,)) == ('Смета · ООО Ромашка', None, '')
     # клиент из карточки договора, договор не привязывается
-    cid = cc.save_contract(db, 'smr', dict(party_type='person', person_id=pid, contract_date='2026-05-01', amount=1))
-    e3 = ed.create_estimate(db, 'Под договор', contract=('smr_contracts', cid))
+    cid = cc.save_contract(db, 'ip', dict(party_type='person', person_id=pid, contract_date='2026-05-01', amount=1))
+    e3 = ed.create_estimate(db, 'Под договор', contract=('ip_contracts', cid))
     assert ed.client_label(db, e3) == 'Петров Пётр' and ed.contract_of(db, e3) is None
     # привязка позже
-    ed.link_contract(db, e3, 'smr_contracts', cid)
-    assert ed.contract_of(db, e3)['section'] == 'СМР'
+    ed.link_contract(db, e3, 'ip_contracts', cid)
+    assert ed.contract_of(db, e3)['section'] == 'СМР (ИП)'
     assert any(c[1] == cid for c in ed.contract_candidates(db, with_estimate=True))
     assert not any(c[1] == cid for c in ed.contract_candidates(db))        # у договора уже есть смета
     with pytest.raises(ValueError):
-        ed.link_contract(db, e1, 'smr_contracts', cid)
+        ed.link_contract(db, e1, 'ip_contracts', cid)
     with pytest.raises(ValueError):
         ed.set_client(db, e3, 'legal', lid)                                # клиент привязанной сметы задаётся в договоре
     # отвязка; с оплатами — запрещена
-    assert ed.unlink_contract(db, e3)['table'] == 'smr_contracts' and ed.contract_of(db, e3) is None
-    ed.link_contract(db, e3, 'smr_contracts', cid)
+    assert ed.unlink_contract(db, e3)['table'] == 'ip_contracts' and ed.contract_of(db, e3) is None
+    ed.link_contract(db, e3, 'ip_contracts', cid)
     payments_domain.add(db, 'estimates', e3, 10, '2026-05-02')
     with pytest.raises(ValueError):
         ed.unlink_contract(db, e3)

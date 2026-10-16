@@ -21,7 +21,7 @@ def test_person_dossier_collects_all_sections(db):
     mid = db.execute("INSERT INTO contracts(contract_number,contract_date,object_name,contract_amount,client_id,contract_signed) VALUES('01-02/26','2026-01-10','Дом',1000,?,1)", (pid,)).lastrowid
     gid = db.execute("INSERT INTO gsv_projects(pd_number,contract_number,contract_date,object_name,cost,client_id,contract_signed) VALUES('01-26 ГСВ','01-03/26','2026-02-01','Проект',300,?,0)", (pid,)).lastrowid
     nid = db.execute("INSERT INTO gsn_projects(title,contract_number,contract_date,contract_amount,client_id) VALUES('Газопровод','05-03/26','2026-03-01',2000,?)", (pid,)).lastrowid
-    sid = cc.save_contract(db, 'smr', dict(party_type='person', person_id=pid, contract_date='2026-04-01', amount=500, signed=1, object_name='Баня'))
+    sid = cc.save_contract(db, 'ip', dict(party_type='person', person_id=pid, contract_date='2026-04-01', amount=500, signed=1, object_name='Баня'))
     db.execute("INSERT INTO gsv_projects(pd_number,contract_number,client_id,cost) VALUES('02-26 ГСВ','x',?,999)", (other,))
     # сметы: одна внутри договора, одна свободная
     e1 = ed.create_estimate(db, 'Смета к договору', client=('person', pid))
@@ -29,7 +29,7 @@ def test_person_dossier_collects_all_sections(db):
     e2 = ed.create_estimate(db, 'Свободная смета', client=('person', pid))
     db.execute("UPDATE estimates SET total=400 WHERE id=?", (e2,))
     payments_domain.add(db, 'contracts', mid, 300, '2026-01-20', 'аванс')
-    payments_domain.add(db, 'smr_contracts', sid, 100, '2026-04-02')
+    payments_domain.add(db, 'ip_contracts', sid, 100, '2026-04-02')
     payments_domain.add(db, 'estimates', e2, 50, '2026-05-01')
     nd.save_note(db, 'Звонить после 18', '', '2026-01-11', ('crm.clients', pid))
     nd.save_note(db, 'Скидка на монтаж', '', '2026-01-12', ('contracts', mid))
@@ -37,13 +37,13 @@ def test_person_dossier_collects_all_sections(db):
     board.add_task(db, 'Сдать акт', link=('contracts', mid))
     board.add_task(db, 'Посторонняя задача')
     d = dc.client_dossier(db, 'person', pid)
-    assert {c['section'] for c in d['contracts']} == {'Монтаж ГСВ', 'Проекты ГСВ', 'Монтаж ГСН', 'СМР'} and len(d['contracts']) == 4
+    assert {c['section'] for c in d['contracts']} == {'Монтаж ГСВ', 'Проекты ГСВ', 'Монтаж ГСН', 'СМР (ИП)'} and len(d['contracts']) == 4
     assert d['totals']['contracts'] == 4 and d['totals']['unsigned'] == 1           # неподписан только проект ГСВ
     assert d['totals']['amount'] == Decimal(1000 + 300 + 2000 + 500 + 400)        # договоры + смета без договора, смета договора не дублируется
     assert d['totals']['paid'] == Decimal(300 + 100 + 50) and d['totals']['debt'] == d['totals']['amount'] - d['totals']['paid']
     assert [e['without_contract'] for e in d['estimates']] == [True, False]
     assert d['estimates'][1]['contract'].startswith('Монтаж ГСВ')
-    assert {p['section'] for p in d['payments']} == {'Монтаж ГСВ', 'СМР', 'Смета'} and len(d['payments']) == 3
+    assert {p['section'] for p in d['payments']} == {'Монтаж ГСВ', 'СМР (ИП)', 'Смета'} and len(d['payments']) == 3
     assert {n['title'] for n in d['notes']} == {'Звонить после 18', 'Скидка на монтаж'}
     assert [t['title'] for t in d['tasks']] == ['Сдать акт']
     assert d['info']['name'] == 'Петров Пётр'
@@ -62,7 +62,7 @@ def test_legal_dossier_and_widget(db, monkeypatch):
     nd.save_note(db, 'Согласовать скидку', '', '2026-03-03', ('le_contracts', c1))
     ed.create_estimate(db, 'Смета Ромашки', client=('legal', lid))
     d = dc.client_dossier(db, 'legal', lid)
-    assert {c['section'] for c in d['contracts']} == {'Юрлица', 'СМР', 'Проекты ГСВ'}
+    assert {c['section'] for c in d['contracts']} == {'Юрлица (прочие)', 'СМР (юрлица)', 'Проекты ГСВ'}
     assert d['totals']['amount'] == Decimal(1200 + 800 + 250) and d['totals']['paid'] == 200 and d['totals']['estimates'] == 1
     assert d['info']['lines'][0] == 'Общество' or 'УНП 123456789' in d['info']['lines']
     assert [n['title'] for n in d['notes']] == ['Согласовать скидку']
@@ -74,3 +74,25 @@ def test_legal_dossier_and_widget(db, monkeypatch):
     assert w.t_contracts.rowCount() == 3 and 'Договоров: <b>3</b>' in w.summary.text() and w.tabs.tabText(0) == 'Договоры (3)'
     with pytest.raises(ValueError):
         dc.client_dossier(db, 'legal', 99999)
+
+
+def test_receipt_sales_in_dossier(db):
+    from smetagaz import dossier_client as dc, payments_domain
+    pid = db.execute("INSERT INTO crm.clients(name) VALUES('Иванов')").lastrowid
+    sid = dc.save_sale(db, 'person', pid, dict(title='Котёл настенный', date='2026-05-01', amount=900, receipt='123'), paid_now=True)
+    other = dc.save_sale(db, 'person', pid, dict(title='Радиатор', date='2026-05-02', amount=100, receipt='124'))
+    d = dc.client_dossier(db, 'person', pid)
+    assert [s['title'] for s in d['sales']] == ['Радиатор', 'Котёл настенный']
+    assert d['totals']['amount'] == 1000 and d['totals']['paid'] == 900 and d['totals']['debt'] == 100
+    assert any(p['section'] == 'Продажа по чеку' and p['amount'] == 900 for p in d['payments'])
+    assert payments_domain.report(db, '2026-05-01', '2026-05-31')[0]['section'] == 'Продажа по чеку'
+    payments_domain.add(db, 'client_sales', other, 100, '2026-05-03')
+    assert dc.client_dossier(db, 'person', pid)['totals']['debt'] == 0
+    import pytest
+    with pytest.raises(Exception):
+        dc.delete_sale(db, sid)               # есть оплата — удалять нельзя
+    with pytest.raises(ValueError):
+        dc.save_sale(db, 'person', pid, dict(title='', date='2026-05-01', amount=5))
+    lid = db.execute("INSERT INTO le_clients(name) VALUES('ООО Ромашка')").lastrowid
+    dc.save_sale(db, 'legal', lid, dict(title='Фильтр', date='2026-05-04', amount=50))
+    assert dc.client_dossier(db, 'legal', lid)['totals']['debt'] == 50

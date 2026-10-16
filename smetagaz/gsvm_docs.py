@@ -60,6 +60,7 @@ STATIC_SOURCES = [
     ('estimate.works', 'Смета: стоимость работ'), ('payments.dates', 'Оплаты: даты (по строкам)'), ('payments.amounts', 'Оплаты: суммы (по строкам)'),
     ('payments.notes', 'Оплаты: примечания (по строкам)'), ('payments.paid', 'Оплачено всего'), ('payments.rest', 'Остаток к оплате'),
     ('joints.total', 'Количество стыков всего'),
+    *[(f'legal.{k}', label) for k, _t, label in __import__('smetagaz.legal_tags', fromlist=['x']).FIELDS],
 ]
 BUILTIN_TAGS = [
     ('НОМЕР_ДОГОВОРА', 'contract.number', 'text'), ('ДАТА_ДОГОВОРА', 'contract.date', 'date_long'), ('ДАТА_ДОГОВОРА_С', 'contract.date', 'date_short'),
@@ -74,6 +75,7 @@ BUILTIN_TAGS = [
     ('ОПЛАЧЕНО', 'payments.paid', 'money'), ('ОСТАТОК', 'payments.rest', 'money'),
     ('ДАТА_ОПЛАТЫ', 'payments.dates', 'text'), ('СУММА_ОПЛАТЫ', 'payments.amounts', 'text'), ('ПРИМЕЧАНИЕ_ОПЛАТЫ', 'payments.notes', 'text'),
     ('СТЫКОВ_ВСЕГО', 'joints.total', 'text'),
+    *[(tag, f'legal.{k}', 'text') for k, tag, _l in __import__('smetagaz.legal_tags', fromlist=['x']).FIELDS],
 ]
 
 
@@ -230,6 +232,11 @@ def context(db, cid):
         'payments.dates': '\n'.join(gd.date_short(d).rstrip('г.') for d, _a, _n in pays), 'payments.amounts': '\n'.join(money(a) for _d, a, _n in pays),
         'payments.notes': '\n'.join(n for _d, _a, n in pays), 'payments.paid': paid, 'payments.rest': cost - paid, 'joints.total': md.joints_total(db, cid),
     }
+    from . import legal_tags
+    ctx.update({f'legal.{k}': v for k, v in legal_tags.raw(db, c.get('le_client_id')).items()})
+    if c.get('le_client_id'):                      # заказчик — юрлицо: клиентские теги заполняются его данными
+        ctx.update({'client.name': ctx['legal.full_name'], 'client.short': ctx['legal.name'], 'client.address': ctx['legal.legal_address'], 'client.phone': ctx['legal.phone'],
+                    'client.passport': '', 'client.passport_date': '', 'client.passport_issuer': ''})
     eq = md.equipment(db, cid)
     for kind in equipment_kinds(db):
         mine = [e for e in eq if md._norm(e['kind']) == md._norm(kind)]

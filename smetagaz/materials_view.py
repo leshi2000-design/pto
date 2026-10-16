@@ -307,9 +307,9 @@ class MaterialsView(QWidget):
         self.table.setUpdatesEnabled(False)
         self.table.setRowCount(0)
         if self.selected_category_id is None:
-            rows = self.pager.fetch("SELECT id, name, item_type, unit, price, note, url FROM materials ORDER BY id DESC")
+            rows = self.pager.fetch("SELECT id, name, item_type, unit, price, note, url FROM materials ORDER BY name COLLATE NOCASE, id")
         else:
-            rows = self.pager.fetch("SELECT id, name, item_type, unit, price, note, url FROM materials WHERE category_id=? ORDER BY id DESC", (self.selected_category_id,))
+            rows = self.pager.fetch("SELECT id, name, item_type, unit, price, note, url FROM materials WHERE category_id=? ORDER BY name COLLATE NOCASE, id", (self.selected_category_id,))
 
         self.table.setRowCount(len(rows))
         for r, (mat_id, name, itype, unit, price, note, url) in enumerate(rows):

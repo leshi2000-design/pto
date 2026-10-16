@@ -257,6 +257,7 @@ TAGS = [
     ('ДАТА_ВЫДАЧИ', 'Дата выдачи паспорта'),
     ('КЕМ_ВЫДАН', 'Кем выдан паспорт'),
     ('АДРЕС_КЛИЕНТА', 'Адрес клиента'),
+    *[(tag, label) for _k, tag, label in __import__('smetagaz.legal_tags', fromlist=['x']).FIELDS],
     ('ОБЪЕКТ', 'Объект проектирования'),
     ('АДРЕС_ОБЪЕКТА', 'Адрес объекта'),
     ('ТУ', 'Номер и дата технических условий, выданных клиенту'),
@@ -351,6 +352,12 @@ def project_tags(db, pid):
         'СУММА_ОПЛАТЫ': '\n'.join(money(a) for _d, a, _n in pays),
         'ПРИМЕЧАНИЕ_ОПЛАТЫ': '\n'.join(n for _d, _a, n in pays),
     }
+    from . import legal_tags
+    legal = legal_tags.values(db, p.get('le_client_id'))
+    tags.update(legal)
+    if p.get('le_client_id'):                      # заказчик — юрлицо: клиентские теги заполняются его данными
+        tags.update({'КЛИЕНТ': legal['ЮРЛИЦО'], 'КЛИЕНТ_СОКР': legal['ЮРЛИЦО_КРАТКО'], 'АДРЕС_КЛИЕНТА': legal['АДРЕС_ЮРИДИЧЕСКИЙ'], 'ТЕЛЕФОН': legal['ТЕЛЕФОН_ЮРЛИЦА'],
+                     'ПАСПОРТ': '', 'КЕМ_ВЫДАН': '', 'ДАТА_ВЫДАЧИ': ''})
     return tags
 
 
@@ -441,25 +448,72 @@ def _replace_text(text, tags, normalize=None):
     return TAG_RE.sub(sub, text)
 
 
+_TAG_ANY = re.compile(r'\{\{([^{}\n]{1,60})\}\}|\{([^{}\n]{1,60})\}')
+
+
+def _paragraph_runs(paragraph):
+    """Все прямые и вложенные (гиперссылки, исправления) прогоны абзаца в порядке следования в тексте."""
+    from docx.oxml.ns import qn
+    from docx.text.run import Run
+    out = []
+    for child in paragraph._p.iter():
+        if child.tag == qn('w:r'):
+            # прогон вложенного абзаца (надпись, вложенная таблица) обработается вместе с тем абзацем
+            parent = child.getparent()
+            while parent is not None and parent.tag != qn('w:p'):
+                parent = parent.getparent()
+            if parent is paragraph._p:
+                out.append(Run(child, paragraph))
+    return out
+
+
 def _fill_paragraph(paragraph, tags, normalize=None):
-    text = ''.join(run.text for run in paragraph.runs)
-    if '{' not in text:
+    """Подставляет теги, сохраняя оформление шаблона: текст вне тегов не трогается, а вместо тега остаётся оформление его первого символа
+    (даже если Word разбил тег на несколько прогонов с разным шрифтом)."""
+    normalize = normalize or tag_key
+    runs = _paragraph_runs(paragraph)
+    if not runs:
         return
-    new = _replace_text(text, tags, normalize)
-    if new == text or not paragraph.runs:
+    texts = [r.text for r in runs]
+    full = ''.join(texts)
+    if '{' not in full:
         return
-    first = paragraph.runs[0]
-    for run in paragraph.runs[1:]:
-        run.text = ''
-    first.text = new
-
-
+    owner = []                                  # для каждого символа — номер прогона
+    for i, t in enumerate(texts):
+        owner.extend([i] * len(t))
+    edits = []
+    for m in _TAG_ANY.finditer(full):
+        key = normalize(m.group(1) or m.group(2))
+        if key in tags:
+            edits.append((m.start(), m.end(), str(tags[key])))
+    if not edits:
+        return
+    touched = set()
+    for start, end, value in reversed(edits):
+        first, last = owner[start], owner[end - 1]
+        offset_first = sum(len(t) for t in texts[:first])
+        offset_last = sum(len(t) for t in texts[:last])
+        head = texts[first][:start - offset_first]
+        tail = texts[last][end - offset_last:]
+        if first == last:
+            texts[first] = head + value + tail
+        else:
+            texts[first] = head + value
+            for k in range(first + 1, last):
+                texts[k] = ''
+            texts[last] = tail
+        touched.update(range(first, last + 1))
+    for i in touched:
+        runs[i].text = texts[i]
 def _walk_paragraphs(container):
-    yield from container.paragraphs
-    for table in container.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                yield from _walk_paragraphs(cell)
+    """Все абзацы части документа: основной текст, таблицы (в том числе вложенные), надписи, элементы управления содержимым."""
+    from docx.oxml.ns import qn
+    from docx.text.paragraph import Paragraph
+    element = getattr(container, '_element', None)
+    if element is None:
+        element = container.element
+    for p in list(element.iter(qn('w:p'))):
+        yield Paragraph(p, container)
 
 
 def render_docx(template, out_path, tags, normalize=None):
@@ -468,7 +522,7 @@ def render_docx(template, out_path, tags, normalize=None):
     for paragraph in _walk_paragraphs(doc):
         _fill_paragraph(paragraph, tags, normalize)
     for section in doc.sections:
-        for part in (section.header, section.footer):
+        for part in (section.header, section.footer, section.first_page_header, section.first_page_footer, section.even_page_header, section.even_page_footer):
             for paragraph in _walk_paragraphs(part):
                 _fill_paragraph(paragraph, tags, normalize)
     _save_atomic(lambda p: doc.save(p), out_path)

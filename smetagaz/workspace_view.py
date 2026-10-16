@@ -166,7 +166,7 @@ class WorkspaceView(QWidget):
                 clause,found=search_clause(self.query.text(),['name','phone','address'],['phone']);where=' WHERE '+clause;params=found
         all_cols=[r[1] for r in db.fetchall('PRAGMA '+('crm.table_info(clients)' if source=='crm.clients' else f'table_info({source})'))]
         self.filters.set_columns(all_cols)
-        query,params=self.filters.apply(f'SELECT * FROM {source}{where} ORDER BY id DESC',params)
+        query,params=self.filters.apply(f'SELECT * FROM {source}{where} ORDER BY {ORDER_BY.get(source, "id DESC")}',params)
         rows=db.fetchall('SELECT '+','.join(cols)+' FROM ('+query+') LIMIT ? OFFSET ?',(*params,self.page_size+1,self.offset))
         self.next.setEnabled(len(rows)>self.page_size);rows=rows[:self.page_size];self.prev.setEnabled(self.offset>0)
         self.table.setUpdatesEnabled(False);self.table.setColumnCount(len(cols));self.table.setHorizontalHeaderLabels([LABELS.get(k,k) for k in cols]);self.table.setRowCount(len(rows))
@@ -207,6 +207,13 @@ class WorkspaceView(QWidget):
                 StockExportDialog(self.source.currentData(),rid,self).exec()
             else:ExportDialog(self.source.currentData(),rid,self).exec()
 
+ORDER_BY = {                          # записи упорядочены по номеру или дате, а не по порядку создания
+    'contracts': "coalesce(year_num,0) DESC, coalesce(seq_num,0) DESC, id DESC", 'gsv_projects': "coalesce(year_num,0) DESC, coalesce(seq_num,0) DESC, id DESC",
+    'gsn_projects': "coalesce(contract_date,'') DESC, contract_number DESC, id DESC", 'estimates': "coalesce(date,'') DESC, id DESC",
+    'crm.clients': "name COLLATE NOCASE, id", 'welders': "name COLLATE NOCASE, id", 'writeoffs': "title COLLATE NOCASE, id", 'materials': "name COLLATE NOCASE, id",
+}
+
+
 def open_record(table,rid,parent=None):
     if table=='estimates':
         from .estimate_editor import EstimateEditorDialog
@@ -218,9 +225,10 @@ def open_record(table,rid,parent=None):
     elif table=='gsv_projects':
         from .gsv_view import ProjectEditDialog
         ProjectEditDialog(rid,parent=parent).exec()
-    elif table in ('le_contracts','smr_contracts'):
+    elif table in ('le_contracts','smr_contracts','to_contracts','ip_contracts'):
         from .counterparty_ui import ContractDialog
-        ContractDialog('le' if table=='le_contracts' else 'smr',rid,parent).exec()
+        from .contracts_core import CONTRACT_TABLES
+        ContractDialog(CONTRACT_TABLES[table],rid,parent).exec()
     elif table=='materials':
         from .material_card import MaterialCardDialog
         MaterialCardDialog(rid,parent).exec()

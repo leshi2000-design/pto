@@ -19,7 +19,8 @@ for i,b in enumerate(w.tabs_buttons):w.switch_tab(i,b);app.processEvents()
 from smetagaz.materials_view import MaterialsView
 from smetagaz.executive_view import CertificatesTab
 from smetagaz.dialogs_common import MaterialSelectionDialog
-for test_view in [MaterialsView(),CertificatesTab(),MaterialSelectionDialog()]:
+picker=MaterialSelectionDialog();assert picker.table.rowCount()==420 and picker.tree.topLevelItem(0).text(0).startswith('Весь справочник (420)')       # выбор из справочника — по дереву разделов
+for test_view in [MaterialsView(),CertificatesTab()]:
  assert test_view.table.rowCount()==200
  test_view.pager.page(1);assert test_view.table.rowCount()==200
  test_view.pager.page(1);assert test_view.table.rowCount()==20

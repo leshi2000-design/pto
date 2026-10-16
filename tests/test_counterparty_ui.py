@@ -51,14 +51,14 @@ def test_dialogs_and_registries(env):
     d.make('statement')
     assert cc.doc_state(db, 'le', 'statement', act) == 'fresh'
     pid = db.execute("INSERT INTO crm.clients(name) VALUES('Петров')").lastrowid
-    s = ui.ContractDialog('smr')
+    s = ui.ContractDialog('ip')
     s.set_party('person', pid)
     s.amount.setValue(10)
-    assert s.save() and s.number.text().startswith('01-05/')
+    assert s.save() and s.number.text().startswith('01-07/')
     ui.ContractDialog.open_estimate = lambda self: None
     s.create_estimate()
-    assert cc.estimate_state(db, s.contract_id) == "unsynced"
-    for mod in ('le', 'smr'):
+    assert cc.estimate_state(db, s.contract_id, "ip") == "unsynced"
+    for mod in ('le', 'smr', 'to', 'ip'):
         for cls in (ui.ContractsRegistry, ui.ActsRegistry, ui.TemplatesTab):
             cls(mod)
     ui.LegalClientsRegistry()
@@ -87,10 +87,11 @@ def test_legal_customer_in_gsv_cards(env, monkeypatch):
     row = db.fetchone('SELECT le_client_id,party_name,client_name,client_id FROM gsv_projects WHERE id=?', (dlg.project_id,))
     assert row == (lid, 'ООО Ромашка', '', None)
     assert db.fetchone('SELECT count(*) FROM crm.clients')[0] == before
-    dlg.customer.open_contract()
-    c = db.fetchone("SELECT id,client_id,amount FROM le_contracts WHERE source_type='gsv_projects' AND source_id=?", (dlg.project_id,))
-    assert c[1] == lid and c[2] == 500
-    assert cc.contract_from_source(db, 'gsv_projects', dlg.project_id) == (c[0], False)
+    # документы заказчика-юрлица формируются в самой карточке; реквизиты юрлица доступны как теги
+    assert all(dlg.doc_make[k].isEnabled() for k in dlg.doc_make)
+    from smetagaz import gsv_project_domain as gpd
+    tags = gpd.project_tags(db, dlg.project_id)
+    assert tags['КЛИЕНТ'] == 'ООО Ромашка' and tags['УНП'] == '123456789' and tags['ФИО_РУКОВОДИТЕЛЯ'] == 'Иванов И.И.' and tags['ПАСПОРТ'] == ''
     reopened = gv.ProjectEditDialog(dlg.project_id)
     assert reopened.customer.is_legal() and reopened.customer.legal_id() == lid
     card = cardm.ContractCardDialog()
@@ -166,14 +167,14 @@ def test_sidebar_sections_notes_and_gsn_catalog(env, monkeypatch):
     w = mw.MainWindow()
     names = [b.text() for b in w.tabs_buttons]
     assert names[0] == 'Сегодня' and names[-1] == 'Настройки'
-    order = ['Проекты ГСВ', 'Монтаж ГСВ', 'Монтаж ГСН', 'СМР', 'Клиенты', 'Юрлица', 'Сварщики', 'Списание', 'Калькуляторы', 'Статистика']
+    order = ['Проекты ГСВ', 'Монтаж ГСВ', 'Монтаж ГСН', 'СМР (ИП)', 'Клиенты', 'Справочник юрлиц', 'СМР (юрлица)', 'ТО (юрлица)', 'Сварщики', 'Списание', 'Калькуляторы', 'Статистика']
     assert [n for n in names if n in order] == order
     assert names[-4:] == ['Справочники ГСВ', 'Справочник ГСН', 'Справочник', 'Настройки']
     assert not hasattr(w, 'nav_groups') and not hasattr(w, 'toggle_group')            # сворачиваемых деревьев нет
     from PyQt6.QtWidgets import QLabel, QFrame
     headers = [l.text() for l in w.findChildren(QLabel, 'navSection')]
-    assert headers == ['УСЛУГИ', 'СМЕТЫ', 'КОНТРАГЕНТЫ', 'ДОПОЛНИТЕЛЬНО', 'СПРАВОЧНИКИ']
-    assert len(w.findChildren(QFrame, 'navDivider')) == 6                              # линия перед каждым разделом, кроме первого
+    assert headers == ['УСЛУГИ', 'СМЕТЫ', 'ЮРЛИЦА', 'ДОПОЛНИТЕЛЬНО', 'СПРАВОЧНИКИ']
+    assert len(w.findChildren(QFrame, 'navDivider')) == 7                              # линия перед каждым разделом, кроме первого
     for i, b in enumerate(w.tabs_buttons):
         w.switch_tab(i, b)
     # заметки в «Сегодня»
@@ -211,14 +212,14 @@ def test_estimates_ui(env, monkeypatch, tmp_path):
     monkeypatch.setattr(QMessageBox, 'question', lambda *a, **k: QMessageBox.StandardButton.Yes)
     pid = db.execute("INSERT INTO crm.clients(name,phone) VALUES('Петров Пётр','+375')").lastrowid
     lid = cc.save_legal(db, dict(name='ООО Ромашка'))
-    cid = cc.save_contract(db, 'smr', dict(party_type='person', person_id=pid, contract_date='2026-05-01', amount=1))
+    cid = cc.save_contract(db, 'ip', dict(party_type='person', person_id=pid, contract_date='2026-05-01', amount=1))
     # диалог создания: по умолчанию без договора
     d = eu.NewEstimateDialog()
     d.cmb_person.setCurrentIndex(d.cmb_person.findData(pid))
     assert d.values() == ('', ('person', pid), None, False)
-    d.contract = ('smr_contracts', cid)
+    d.contract = ('ip_contracts', cid)
     d.rb_contract.setChecked(True)
-    assert d.values()[2] == ('smr_contracts', cid) and d.values()[3] is False
+    assert d.values()[2] == ('ip_contracts', cid) and d.values()[3] is False
     d.chk_link.setChecked(True)
     assert d.values()[3] is True
     d.rb_none.setChecked(True)
@@ -238,9 +239,9 @@ def test_estimates_ui(env, monkeypatch, tmp_path):
     editor = ee.EstimateEditorDialog(eid, 'Баня')
     assert not hasattr(editor, 'chk_vat') and not hasattr(editor, 'chk_social') and not hasattr(editor, 'show_item_profits')
     assert editor.grand_total == 200
-    monkeypatch.setattr(ee.EstimateEditorDialog, 'pick_contract', lambda self, with_estimate, title: ('smr_contracts', cid))
+    monkeypatch.setattr(ee.EstimateEditorDialog, 'pick_contract', lambda self, with_estimate, title: ('ip_contracts', cid))
     editor.link_contract()
-    assert ed.contract_of(db, eid)['section'] == 'СМР' and 'Договор:' in editor.lbl_contract.text()
+    assert ed.contract_of(db, eid)['section'] == 'СМР (ИП)' and 'Договор:' in editor.lbl_contract.text()
     editor.fill_contract_menu()
     assert [a.text() for a in editor.contract_menu.actions()][-1] == 'Отвязать договор'
     editor.unlink_contract()
@@ -279,7 +280,7 @@ def test_paged_registries(env):
     for i in range(130):
         cid = cc.save_contract(db, 'le', dict(client_id=lid, direction='Монтажные работы', contract_date='2026-03-01', amount=10, object_name=f'Объект {i}', signed=i % 2))
         cc.save_act(db, 'le', dict(contract_id=cid, act_date='2026-03-02', amount=5, signed=1))
-        cc.save_contract(db, 'smr', dict(party_type='person', person_id=pid, contract_date='2026-03-01', amount=7))
+        cc.save_contract(db, 'ip', dict(party_type='person', person_id=pid, contract_date='2026-03-01', amount=7))
         nd.save_note(db, f'Заметка {i}', 'текст', '2026-03-0%d' % (i % 9 + 1), ('crm.clients', pid) if i % 2 else None)
     reg = ui.ContractsRegistry('le')
     assert reg.table.rowCount() == 100 and reg.pager.total == 130 and reg.pager.next.isEnabled()
@@ -291,7 +292,7 @@ def test_paged_registries(env):
     reg.search.setText('')
     reg.cmb_signed.setCurrentIndex(1)
     assert reg.pager.total == 65
-    smr = ui.ContractsRegistry('smr')
+    smr = ui.ContractsRegistry('ip')
     assert smr.table.item(0, 2).text() == 'Петров Пётр' and smr.pager.total == 130
     acts = ui.ActsRegistry('le')
     assert acts.pager.total == 130 and acts.table.rowCount() == 100 and acts.table.item(0, 3).text() == 'ООО Ромашка'
@@ -337,15 +338,15 @@ def test_new_contract_tabs_are_clickable(env, monkeypatch):
     db, ui = env
     from PyQt6.QtWidgets import QMessageBox
     lid = cc.save_legal(db, dict(name='ООО Ромашка', unp='123456789'))
-    for mod in ('le', 'smr'):
+    for mod in ('le', 'smr', 'to', 'ip'):
         d = ui.ContractDialog(mod)
         assert all(d.tabs.isTabEnabled(i) for i in range(d.tabs.count()))
         d.tabs.setCurrentIndex(1)                  # данные не заполнены — остаёмся на «Договор»
         assert d.tabs.currentIndex() == 0 and not d.contract_id
-        if mod == 'le':
-            d.set_party('legal', lid)
+        if mod == 'ip':
+            d.set_party('person', db.execute("INSERT INTO crm.clients(name) VALUES('Клиент ИП')").lastrowid)
         else:
-            d.rb_legal.setChecked(True); d.toggle_party(); d.set_party('legal', lid)
+            d.set_party('legal', lid)
         d.amount.setValue(500); d.subject.setText('Работы')
         d.tabs.setCurrentIndex(2)                  # заполнено — договор сохраняется и вкладка открывается
         assert d.contract_id and d.tabs.currentIndex() == 2

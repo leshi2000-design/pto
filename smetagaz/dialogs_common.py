@@ -183,112 +183,181 @@ class LegacyPaymentDialog(QDialog):
             db.execute("DELETE FROM payments WHERE id=?", (pid,))
             self.load_data()
 
-class WorkSelectionDialog(QDialog):
+class CatalogPickerDialog(QDialog):
+    """Выбор материала или работы по дереву справочника: слева папки (разделы справочника), справа позиции выбранной папки (с вложенными).
+    Поиск ищет по всему справочнику выбранного вида."""
+    ITEM_TYPE = 'Материал'
+    TITLE = 'Справочник · материалы'
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Выбор монтажной работы")
-        self.resize(450, 150)
-        self.selected_work = None
-        layout = QVBoxLayout(self)
-        self.combo_work = QComboBox()
-        self.works = db.fetchall("""SELECT name, unit, price, purchase_price,
-                                     labor_hours, hourly_rate, overhead_pct, profit_pct, other_costs
-                                     FROM materials WHERE item_type='Работа' ORDER BY name""")
-        for w_name, w_unit, w_price, w_purch, labor_hours, hourly_rate, overhead_pct, profit_pct, other_costs in self.works:
-            val = float(w_price) if w_price is not None else 0.0
-            p_val = float(w_purch) if w_purch is not None else 0.0
-            data = (w_name, w_unit, val, p_val, labor_hours or 0.0, hourly_rate or 0.0, overhead_pct or 0.0, profit_pct or 0.0, other_costs or 0.0)
-            self.combo_work.addItem(f"{w_name} ({val:,.2f} руб.)", data)
-        layout.addWidget(QLabel("Выберите работу:"))
-        layout.addWidget(self.combo_work)
-
-        btn_bar = QHBoxLayout()
-        btn_select = QPushButton("Добавить")
-        btn_select.setProperty("type", "primary")
-        btn_cancel = QPushButton("Отмена")
-        btn_select.clicked.connect(self.select_work)
-        btn_cancel.clicked.connect(self.reject)
-        btn_bar.addStretch()
-        btn_bar.addWidget(btn_cancel)
-        btn_bar.addWidget(btn_select)
-        layout.addLayout(btn_bar)
-
-    def select_work(self):
-        data = self.combo_work.currentData()
-        if data:
-            self.selected_work = {"name": data[0], "unit": data[1], "price": data[2], "purchase_price": data[3],
-                                   "labor_hours": data[4], "hourly_rate": data[5], "overhead_pct": data[6],
-                                   "profit_pct": data[7], "other_costs": data[8]}
-            self.accept()
-
-class MaterialSelectionDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.pager=RegistryPager(self,self.load_materials)
-        self.setWindowTitle("Справочник (Только материалы)")
-        self.resize(850, 500)
-        self.selected_material = None
-
+        from PyQt6.QtWidgets import QTreeWidget, QTreeWidgetItem, QSplitter, QHeaderView
+        self.setWindowTitle(self.TITLE)
+        self.resize(1050, 600)
+        self.selected = None
         layout = QVBoxLayout(self)
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Поиск...")
-        self.search_input.textChanged.connect(self.filter_materials)
+        self.search_input.setPlaceholderText('Поиск по всему справочнику…')
+        self.search_input.textChanged.connect(self.load_items)
         layout.addWidget(self.search_input)
-
-        self.table = QTableWidget()
-        self.table.setColumnCount(4)
-        self.table.setHorizontalHeaderLabels(["Наименование", "Ед.", "Цена", "Примечание"])
+        split = QSplitter(Qt.Orientation.Horizontal)
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabels(['Разделы справочника'])
+        self.tree.itemSelectionChanged.connect(self.load_items)
+        split.addWidget(self.tree)
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(['Наименование', 'Ед.', 'Цена', 'Примечание'])
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
-        self.table_manager = SmartTableManager(self.table, main_col=0, default_widths={1: 85, 2: 130, 3: 200})
-        layout.addWidget(self.table)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.table.setColumnWidth(1, 70)
+        self.table.setColumnWidth(2, 110)
+        self.table.setColumnWidth(3, 200)
+        split.addWidget(self.table)
+        split.setSizes([300, 750])
+        layout.addWidget(split, 1)
+        bar = QHBoxLayout()
+        self.counter = QLabel('')
+        bar.addWidget(self.counter, 1)
+        cancel = QPushButton('Отмена')
+        cancel.clicked.connect(self.reject)
+        pick = QPushButton('Выбрать')
+        pick.setProperty('type', 'primary')
+        pick.clicked.connect(self.pick)
+        bar.addWidget(cancel)
+        bar.addWidget(pick)
+        layout.addLayout(bar)
+        self.table.doubleClicked.connect(self.pick)
+        self.build_tree()
+        self.load_items()
 
-        btn_layout = QHBoxLayout()
-        btn_select = QPushButton("Выбрать")
-        btn_select.setProperty("type", "primary")
-        btn_select.clicked.connect(self.select_material)
-        btn_layout.addStretch()
-        btn_layout.addWidget(btn_select)
-        layout.addLayout(btn_layout)
+    # --- дерево
+    def build_tree(self):
+        from PyQt6.QtWidgets import QTreeWidgetItem
+        cats = db.fetchall('SELECT id,name,parent_id FROM categories ORDER BY name COLLATE NOCASE')
+        counts = dict(db.fetchall('SELECT coalesce(category_id,0),count(*) FROM materials WHERE item_type=? GROUP BY coalesce(category_id,0)', (self.ITEM_TYPE,)))
+        children = {}
+        for cid, name, parent in cats:
+            children.setdefault(parent, []).append((cid, name))
 
-        self.load_materials()
-        self.table.doubleClicked.connect(self.select_material)
+        def subtree_ids(cid):
+            ids = [cid]
+            for child, _n in children.get(cid, []):
+                ids += subtree_ids(child)
+            return ids
+        self.tree.clear()
+        total = sum(counts.values())
+        root = QTreeWidgetItem([f'Весь справочник ({total})'])
+        root.setData(0, Qt.ItemDataRole.UserRole, 'all')
+        self.tree.addTopLevelItem(root)
 
-    def load_materials(self):
+        def add(parent_item, cid, name):
+            ids = subtree_ids(cid)
+            n = sum(counts.get(i, 0) for i in ids)
+            if not n:
+                return
+            node = QTreeWidgetItem([f'{name} ({n})'])
+            node.setData(0, Qt.ItemDataRole.UserRole, ids)
+            parent_item.addChild(node)
+            for child, cname in children.get(cid, []):
+                add(node, child, cname)
+        known = {c[0] for c in cats}
+        for cid, name in children.get(None, []):
+            add(root, cid, name)
+        for parent, items in children.items():           # папки, чей родитель удалён, показываем наверху
+            if parent is not None and parent not in known:
+                for cid, name in items:
+                    add(root, cid, name)
+        if counts.get(0):
+            node = QTreeWidgetItem([f'Без раздела ({counts[0]})'])
+            node.setData(0, Qt.ItemDataRole.UserRole, 'none')
+            root.addChild(node)
+        root.setExpanded(True)
+        self.tree.setCurrentItem(root)
+
+    # --- позиции
+    def columns(self):
+        return 'id, name, unit, price, note, purchase_price'
+
+    def load_items(self, *_):
+        text = self.search_input.text().strip().casefold()
+        where, params = ['item_type=?'], [self.ITEM_TYPE]
+        node = self.tree.currentItem()
+        scope = node.data(0, Qt.ItemDataRole.UserRole) if node else 'all'
+        if not text:
+            if scope == 'none':
+                where.append('category_id IS NULL')
+            elif isinstance(scope, list):
+                where.append(f"category_id IN ({','.join('?' for _ in scope)})")
+                params += scope
+        else:
+            where.append("(LOWER(name) LIKE ? OR LOWER(coalesce(note,'')) LIKE ?)")
+            params += [f'%{text}%'] * 2
+        rows = db.fetchall(f"SELECT {self.columns()} FROM materials WHERE {' AND '.join(where)} ORDER BY name COLLATE NOCASE, id LIMIT 1500", tuple(params))
+        self.rows = rows
         self.table.setUpdatesEnabled(False)
-        self.table.setRowCount(0)
-        rows = self.pager.fetch("SELECT id, name, unit, price, note, purchase_price FROM materials WHERE item_type='Материал' AND (LOWER(name) LIKE ? OR LOWER(note) LIKE ?) ORDER BY id DESC",("%"+self.search_input.text().casefold()+"%",)*2)
         self.table.setRowCount(len(rows))
-        for r, (mat_id, name, unit, price, note, purch) in enumerate(rows):
-            item_name = QTableWidgetItem(name or "")
-            item_name.setData(Qt.ItemDataRole.UserRole, mat_id)
-            item_name.setData(Qt.ItemDataRole.UserRole + 1, float(purch or 0.0))
-            self.table.setItem(r, 0, item_name)
-
-            i_unit = QTableWidgetItem(unit or "")
-            i_unit.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.table.setItem(r, 1, i_unit)
-
-            val = float(price) if price is not None else 0.0
-            i_price = QTableWidgetItem(f"{val:,.2f}".replace(",", " "))
-            i_price.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self.table.setItem(r, 2, i_price)
-
-            self.table.setItem(r, 3, QTableWidgetItem(note or ""))
+        for r, row in enumerate(rows):
+            name, unit, price, note = row[1], row[2], row[3], row[4]
+            item = QTableWidgetItem(name or '')
+            item.setData(Qt.ItemDataRole.UserRole, row[0])
+            self.table.setItem(r, 0, item)
+            u = QTableWidgetItem(unit or '')
+            u.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.table.setItem(r, 1, u)
+            p = QTableWidgetItem(f'{float(price or 0):,.2f}'.replace(',', ' '))
+            p.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.table.setItem(r, 2, p)
+            self.table.setItem(r, 3, QTableWidgetItem(note or ''))
         self.table.setUpdatesEnabled(True)
+        self.counter.setText(f'Позиций: {len(rows)}' + (' (показаны первые 1500)' if len(rows) >= 1500 else ''))
 
-    def filter_materials(self, text):
-        self.load_materials()
+    def build_selection(self, row):
+        return {'name': row[1], 'unit': row[2] or '', 'price': float(row[3] or 0), 'purchase_price': float(row[5] or 0)}
 
-    def select_material(self):
-        curr = self.table.currentRow()
-        if curr >= 0 and not self.table.isRowHidden(curr):
-            price_text = self.table.item(curr, 2).text().replace(" ", "").replace(",", ".")
-            price_val = float(price_text) if price_text else 0.0
-            purch_val = self.table.item(curr, 0).data(Qt.ItemDataRole.UserRole + 1)
-            self.selected_material = {"name": self.table.item(curr, 0).text(), "unit": self.table.item(curr, 1).text(), "price": price_val, "purchase_price": purch_val}
+    def pick(self, *_):
+        r = self.table.currentRow()
+        if 0 <= r < len(self.rows):
+            self.selected = self.build_selection(self.rows[r])
+            self.finish()
             self.accept()
+
+    def finish(self):
+        pass
+
+
+class WorkSelectionDialog(CatalogPickerDialog):
+    ITEM_TYPE = 'Работа'
+    TITLE = 'Справочник · работы'
+
+    def __init__(self, parent=None):
+        self.selected_work = None
+        super().__init__(parent)
+
+    def columns(self):
+        return 'id, name, unit, price, note, purchase_price, labor_hours, hourly_rate, overhead_pct, profit_pct, other_costs'
+
+    def build_selection(self, row):
+        base = super().build_selection(row)
+        base.update(labor_hours=row[6] or 0.0, hourly_rate=row[7] or 0.0, overhead_pct=row[8] or 0.0, profit_pct=row[9] or 0.0, other_costs=row[10] or 0.0)
+        return base
+
+    def finish(self):
+        self.selected_work = self.selected
+
+
+class MaterialSelectionDialog(CatalogPickerDialog):
+    ITEM_TYPE = 'Материал'
+    TITLE = 'Справочник · материалы'
+
+    def __init__(self, parent=None):
+        self.selected_material = None
+        super().__init__(parent)
+
+    def finish(self):
+        self.selected_material = self.selected
+
 
 def PaymentDialog(est_id,current_total,parent=None):
     from .payments_view import PaymentsDialog

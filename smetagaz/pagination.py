@@ -19,7 +19,10 @@ class RegistryPager:
         self.prev.clicked.connect(lambda:self.page(-1));self.next.clicked.connect(lambda:self.page(1))
         QTimer.singleShot(0,self.attach)
     def attach(self):
-        if self.owner.layout():self.owner.layout().addWidget(self.bar)
+        try:
+            if self.owner.layout():self.owner.layout().addWidget(self.bar)
+        except RuntimeError:        # окно уже закрыто и удалено до срабатывания отложенного вызова
+            pass
     def page(self,direction):self.offset=max(0,self.offset+direction*self.size);self.callback()
     def fetch(self,query,params=()):
         columns=[c[0] for c in db.execute('SELECT * FROM ('+query+') LIMIT 0',params).description]

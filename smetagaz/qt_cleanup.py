@@ -14,7 +14,7 @@ def shutdown(app=None):
             return
         for w in list(app.topLevelWidgets()):
             try:
-                w.close()
+                w.hide()            # не close(): обработчики закрытия окон к этому моменту могут обращаться к уже закрытой базе
                 w.deleteLater()
             except RuntimeError:
                 pass

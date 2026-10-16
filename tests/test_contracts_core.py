@@ -48,20 +48,25 @@ def test_numbers_and_documents(db, tmp_path):
 def test_smr_person_and_legal_with_estimate(db):
     lid = make_legal(db)
     pid = db.execute("INSERT INTO crm.clients(name,phone) VALUES('Петров Пётр','+375')").lastrowid
-    c1 = cc.save_contract(db, 'smr', dict(party_type='person', person_id=pid, contract_date='2026-05-01', amount=500))
+    c1 = cc.save_contract(db, 'ip', dict(party_type='person', person_id=pid, contract_date='2026-05-01', amount=500))
     c2 = cc.save_contract(db, 'smr', dict(party_type='legal', legal_id=lid, contract_date='2026-05-02'))
-    assert db.fetchone('SELECT contract_number FROM smr_contracts WHERE id=?', (c2,))[0] == '02-05/26'
-    assert cc.party(db, 'smr', cc.contract(db, 'smr', c1))['name'] == 'Петров Пётр'
+    c3 = cc.save_contract(db, 'to', dict(legal_id=lid, contract_date='2026-05-03'))
+    assert db.fetchone('SELECT contract_number FROM smr_contracts WHERE id=?', (c2,))[0] == '01-05/26'
+    assert db.fetchone('SELECT contract_number FROM to_contracts WHERE id=?', (c3,))[0] == '01-06/26'
+    assert db.fetchone('SELECT contract_number FROM ip_contracts WHERE id=?', (c1,))[0] == '01-07/26'
+    assert cc.party(db, 'ip', cc.contract(db, 'ip', c1))['name'] == 'Петров Пётр'
     eid = db.execute("INSERT INTO estimates(title,total) VALUES('Смета',700)").lastrowid
-    cc.link_estimate(db, c1, eid)
-    assert cc.estimate_state(db, c1) == 'unsynced'
-    cc.sync_estimate(db, c1)
-    assert cc.estimate_state(db, c1) == 'fresh' and cc.contract(db, 'smr', c1)['amount'] == 700
+    cc.link_estimate(db, c1, eid, 'ip')
+    assert cc.estimate_state(db, c1, 'ip') == 'unsynced'
+    cc.sync_estimate(db, c1, 'ip')
+    assert cc.estimate_state(db, c1, 'ip') == 'fresh' and cc.contract(db, 'ip', c1)['amount'] == 700
     with pytest.raises(ValueError):
-        cc.link_estimate(db, c2, eid)
+        cc.link_estimate(db, c2, eid, 'smr')
     with pytest.raises(ValueError):
-        cc.save_contract(db, 'smr', dict(party_type='person'))
-    tags = cc.tag_map(db, 'smr', c1)
+        cc.save_contract(db, 'ip', dict(party_type='person'))
+    with pytest.raises(ValueError):
+        cc.save_contract(db, 'smr', dict(person_id=pid))        # в СМР (юрлица) заказчик — только юрлицо
+    tags = cc.tag_map(db, 'ip', c1)
     assert 'СТОИМОСТЬ_МАТЕРИАЛОВ' in tags and 'СТОИМОСТЬ_МАТЕРИАЛОВ' not in cc.tag_map(db, 'le', cc.save_contract(db, 'le', dict(client_id=lid, direction='Монтажные работы')))
 
 
@@ -72,15 +77,15 @@ def test_integration_with_other_subsystems(db, tmp_path):
     lid = make_legal(db)
     pid = db.execute("INSERT INTO crm.clients(name) VALUES('Петров Пётр')").lastrowid
     c1 = cc.save_contract(db, 'le', dict(client_id=lid, direction='Монтажные работы', contract_date='2026-03-01', end_date='2026-03-30', amount=1000, signed=1, subject='Монтаж ВДГО'))
-    c2 = cc.save_contract(db, 'smr', dict(party_type='person', person_id=pid, contract_date='2026-03-02', amount=500, signed=1))
+    c2 = cc.save_contract(db, 'ip', dict(party_type='person', person_id=pid, contract_date='2026-03-02', amount=500, signed=1))
     a1 = cc.save_act(db, 'le', dict(contract_id=c1, act_date='2026-03-20', amount=1500, signed=1))
-    cc.save_act(db, 'smr', dict(contract_id=c2, act_date='2026-03-25', amount=100, signed=0))
+    cc.save_act(db, 'ip', dict(contract_id=c2, act_date='2026-03-25', amount=100, signed=0))
     payments_domain.add(db, 'le_contracts', c1, 300, '2026-03-10')
-    payments_domain.add(db, 'smr_contracts', c2, 50, '2026-03-11')
+    payments_domain.add(db, 'ip_contracts', c2, 50, '2026-03-11')
     # ведомость актов
     st = acts_statement.statement(db, 'le_contracts', 2026, 3)
     assert [r['number'] for r in st['signed']] == ['1'] and st['signed'][0]['client'] == 'ООО Ромашка' and st['signed'][0]['paid'] == 300
-    assert len(acts_statement.statement(db, 'smr_contracts', 2026, 3)['unsigned']) == 1
+    assert len(acts_statement.statement(db, 'ip_contracts', 2026, 3)['unsigned']) == 1
     out = tmp_path / 'v.xlsx'
     acts_statement.export_statement(db, 'le_contracts', 2026, 3, out)
     assert out.exists()
@@ -90,7 +95,7 @@ def test_integration_with_other_subsystems(db, tmp_path):
     assert events and 'Ромашка' in titles and 'Петров' in titles
     # оплаты
     rows = payments_domain.report(db, '2026-03-01', '2026-03-31')
-    assert {r['section'] for r in rows} == {'Юрлица', 'СМР'} and {r['client_name'] for r in rows} == {'ООО Ромашка', 'Петров Пётр'}
+    assert {r['section'] for r in rows} == {'Юрлица', 'СМР (ИП)'} and {r['client_name'] for r in rows} == {'ООО Ромашка', 'Петров Пётр'}
     # проверка базы: акты больше суммы договора
     assert any('больше суммы договора' in f['text'] for f in integrity.check(db))
     # экспорт и поиск
@@ -102,7 +107,32 @@ def test_integration_with_other_subsystems(db, tmp_path):
 def test_deleting_person_client_detaches_smr(db):
     from smetagaz.data_services import client_links, delete_client
     pid = db.execute("INSERT INTO crm.clients(name) VALUES('Сидоров')").lastrowid
-    c = cc.save_contract(db, 'smr', dict(party_type='person', person_id=pid, amount=10))
-    assert client_links(db, pid) == {'СМР': 1}
+    c = cc.save_contract(db, 'ip', dict(party_type='person', person_id=pid, amount=10))
+    assert client_links(db, pid) == {'СМР (ИП)': 1}
     delete_client(db, pid)
-    assert cc.contract(db, 'smr', c)['person_id'] is None
+    assert cc.contract(db, 'ip', c)['person_id'] is None
+
+
+def test_person_smr_contracts_move_to_ip(tmp_path):
+    """Старые договоры СМР с физлицами переезжают в «СМР (ИП)» вместе с актами, оплатами и сметой."""
+    from smetagaz.database import DatabaseManager
+    from smetagaz import payments_domain
+    d = DatabaseManager(tmp_path / 'x.db')
+    d.init_db()
+    pid = d.execute("INSERT INTO crm.clients(name) VALUES('Иванов')").lastrowid
+    lid = make_legal(d)
+    eid = d.execute("INSERT INTO estimates(title,total) VALUES('С',100)").lastrowid
+    old = d.execute("INSERT INTO smr_contracts(contract_number,party_type,person_id,estimate_id,amount) VALUES('01-05/26','person',?,?,100)", (pid, eid)).lastrowid
+    keep = d.execute("INSERT INTO smr_contracts(contract_number,party_type,legal_id,amount) VALUES('02-05/26','legal',?,50)", (lid,)).lastrowid
+    d.execute("INSERT INTO smr_acts(contract_id,act_number,act_date,amount,signed) VALUES(?,'1','2026-03-01',100,1)", (old,))
+    d.execute("INSERT INTO payments(estimate_id,owner_type,owner_id,amount,date) VALUES(NULL,'smr_contracts',?,40,'2026-03-02')", (old,))
+    d.set_setting('smr_person_moved', '0')
+    cc.migrate(d)
+    assert d.fetchone('SELECT count(*) FROM smr_contracts')[0] == 1 and d.fetchone('SELECT id FROM smr_contracts')[0] == keep
+    row = d.fetchone('SELECT id,contract_number,estimate_id,person_id FROM ip_contracts')
+    assert row[1:] == ('01-05/26', eid, pid)
+    assert d.fetchone('SELECT count(*) FROM ip_acts WHERE contract_id=?', (row[0],))[0] == 1
+    assert d.fetchone("SELECT owner_type,owner_id FROM payments")[:] == ('ip_contracts', row[0])
+    cc.migrate(d)                                   # повторный запуск ничего не меняет
+    assert d.fetchone('SELECT count(*) FROM ip_contracts')[0] == 1
+    d.close()

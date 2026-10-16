@@ -358,13 +358,9 @@ class ContractCardDialog(QDialog):
         legal = self.customer.is_legal()
         self.client_form.setVisible(not legal)
         if hasattr(self, 'doc_make'):
-            for kind in dd.MAIN_KINDS:
-                self.doc_make[kind].setEnabled(not legal)
-                self.doc_open[kind].setEnabled(not legal)
-            if not legal:
-                self.refresh_docs()
+            self.refresh_docs()
         if legal and hasattr(self, 'status'):
-            self.status.setText('Заказчик — юрлицо: договор, акт, справка и оплаты оформляются в разделе «Юрлица».')
+            self.status.setText('Заказчик — юрлицо: документы формируются здесь (теги реквизитов юрлица подставятся из справочника), договор виден в досье юрлица.')
 
     def change_number(self):
         if not self.contract_id and not self.save_data():

@@ -75,8 +75,15 @@ class LegalClientDialog(QDialog):
         tabs.addTab(page, 'Организация')
         page = QWidget()
         form = QFormLayout(page)
+        self.cmb_bank = QComboBox()
+        self.cmb_bank.addItem('— ввести вручную —', None)
+        for bid, bname, bbic, *_rest in __import__('smetagaz.banks_domain', fromlist=['x']).listing(db):
+            self.cmb_bank.addItem(f'{bname} · {bbic}' if bbic else bname, bid)
+        self.cmb_bank.currentIndexChanged.connect(self.pick_bank)
+        form.addRow('Банк из реестра банков', self.cmb_bank)
         line('bank', 'Банк', form)
         line('bic', 'БИК', form)
+        line('bank_address', 'Адрес банка', form)
         line('account', 'Расчётный счёт (IBAN)', form)
         tabs.addTab(page, 'Банк')
         page = QWidget()
@@ -129,6 +136,17 @@ class LegalClientDialog(QDialog):
             self.f['head_position_gen'].setText('директора')
             self.f['basis'].setText('Устава')
 
+    def pick_bank(self, *_):
+        """Подстановка названия, БИК и адреса банка из реестра."""
+        bid = self.cmb_bank.currentData()
+        b = __import__('smetagaz.banks_domain', fromlist=['x']).get(db, bid) if bid else None
+        for key in ('bank', 'bic', 'bank_address'):
+            self.f[key].setReadOnly(bool(b))
+        if b:
+            self.f['bank'].setText(b['name'])
+            self.f['bic'].setText(b['bic'] or '')
+            self.f['bank_address'].setText(b['address'] or '')
+
     def add_contact(self, name='', position='', phone='', email=''):
         r = self.contacts.rowCount()
         self.contacts.insertRow(r)
@@ -147,12 +165,19 @@ class LegalClientDialog(QDialog):
         for key, w in self.f.items():
             w.setText(row.get(key) or '')
         self.note.setPlainText(row.get('note') or '')
+        index = self.cmb_bank.findData(row.get('bank_id')) if row.get('bank_id') else 0
+        self.cmb_bank.blockSignals(True)
+        self.cmb_bank.setCurrentIndex(max(0, index))
+        self.cmb_bank.blockSignals(False)
+        for key in ('bank', 'bic', 'bank_address'):
+            self.f[key].setReadOnly(index > 0)
         for c in cc.contacts(db, self.client_id):
             self.add_contact(c['name'], c['position'], c['phone'], c['email'])
 
     def save_data(self):
         values = {k: w.text() for k, w in self.f.items()}
         values['note'] = self.note.toPlainText()
+        values['bank_id'] = self.cmb_bank.currentData() or ''
         rows = [dict(name=read_item(self.contacts, r, 0), position=read_item(self.contacts, r, 1), phone=read_item(self.contacts, r, 2), email=read_item(self.contacts, r, 3))
                 for r in range(self.contacts.rowCount())]
         values['contact_person'] = next((r['name'] for r in rows if r['name']), '')
@@ -405,7 +430,8 @@ class ContractDialog(QDialog):
         self.cmb_person, self.cmb_legal = QComboBox(), QComboBox()
         populate_person_combo(self.cmb_person)
         populate_legal_combo(self.cmb_legal)
-        if self.mod == 'smr':
+        self.party_mode = 'legal' if self.mod == 'le' else cc.cfg(self.mod)['party']      # 'legal' — только юрлицо, 'person' — только клиент, 'both' — выбор
+        if self.party_mode == 'both':
             row = QHBoxLayout()
             row.addWidget(self.rb_person)
             row.addWidget(self.rb_legal)
@@ -413,19 +439,25 @@ class ContractDialog(QDialog):
             g.addWidget(QLabel('Контрагент'), r, 0)
             g.addLayout(row, r, 1, 1, 3)
             r += 1
+        if self.party_mode in ('both', 'person'):
+            g.addWidget(QLabel('Клиент' if self.party_mode == 'person' else ''), r, 0)
             g.addWidget(self.cmb_person, r, 1, 1, 2)
             new_person = QPushButton('＋ Новый клиент…')
             new_person.clicked.connect(self.new_person)
             g.addWidget(new_person, r, 3)
             r += 1
-            self.rb_person.setChecked(True)
+        (self.rb_legal if self.party_mode == 'legal' else self.rb_person).setChecked(True)
+        if self.party_mode == 'both':
             self.rb_person.toggled.connect(self.toggle_party)
-        g.addWidget(QLabel('Юрлицо' if self.mod == 'smr' else 'Заказчик (юрлицо)'), r, 0)
-        g.addWidget(self.cmb_legal, r, 1, 1, 2)
-        new_legal = QPushButton('＋ Новое юрлицо…')
-        new_legal.clicked.connect(self.new_legal)
-        g.addWidget(new_legal, r, 3)
-        r += 1
+        if self.party_mode in ('both', 'legal'):
+            g.addWidget(QLabel('Юрлицо (справочник юрлиц)' if self.party_mode == 'legal' else 'Юрлицо'), r, 0)
+            g.addWidget(self.cmb_legal, r, 1, 1, 2)
+            new_legal = QPushButton('＋ Новое юрлицо…')
+            new_legal.clicked.connect(self.new_legal)
+            g.addWidget(new_legal, r, 3)
+            r += 1
+        else:
+            self.cmb_legal.hide()
         self.party_info = QLabel('')
         self.party_info.setWordWrap(True)
         self.party_info.setStyleSheet('color:#605E5C;')
@@ -476,7 +508,7 @@ class ContractDialog(QDialog):
         g.addWidget(QLabel('Примечание'), r, 0)
         g.addWidget(self.note, r, 1, 1, 3)
         r += 1
-        if self.mod == 'smr':
+        if cc.cfg(self.mod)['estimate']:
             self.lbl_estimate = QLabel('')
             self.lbl_estimate.setWordWrap(True)
             g.addWidget(self.lbl_estimate, r, 0, 1, 4)
@@ -501,8 +533,11 @@ class ContractDialog(QDialog):
         self.refresh_party_info()
 
     def set_party(self, kind, pid):
-        if self.mod != 'smr':
+        if self.party_mode == 'legal':
             populate_legal_combo(self.cmb_legal, pid)
+            return
+        if self.party_mode == 'person':
+            populate_person_combo(self.cmb_person, pid)
             return
         if kind == 'legal':
             self.rb_legal.setChecked(True)
@@ -521,12 +556,12 @@ class ContractDialog(QDialog):
         d = LegalClientDialog(parent=self)
         if d.exec():
             populate_legal_combo(self.cmb_legal, d.client_id)
-            if self.mod == 'smr':
+            if self.party_mode == 'both':
                 self.rb_legal.setChecked(True)
             self.refresh_party_info()
 
     def party_kind(self):
-        return 'legal' if self.mod == 'le' or self.rb_legal.isChecked() else 'person'
+        return 'legal' if self.party_mode == 'legal' or (self.party_mode == 'both' and self.rb_legal.isChecked()) else 'person'
 
     def refresh_party_info(self, *_):
         if self.party_kind() == 'legal':
@@ -779,10 +814,10 @@ class ContractDialog(QDialog):
 
     # --- смета (СМР)
     def refresh_estimate(self):
-        if self.mod != 'smr':
+        if not cc.cfg(self.mod)['estimate']:
             return
-        state = cc.estimate_state(db, self.contract_id) if self.contract_id else 'none'
-        c = cc.contract(db, 'smr', self.contract_id) if self.contract_id else {}
+        state = cc.estimate_state(db, self.contract_id, self.mod) if self.contract_id else 'none'
+        c = cc.contract(db, self.mod, self.contract_id) if self.contract_id else {}
         eid = c.get('estimate_id')
         s = cc.md.estimate_summary(db, eid) if eid else None
         if not eid or not s:
@@ -804,17 +839,17 @@ class ContractDialog(QDialog):
             self.est_buttons[key].setVisible(has)
 
     def estimate_id(self):
-        return cc.contract(db, 'smr', self.contract_id)['estimate_id'] if self.contract_id else None
+        return cc.contract(db, self.mod, self.contract_id)['estimate_id'] if self.contract_id else None
 
     def create_estimate(self):
         if not self.ensure_saved():
             return
-        c = cc.contract(db, 'smr', self.contract_id)
-        p = cc.party(db, 'smr', c)
+        c = cc.contract(db, self.mod, self.contract_id)
+        p = cc.party(db, self.mod, c)
         with db.transaction():
             eid = db.execute('INSERT INTO estimates(title,date,total,paid,client_name) VALUES(?,?,0,0,?)',
                              (self.obj.text().strip() or 'Смета к договору ' + c['contract_number'], QDate.currentDate().toString('yyyy-MM-dd'), p['name'])).lastrowid
-            cc.link_estimate(db, self.contract_id, eid)
+            cc.link_estimate(db, self.contract_id, eid, self.mod)
         self.refresh_all()
         self.open_estimate()
 
@@ -834,9 +869,11 @@ class ContractDialog(QDialog):
 
         def load():
             q = '%' + search.text().casefold() + '%'
-            rows = db.fetchall("""SELECT id,title,client_name,total FROM estimates WHERE id NOT IN (SELECT estimate_id FROM smr_contracts WHERE estimate_id IS NOT NULL AND id<>?)
-                AND id NOT IN (SELECT estimate_id FROM contracts WHERE estimate_id IS NOT NULL)
-                AND LOWER(coalesce(title,'')||' '||coalesce(client_name,'')) LIKE ? ORDER BY id DESC LIMIT 300""", (self.contract_id, q))
+            own = cc.cfg(self.mod)['contracts']
+            taken = ' AND '.join(f"id NOT IN (SELECT estimate_id FROM {t} WHERE estimate_id IS NOT NULL" + (" AND id<>%d" % (self.contract_id or 0) if t == own else '') + ')'
+                                 for t in ('contracts', 'gsv_projects', 'gsn_projects') + tuple(m['contracts'] for k, m in cc.MODS.items() if m['estimate']))
+            rows = db.fetchall(f"""SELECT id,title,client_name,total FROM estimates WHERE {taken}
+                AND LOWER(coalesce(title,'')||' '||coalesce(client_name,'')) LIKE ? ORDER BY coalesce(date,'') DESC, id DESC LIMIT 300""", (q,))
             table.setRowCount(len(rows))
             for r, row in enumerate(rows):
                 for c, v in enumerate((row[1], row[2], money(row[3]))):
@@ -852,7 +889,7 @@ class ContractDialog(QDialog):
             if not eid:
                 return
             try:
-                cc.link_estimate(db, self.contract_id, eid)
+                cc.link_estimate(db, self.contract_id, eid, self.mod)
             except Exception as e:
                 warn(d, str(e), 'Смета')
                 return
@@ -866,7 +903,7 @@ class ContractDialog(QDialog):
         if not self.ensure_saved():
             return
         try:
-            s = cc.sync_estimate(db, self.contract_id)
+            s = cc.sync_estimate(db, self.contract_id, self.mod)
         except ValueError as e:
             warn(self, str(e), 'Смета')
             return
@@ -986,11 +1023,11 @@ class ContractsRegistry(QWidget):
         total, amount = db.fetchone(f"SELECT count(*),coalesce(sum(c.amount),0) FROM {c['contracts']} c {join} WHERE {cond}", params)
         self.pager.set_total(total)
         paid_sql = ("(SELECT coalesce(sum(p.amount),0) FROM payments p WHERE (c.estimate_id IS NOT NULL AND p.estimate_id=c.estimate_id) OR "
-                    "(c.estimate_id IS NULL AND p.estimate_id IS NULL AND p.owner_type=? AND p.owner_id=c.id))") if self.mod == 'smr' else \
+                    "(c.estimate_id IS NULL AND p.estimate_id IS NULL AND p.owner_type=? AND p.owner_id=c.id))") if cc.cfg(self.mod)['estimate'] else \
                    "(SELECT coalesce(sum(p.amount),0) FROM payments p WHERE p.estimate_id IS NULL AND p.owner_type=? AND p.owner_id=c.id)"
         rows = db.fetchall(f"""SELECT c.id,c.contract_number,c.contract_date,{label},coalesce(nullif(c.object_address,''),c.object_name),c.amount,{paid_sql},
             (SELECT count(*) FROM {c['acts']} WHERE contract_id=c.id),coalesce(c.signed,0),c.status
-            FROM {c['contracts']} c {join} WHERE {cond} ORDER BY c.id DESC LIMIT ? OFFSET ?""", (c['contracts'], *params, self.pager.size, self.pager.offset))
+            FROM {c['contracts']} c {join} WHERE {cond} ORDER BY coalesce(c.year_num,99) ASC, coalesce(c.seq_num,0) ASC, c.contract_number ASC, c.id ASC LIMIT ? OFFSET ?""", (c['contracts'], *params, self.pager.size, self.pager.offset))
         self.table.setRowCount(len(rows))
         for r, (rid, number, day, who, obj, amount_c, paid, n_acts, signed_c, status) in enumerate(rows):
             vals = [number or 'Б/Н', date_short(day).rstrip('г.'), who, obj, money(amount_c), money(paid), n_acts, 'да' if signed_c else 'нет', status]
@@ -1107,7 +1144,7 @@ class TemplatesTab(QWidget):
             self.tpl.setItem(r, 0, item(cc.DOC_KINDS[kind][0], kind))
             self.tpl.setItem(r, 1, item(db.get_setting(cc.template_setting(mod, kind), '')))
         pl.addWidget(self.tpl, 1)
-        if mod == 'smr':
+        if cc.cfg(mod)['estimate']:
             pl.addWidget(QLabel('Шаблон сметы и её теги настраиваются в модуле «Реестр смет».'))
         bar = QHBoxLayout()
         for text, fn in (('Выбрать шаблон…', self.choose_template), ('Открыть шаблон', self.open_template), ('Стандартный', self.reset_template)):
@@ -1249,20 +1286,53 @@ class TemplatesTab(QWidget):
             self.load_tags()
 
 
-class SmrView(QWidget):
+class CounterpartyView(QWidget):
+    """Отдельный раздел договоров: «СМР (юрлица)», «ТО (юрлица)». Каждый раздел связан со справочником юрлиц, имеет свои договоры, акты, шаблоны и теги."""
+    def __init__(self, mod='smr'):
+        super().__init__()
+        self.mod = mod
+        layout = QVBoxLayout(self)
+        self.tabs = QTabWidget()
+        self.tabs.addTab(ContractsRegistry(mod), 'Договоры')
+        self.tabs.addTab(ActsRegistry(mod), 'Акты')
+        self.tabs.addTab(TemplatesTab(mod), 'Шаблоны и теги')
+        layout.addWidget(self.tabs)
+        self.tabs.currentChanged.connect(lambda *_: self.load_data())
+
+    def load_data(self):
+        w = self.tabs.currentWidget()
+        if hasattr(w, 'load_data'):
+            w.load_data()
+
+
+SmrView = CounterpartyView
+
+
+class LegalDirectoryView(QWidget):
+    """Справочник юрлиц: реквизиты, досье (договоры и оплаты) по двойному щелчку, реестр банков, журнал исходящей документации."""
     def __init__(self):
         super().__init__()
+        from .banks_view import BanksRegistry
+        from .legal_entities_view import OutgoingLogRegistry
         layout = QVBoxLayout(self)
-        tabs = QTabWidget()
-        tabs.addTab(ContractsRegistry('smr'), 'Договоры')
-        tabs.addTab(ActsRegistry('smr'), 'Акты')
-        tabs.addTab(TemplatesTab('smr'), 'Шаблоны и теги')
-        layout.addWidget(tabs)
+        self.tabs = QTabWidget()
+        self.directory = LegalClientsRegistry()
+        self.banks = BanksRegistry()
+        self.tabs.addTab(self.directory, 'Справочник юрлиц')
+        self.tabs.addTab(self.banks, 'Реестр банков')
+        self.tabs.addTab(OutgoingLogRegistry(), 'Исходящая документация')
+        layout.addWidget(self.tabs)
+        self.tabs.currentChanged.connect(lambda *_: self.load_data())
+
+    def load_data(self):
+        w = self.tabs.currentWidget()
+        if hasattr(w, 'load_data'):
+            w.load_data()
 
 
 class CustomerSwitch(QGroupBox):
     """Выбор заказчика в карточках проекта / монтажа ГСВ: физлицо (как раньше) или юрлицо из справочника «Юрлица».
-    Документы юрлица (договор, акт, справка) оформляются только в разделе «Юрлица» — отсюда создаётся или открывается связанный договор."""
+    Документы юрлица (договор, акт, справка) формируются в самой карточке — они же попадают в досье юрлица. Отсюда создаётся или открывается связанный договор."""
     changed = pyqtSignal()
 
     def __init__(self, source_type, source_id_getter, ensure_saved, parent=None):
@@ -1284,9 +1354,9 @@ class CustomerSwitch(QGroupBox):
         self.info.setWordWrap(True)
         self.info.setStyleSheet('color:#605E5C;')
         layout.addWidget(self.info, 2, 0, 1, 3)
-        self.btn_contract = QPushButton('Договор в «Юрлицах»…')
-        self.btn_contract.clicked.connect(self.open_contract)
-        layout.addWidget(self.btn_contract, 3, 0, 1, 3)
+        self.btn_dossier = QPushButton('Досье юрлица…')
+        self.btn_dossier.clicked.connect(self.open_dossier)
+        layout.addWidget(self.btn_dossier, 3, 0, 1, 3)
         self.rb_legal.toggled.connect(self.toggled)
         self.combo.currentIndexChanged.connect(self.refresh)
         self.toggled()
@@ -1306,15 +1376,15 @@ class CustomerSwitch(QGroupBox):
     def toggled(self, *_):
         legal = self.is_legal()
         self.combo.setEnabled(legal)
-        self.btn_contract.setVisible(legal)
+        self.btn_dossier.setVisible(legal)
         self.refresh()
         self.changed.emit()
 
     def refresh(self, *_):
         row = cc.legal(db, self.combo.currentData()) if self.is_legal() and self.combo.currentData() else None
         if self.is_legal():
-            self.info.setText(f'Договор, акт и справка оформляются в разделе «Юрлица». УНП {row["unp"] or "—"}, руководитель: {row["head_name"] or "не указан"}.' if row
-                              else 'Выберите юрлицо. Договор, акт и справка оформляются в разделе «Юрлица».')
+            self.info.setText(f'Документы формируются в этой карточке; договор попадёт в досье юрлица. УНП {row["unp"] or "—"}, руководитель: {row["head_name"] or "не указан"}.' if row
+                              else 'Выберите юрлицо из справочника юрлиц.')
         else:
             self.info.setText('')
 
@@ -1324,12 +1394,9 @@ class CustomerSwitch(QGroupBox):
             populate_legal_combo(self.combo, d.client_id)
             self.rb_legal.setChecked(True)
 
-    def open_contract(self):
-        if not self.ensure_saved() or not self.source_id():
+    def open_dossier(self):
+        lid = self.combo.currentData()
+        if not lid:
+            warn(self, 'Сначала выберите юрлицо')
             return
-        try:
-            cid, created = cc.contract_from_source(db, self.source_type, self.source_id())
-        except Exception as e:
-            warn(self, str(e))
-            return
-        ContractDialog('le', cid, self).exec()
+        LegalClientDialog(lid, self).exec()

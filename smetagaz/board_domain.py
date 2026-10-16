@@ -7,7 +7,7 @@ from .agenda_domain import norm_date
 
 DEFAULT_TAG_COLOR = '#3B82F6'
 LINK_SECTIONS = {
-    'gsv_projects': 'Проект ГСВ', 'contracts': 'Монтаж ГСВ', 'gsn_projects': 'Монтаж ГСН', 'le_contracts': 'Юрлица', 'smr_contracts': 'СМР',
+    'gsv_projects': 'Проект ГСВ', 'contracts': 'Монтаж ГСВ', 'gsn_projects': 'Монтаж ГСН', 'le_contracts': 'Юрлица', 'smr_contracts': 'СМР (юрлица)', 'to_contracts': 'ТО (юрлица)', 'ip_contracts': 'СМР (ИП)',
 }
 WEEKDAYS = {'понедельник': 0, 'пн': 0, 'вторник': 1, 'вт': 1, 'среда': 2, 'среду': 2, 'ср': 2, 'четверг': 3, 'чт': 3, 'пятница': 4, 'пятницу': 4, 'пт': 4,
             'суббота': 5, 'субботу': 5, 'сб': 5, 'воскресенье': 6, 'вс': 6}
@@ -182,9 +182,9 @@ def _record_label(db, table, rid):
     if table == 'gsn_projects':
         row = db.fetchone("SELECT contract_number,client_name,title FROM gsn_projects WHERE id=?", (rid,))
         return None if not row else ' · '.join(x for x in (row[0], row[1], row[2]) if x)
-    if table in ('le_contracts', 'smr_contracts'):
+    if table in ('le_contracts', 'smr_contracts', 'to_contracts', 'ip_contracts'):
         from . import contracts_core as cc
-        mod = 'le' if table == 'le_contracts' else 'smr'
+        mod = cc.CONTRACT_TABLES[table]
         try:
             c = cc.contract(db, mod, rid)
         except ValueError:
@@ -253,7 +253,7 @@ def _suggestions(db, today):
         found.append(_suggestion(f'sign_contract:contracts:{rid}', f'Подписать договор {num} · {who}', ('contracts', rid), 'Высокая', reason='договор не подписан'))
     for rid, num, who in rows("SELECT id,pd_number,coalesce(nullif(client_name,''),party_name) FROM gsv_projects WHERE coalesce(contract_date,'')<>'' AND coalesce(contract_signed,1)=0"):
         found.append(_suggestion(f'sign_contract:gsv_projects:{rid}', f'Подписать договор {num} · {who}', ('gsv_projects', rid), 'Высокая', reason='договор не подписан'))
-    for mod in ('le', 'smr'):
+    for mod in ('le', 'smr', 'to', 'ip'):
         c = cc.cfg(mod)
         join, label = cc.party_join(mod)
         for rid, num, who in rows(f"SELECT c.id,c.contract_number,{label} FROM {c['contracts']} c {join} WHERE coalesce(c.contract_date,'')<>'' AND coalesce(c.signed,0)=0 AND c.status='Действует'"):
@@ -280,10 +280,12 @@ def _suggestions(db, today):
     for rid, num, who in rows("SELECT id,contract_number,coalesce(nullif(client_name,''),party_name) FROM contracts WHERE estimate_id IS NOT NULL"):
         if md.estimate_state(db, rid) == 'stale':
             found.append(_suggestion(f'estimate:contracts:{rid}', f'Смета изменена — обновите стоимость: договор {num} · {who}', ('contracts', rid), 'Обычная', reason='смета изменена'))
-    for rid, num in rows("SELECT id,contract_number FROM smr_contracts WHERE estimate_id IS NOT NULL"):
-        if cc.estimate_state(db, rid) == 'stale':
-            who = cc.party_label(db, 'smr', cc.contract(db, 'smr', rid))
-            found.append(_suggestion(f'estimate:smr_contracts:{rid}', f'Смета изменена — обновите стоимость: договор СМР {num} · {who}', ('smr_contracts', rid), 'Обычная', reason='смета изменена'))
+    for mod in cc.ESTIMATE_MODS:
+        table = cc.cfg(mod)['contracts']
+        for rid, num in rows(f"SELECT id,contract_number FROM {table} WHERE estimate_id IS NOT NULL"):
+            if cc.estimate_state(db, rid, mod) == 'stale':
+                who = cc.party_label(db, mod, cc.contract(db, mod, rid))
+                found.append(_suggestion(f'estimate:{table}:{rid}', f'Смета изменена — обновите стоимость: договор {cc.cfg(mod)["title"]} {num} · {who}', (table, rid), 'Обычная', reason='смета изменена'))
     taken = {r[0] for r in db.fetchall("SELECT auto_key FROM kanban_tasks WHERE coalesce(auto_key,'')<>''")} | {r[0] for r in db.fetchall('SELECT auto_key FROM board_dismissed')}
     return [s for s in found if s['key'] not in taken]
 
@@ -321,7 +323,9 @@ def _summary(db, today):
                 "SELECT count(*) FROM gsv_projects WHERE coalesce(act_date,'')<>'' AND coalesce(act_signed,1)=0",
                 "SELECT count(*) FROM gsn_projects WHERE coalesce(act_date,'')<>'' AND coalesce(act_signed,0)=0",
                 "SELECT count(*) FROM le_acts WHERE coalesce(act_date,'')<>'' AND coalesce(signed,0)=0",
-                "SELECT count(*) FROM smr_acts WHERE coalesce(act_date,'')<>'' AND coalesce(signed,0)=0"):
+                "SELECT count(*) FROM smr_acts WHERE coalesce(act_date,'')<>'' AND coalesce(signed,0)=0",
+                "SELECT count(*) FROM to_acts WHERE coalesce(act_date,'')<>'' AND coalesce(signed,0)=0",
+                "SELECT count(*) FROM ip_acts WHERE coalesce(act_date,'')<>'' AND coalesce(signed,0)=0"):
         acts += db.fetchone(sql)[0]
     payments = db.fetchone('SELECT count(*) FROM payments WHERE date=?', (today.isoformat(),))[0]
     events = len(agenda.events_between(db, today, today))

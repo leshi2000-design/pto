@@ -67,3 +67,11 @@ def install_display_patch():
 
     QTableWidget.setItem = set_item
     QTableWidget._pto_date_patch = True
+    # во всех таблицах скрыты порядковые номера строк (1, 2, 3…): записи упорядочены по номеру договора/акта или по дате
+    init = QTableWidget.__init__
+
+    def table_init(self, *args, **kwargs):
+        init(self, *args, **kwargs)
+        self.verticalHeader().setVisible(False)
+
+    QTableWidget.__init__ = table_init

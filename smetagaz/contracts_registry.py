@@ -105,7 +105,7 @@ class ContractsRegistryView(QWidget):
                                                        'c.statuses_text', 'c.notes'], ['c.client_phone'])
             query += " WHERE " + clause
             params.extend(found)
-        query += " ORDER BY c.id DESC"
+        query += " ORDER BY coalesce(c.year_num,0) DESC, coalesce(c.seq_num,0) DESC, coalesce(c.contract_date,'') DESC, c.contract_number DESC, c.id DESC"
 
         rows = self.pager.fetch(query, tuple(params))
         self.table.setRowCount(len(rows))
