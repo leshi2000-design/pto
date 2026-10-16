@@ -38,8 +38,8 @@ class AuditView(QWidget):
         for w in (self.btn_details, self.btn_restore, self.btn_more):
             bar.addWidget(w)
         layout.addLayout(bar)
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(['Когда', 'Действие', 'Раздел', 'Запись', 'Состояние'])
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(['Когда', 'Действие', 'Раздел', 'Запись', 'Состояние', 'Кто'])
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
@@ -71,7 +71,7 @@ class AuditView(QWidget):
         self.table.setRowCount(len(self.entries))
         for r, e in enumerate(self.entries):
             state = 'восстановлена' if e['restored'] else ('в корзине' if e['action'] == 'D' else '')
-            values = [e['ts'], ACTIONS.get(e['action'], e['action']), ad.AUDITED.get(e['table'], ('', e['table']))[1], e['label'] or f'№{e["record_id"]}', state]
+            values = [e['ts'], ACTIONS.get(e['action'], e['action']), ad.AUDITED.get(e['table'], ('', e['table']))[1], e['label'] or f'№{e["record_id"]}', state, e.get('user') or '']
             for c, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 if e['action'] == 'D' and c in (1, 4) and not e['restored']:

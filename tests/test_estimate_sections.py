@@ -71,3 +71,36 @@ def test_editor_section_and_catalog_flow(d, monkeypatch):
     assert [editor.table.item(r, 0).text() for r in range(editor.table.rowCount())] == ['ГСВ', 'Труба', 'СМР']
     assert editor.table.item(0, 5).text() == '30,00'.replace(',', ',') or editor.table.item(0, 5).text().startswith('30')
     assert editor.table.item(0, 1).text() == 'Раздел'
+
+
+def test_manual_client_and_payments_in_estimate(d, monkeypatch):
+    import smetagaz.estimate_editor as ee, smetagaz.estimates_ui as eu, smetagaz.dialogs_common as dc
+    from smetagaz import payments_domain
+    monkeypatch.setattr(ee, 'db', d)
+    monkeypatch.setattr(eu, 'db', d)
+    dlg = eu.NewEstimateDialog()
+    dlg.inp_manual.setText('Случайный Клиент')
+    dlg.inp_manual_phone.setText('375291112233')
+    title, client, contract, link = dlg.values()
+    assert client == ('manual', 'Случайный Клиент', '375291112233') and dlg.rb_manual.isChecked()
+    eid = ed.create_estimate(d, title, client=client)
+    row = d.fetchone('SELECT client_name,client_phone,client_id FROM estimates WHERE id=?', (eid,))
+    assert row[:2] == ('Случайный Клиент', '375291112233') and row[2]            # попал в «Клиенты»
+    with pytest.raises(ValueError):
+        ed.create_estimate(d, 'X', client=('manual', '  ', ''))
+    d.execute("INSERT INTO estimate_items(estimate_id,item_type,name,unit,quantity,price,sum,sort_order) VALUES(?,'Работа','Монтаж','шт',1,500,500,1)", (eid,))
+    editor = ee.EstimateEditorDialog(eid, 'С')
+    editor.load_items()
+    editor.pay_amount.setValue(200)
+    editor.pay_note.setText('аванс')
+    editor.add_payment_here()
+    assert editor.pay_table.rowCount() == 1 and 'Остаток' in editor.pay_summary.text() and '300' in editor.pay_summary.text()
+    editor.fill_rest()
+    assert editor.pay_amount.value() == 300
+    editor.add_payment_here()
+    assert editor.pay_table.rowCount() == 2 and payments_domain.summary(d, 'estimates', eid)['debt'] == 0
+    editor.pay_table.selectRow(0)
+    monkeypatch.setattr(ee.QMessageBox, 'question', lambda *a, **k: ee.QMessageBox.StandardButton.Yes)
+    editor.remove_payment_here()
+    assert editor.pay_table.rowCount() == 1
+    assert d.fetchone('SELECT paid FROM estimates WHERE id=?', (eid,))[0] in (200, 300, 200.0, 300.0)

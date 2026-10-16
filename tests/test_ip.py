@@ -150,3 +150,69 @@ def test_ip_view_tabs(d, monkeypatch, tmp_path):
     out = tmp_path / 'ved.pdf'
     from smetagaz import print_ui
     assert open(print_ui.write_pdf(str(out), st.html()[0]), 'rb').read(5) == b'%PDF-'
+
+
+def test_manual_estimate_client_and_manual_tax_data(d):
+    eid = ip.add_estimate(d, None, 'Забор', 'Сидоров Сидор (вручную)')
+    assert d.fetchone('SELECT client_name FROM estimates WHERE id=?', (eid,))[0] == 'Сидоров Сидор (вручную)'
+    assert d.fetchone('SELECT name FROM crm.clients')[0] == 'Сидоров Сидор (вручную)'      # общее правило программы: смета с именем клиента создаёт клиента
+    assert ip.estimates(d)[0]['client'] == 'Сидоров Сидор (вручную)'
+    with pytest.raises(ValueError):
+        ip.add_estimate(d, None, 'Без клиента')
+    # 1–2 кварталы 2026 известны только суммами
+    ip.save_manual(d, 2026, 1, 0, 'revenue', 3000, 'итог за квартал')
+    ip.save_manual(d, 2026, 2, 5, 'revenue', 2500)
+    ip.save_manual(d, 2026, 2, 0, 'revenue', 1000.01)
+    ip.save_manual(d, 2026, 1, 0, 'tax_paid', 100)
+    p = ip.params(d, 2026)
+    q1 = ip.quarter_report(d, 2026, 1, today=date(2026, 12, 31))
+    assert q1['revenue'] == 3000 and q1['manual'] == 3000 and [m['revenue'] for m in q1['months']] == [1000, 1000, 1000]
+    one = ip.month_tax(1000, p)['tax']
+    assert q1['tax'] == round(3 * one, 2) and q1['paid'] == 100 and q1['to_pay'] == round(3 * one - 100, 2)
+    q2 = ip.quarter_report(d, 2026, 2, today=date(2026, 12, 31))
+    assert [m['revenue'] for m in q2['months']] == [round(1000.01 / 3, 2), 2500 + round(1000.01 / 3, 2), round(1000.01 - 2 * round(1000.01 / 3, 2), 2)]
+    assert round(q2['revenue'], 2) == 3500.01
+    # ручные суммы складываются с учётными данными квартала
+    pid = person(d)
+    ip.save_income(d, dict(client_id=pid, date='2026-07-10', amount=700))
+    q3 = ip.quarter_report(d, 2026, 3, today=date(2026, 12, 31))
+    assert q3['revenue'] == 700 and q3['manual'] == 0
+    ip.save_manual(d, 2026, 3, 7, 'revenue', 300)
+    assert ip.quarter_report(d, 2026, 3, today=date(2026, 12, 31))['months'][0]['revenue'] == 1000
+    with pytest.raises(ValueError):
+        ip.save_manual(d, 2026, 3, 1, 'revenue', 10)           # январь не в 3-м квартале
+    with pytest.raises(ValueError):
+        ip.save_manual(d, 2026, 3, 0, 'revenue', 0)
+    mid = ip.manual_list(d, 2026)[0][0]
+    ip.delete_manual(d, mid)
+    assert len(ip.manual_list(d, 2026)) == 4
+
+
+def test_manual_ui(d, monkeypatch):
+    import sys
+    import smetagaz.ip_view as iv
+    from smetagaz.database import db as singleton
+    for name, mod in list(sys.modules.items()):
+        if name.startswith('smetagaz') and getattr(mod, 'db', None) is singleton:
+            monkeypatch.setattr(mod, 'db', d)
+    import smetagaz.counterparty_ui as cui
+    monkeypatch.setattr(iv, 'db', d)
+    monkeypatch.setattr(cui, 'db', d)
+    year = date.today().year
+    dlg = iv.ManualDialog(year)
+    dlg.quarter.setCurrentIndex(0)
+    dlg.amount.setValue(3000)
+    dlg.save()
+    ip.save_manual(d, year, 1, 0, 'tax_paid', 50)
+    tab = iv.TaxTab()
+    assert tab.manual_table.rowCount() == 2
+    assert tab.quarters.item(0, 2).text().replace('\xa0', ' ') == '3 000,00' and tab.quarters.item(4, 0).text() == 'Итого за год'
+    est = iv.NewEstimateDialog()
+    est.manual.setText('Иванов вручную')
+    est.accept_data()
+    assert est.result == (None, '', 'Иванов вручную')
+    inc = iv.IncomeDialog()
+    inc.manual.setText('Случайный клиент')
+    inc.amount.setValue(10)
+    inc.save()
+    assert d.fetchone('SELECT client_name,client_id FROM ip_income')[:] == ('Случайный клиент', None)

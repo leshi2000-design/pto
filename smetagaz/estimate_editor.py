@@ -17,8 +17,8 @@ import docx
 from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
                               QTableWidgetItem, QInputDialog, QMessageBox, QFileDialog,
                               QDialog, QLineEdit, QComboBox, QMenu, QCheckBox, QGroupBox,
-                              QDoubleSpinBox, QGridLayout, QFormLayout)
-from PyQt6.QtCore import Qt
+                              QDoubleSpinBox, QGridLayout, QFormLayout, QTableWidget, QAbstractItemView)
+from PyQt6.QtCore import Qt, QDate
 from PyQt6.QtGui import QAction, QTextDocument, QShortcut, QKeySequence, QColor, QBrush
 from PyQt6.QtPrintSupport import QPrinter
 
@@ -27,6 +27,8 @@ from .workspace_view import choose_client
 from .platform_utils import open_local
 from .workspace_view import ExportDialog
 from .widgets import ReorderTableWidget, SmartTableManager
+from .date_widgets import DateEdit
+from . import payments_domain
 from .dialogs_common import PaymentDialog, CustomItemDialog, WorkSelectionDialog, MaterialSelectionDialog
 from .contract_card import ContractCardDialog
 from . import estimates_domain as ed
@@ -226,6 +228,44 @@ class EstimateEditorDialog(QDialog):
         self.lbl_grand_total.setAlignment(Qt.AlignmentFlag.AlignRight)
         right_panel.addWidget(self.lbl_grand_total)
 
+        pay_group = QGroupBox("Оплаты по смете")
+        pay_layout = QVBoxLayout(pay_group)
+        self.pay_table = QTableWidget(0, 3)
+        self.pay_table.setHorizontalHeaderLabels(["Дата", "Сумма", "Примечание"])
+        self.pay_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.pay_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.pay_table.horizontalHeader().setStretchLastSection(True)
+        self.pay_table.setMaximumHeight(170)
+        pay_layout.addWidget(self.pay_table)
+        pay_row = QHBoxLayout()
+        self.pay_date = DateEdit(QDate.currentDate())
+        self.pay_amount = QDoubleSpinBox()
+        self.pay_amount.setRange(0, 1e9)
+        self.pay_amount.setDecimals(2)
+        self.pay_amount.setSuffix(" руб.")
+        pay_row.addWidget(self.pay_date)
+        pay_row.addWidget(self.pay_amount, 1)
+        pay_layout.addLayout(pay_row)
+        self.pay_note = QLineEdit()
+        self.pay_note.setPlaceholderText("Примечание (необязательно)")
+        pay_layout.addWidget(self.pay_note)
+        pay_buttons = QHBoxLayout()
+        btn_add_pay = QPushButton("Внести оплату")
+        btn_add_pay.setProperty("type", "primary")
+        btn_add_pay.clicked.connect(self.add_payment_here)
+        btn_rest = QPushButton("Остаток")
+        btn_rest.setToolTip("Подставить остаток к оплате")
+        btn_rest.clicked.connect(self.fill_rest)
+        btn_del_pay = QPushButton("Удалить")
+        btn_del_pay.clicked.connect(self.remove_payment_here)
+        for b in (btn_add_pay, btn_rest, btn_del_pay):
+            pay_buttons.addWidget(b)
+        pay_layout.addLayout(pay_buttons)
+        self.pay_summary = QLabel()
+        self.pay_summary.setWordWrap(True)
+        pay_layout.addWidget(self.pay_summary)
+        right_panel.addWidget(pay_group)
+
         right_panel.addStretch()
         main_h.addLayout(right_panel, stretch=2)
         layout.addLayout(main_h)
@@ -258,6 +298,46 @@ class EstimateEditorDialog(QDialog):
         self.load_meta()
         self.load_files_combo()
         self.load_items()
+        self.load_payments()
+
+    # --- оплаты прямо в смете
+    def load_payments(self):
+        rows = payments_domain.history(db, 'estimates', self.estimate_id)
+        self.pay_table.setRowCount(len(rows))
+        for r, (pid, day, amount, note) in enumerate(rows):
+            for c, v in enumerate((day, f"{float(amount):,.2f}".replace(',', ' '), note or '')):
+                item = QTableWidgetItem(str(v))
+                if c == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, pid)
+                if c == 1:
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                self.pay_table.setItem(r, c, item)
+        s = payments_domain.summary(db, 'estimates', self.estimate_id)
+        color = '#DC2626' if s['debt'] > 0 else '#16A34A'
+        self.pay_summary.setText(f"Оплачено: <b>{float(s['paid']):,.2f}</b> из {float(s['total']):,.2f} руб.<br><span style='color:{color}'>Остаток: <b>{float(s['debt']):,.2f}</b> руб.</span>".replace(',', ' '))
+
+    def fill_rest(self):
+        s = payments_domain.summary(db, 'estimates', self.estimate_id)
+        self.pay_amount.setValue(max(0.0, float(s['debt'])))
+
+    def add_payment_here(self):
+        try:
+            payments_domain.add(db, 'estimates', self.estimate_id, self.pay_amount.value(), self.pay_date.date().toString('yyyy-MM-dd'), self.pay_note.text().strip())
+        except (ValueError, ArithmeticError) as e:
+            QMessageBox.warning(self, "Оплата не внесена", str(e) or "Введите положительную сумму с точностью до копейки")
+            return
+        self.pay_amount.setValue(0)
+        self.pay_note.clear()
+        self.load_payments()
+        self.sync_total()
+
+    def remove_payment_here(self):
+        r = self.pay_table.currentRow()
+        item = self.pay_table.item(r, 0) if r >= 0 else None
+        if item and QMessageBox.question(self, "Удалить оплату", "Удалить ошибочно внесённую оплату?") == QMessageBox.StandardButton.Yes:
+            payments_domain.remove(db, item.data(Qt.ItemDataRole.UserRole))
+            self.load_payments()
+            self.sync_total()
 
     def show_work_breakdown(self):
         from .work_breakdown_view import WorkBreakdownDialog
@@ -755,6 +835,8 @@ class EstimateEditorDialog(QDialog):
 
         self.totals_lbl.setText(t_text.replace(",", " "))
         self.lbl_grand_total.setText(f"ВСЕГО: {self.grand_total:,.2f} руб.".replace(",", " "))
+        if hasattr(self, 'pay_table'):
+            self.load_payments()
 
     def export_estimate_pdf(self):
         safe_title = re.sub(r'[\\/*?:"<>|]', "_", self.title)

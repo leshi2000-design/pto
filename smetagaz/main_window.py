@@ -23,7 +23,7 @@ from .data_services import search, SOURCES
 from concurrent.futures import ThreadPoolExecutor
 
 from .database import db
-from .services import AutoBackupService
+from .services import AutoBackupService, NoBackupService
 from .estimates_registry import EstimatesView
 from .contracts_registry import ContractsRegistryView
 from .materials_view import MaterialsView
@@ -110,10 +110,12 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.app_name = db.get_setting("app_name", "ПТО")
         self.setWindowTitle(self.app_name)
+        if getattr(db, 'is_remote', False):
+            self.setWindowTitle(f'{self.app_name} · {db.user} · сервер {db.cfg["host"]}')
         self.setAcceptDrops(True)       # файлы можно перетаскивать в любое место окна: откроется проверка входящего документа
         self.err_timer = QTimer(self); self.err_timer.setInterval(20000); self.err_timer.timeout.connect(self.update_error_badge); self.err_timer.start()
         self.resize(1350, 820)
-        self.backup_service = AutoBackupService()
+        self.backup_service = NoBackupService() if getattr(db, 'is_remote', False) else AutoBackupService()
         QShortcut(QKeySequence("Ctrl+K"), self).activated.connect(lambda: GlobalSearchDialog(self).exec())
         for keys, handler in (("Ctrl+N", self.shortcut_new), ("Ctrl+S", self.shortcut_save), ("Ctrl+F", self.shortcut_find), ("F1", self.show_help)):
             QShortcut(QKeySequence(keys), self).activated.connect(handler)
@@ -189,6 +191,13 @@ class MainWindow(QMainWindow):
         self.build_dynamic_tabs()
 
         self.nav_layout.addStretch()
+        if getattr(db, 'is_remote', False):
+            from .network_ui import attach_status
+            self.net_label = attach_status(self, db)
+            self.sidebar_layout.addWidget(self.net_label)
+            self.net_timer = QTimer(self)
+            self.net_timer.timeout.connect(db.ping)
+            self.net_timer.start(30000)
         self.btn_toggle_theme = QPushButton("Переключить тему")
         self.btn_toggle_theme.clicked.connect(self.toggle_theme)
         self.sidebar_layout.addWidget(self.btn_toggle_theme)
@@ -425,6 +434,15 @@ def main():
         QMessageBox.warning(None, 'ПТО', 'Эта папка данных уже открыта другим экземпляром.');return
     import os
     os.chdir(DATA_DIR)
+    if getattr(db, 'is_remote', False):
+        from .network_ui import connect_client
+        if not connect_client(db):
+            return
+    else:
+        server_lock = QLockFile(str(DATA_DIR / 'server.lock'))
+        if not server_lock.tryLock(100):
+            QMessageBox.warning(None, 'ПТО', 'На этом компьютере запущен ПТО Сервер, он владеет локальной базой. Запустите программу в режиме клиента (Настройки → Сетевая работа) и подключитесь к 127.0.0.1.');return
+        server_lock.unlock()
     db.init_db()
     from .security import login
     if not login(db):return

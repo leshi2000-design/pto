@@ -47,6 +47,10 @@ def add(db,owner,rid,amount,day,note=''):
         eid,data=account(db,owner,rid)
         return db.execute('INSERT INTO payments(estimate_id,owner_type,owner_id,amount,date,note) VALUES(?,?,?,?,?,?)',(eid,owner,rid,float(n),day,note)).lastrowid
 
+def remove(db,pid):
+    """Удаляет ошибочно внесённую оплату."""
+    db.execute('DELETE FROM payments WHERE id=?',(pid,))
+
 def link(db,owner,rid,eid):
     if owner=='estimates':raise ValueError('Выберите договор')
     with db.transaction():

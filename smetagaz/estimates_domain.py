@@ -272,7 +272,12 @@ def create_estimate(db, title='', client=None, contract=None, link=False, folder
         eid = db.execute("INSERT INTO estimates(title,date,total,paid,statuses,folder_id,prepared_by) VALUES(?,?,0.0,0.0,'Предварительная смета',?,?)",
                          (str(title or '').strip() or 'Новая смета', date.today().isoformat(), folder_id, prepared_by or '')).lastrowid
         if client:
-            if client[0] == 'person':
+            if client[0] == 'manual':          # произвольный клиент, введённый вручную: по общему правилу программы попадает в «Клиенты»
+                name = str(client[1] or '').strip()
+                if not name:
+                    raise ValueError('Впишите клиента')
+                db.execute('UPDATE estimates SET client_name=?,client_phone=? WHERE id=?', (name, str(client[2] if len(client) > 2 else '').strip(), eid))
+            elif client[0] == 'person':
                 set_client(db, eid, 'person', client[1])
             else:
                 set_client(db, eid, 'legal', client[1])

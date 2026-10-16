@@ -17,6 +17,9 @@ def migrate(db):
     db.execute("""CREATE TABLE IF NOT EXISTS ip_income(id INTEGER PRIMARY KEY, client_id INTEGER, client_name TEXT DEFAULT '', income_date TEXT NOT NULL, amount REAL NOT NULL,
         title TEXT DEFAULT '', note TEXT DEFAULT '')""")
     db.execute('CREATE INDEX IF NOT EXISTS idx_ip_income_date ON ip_income(income_date)')
+    db.execute("""CREATE TABLE IF NOT EXISTS ip_manual(id INTEGER PRIMARY KEY, year INTEGER NOT NULL, quarter INTEGER NOT NULL CHECK(quarter BETWEEN 1 AND 4),
+        month INTEGER NOT NULL DEFAULT 0 CHECK(month BETWEEN 0 AND 12), kind TEXT NOT NULL CHECK(kind IN ('revenue','tax_paid')), amount REAL NOT NULL, note TEXT DEFAULT '')""")
+    db.execute('CREATE INDEX IF NOT EXISTS idx_ip_manual_year ON ip_manual(year)')
     db.execute("""CREATE TABLE IF NOT EXISTS ip_tax_params(year INTEGER PRIMARY KEY, expense_rate REAL, tax_rate REAL, poverty_threshold REAL, poverty_deduction REAL,
         child_deduction REAL, dependent_deduction REAL, children INTEGER DEFAULT 0, dependents INTEGER DEFAULT 0, monthly INTEGER DEFAULT 1)""")
 
@@ -34,12 +37,19 @@ def _day(value):
 
 # --- СМЕТЫ БЕЗ ДОГОВОРА -------------------------------------------------------------------------
 
-def add_estimate(db, client_id, title=''):
-    """Новая смета ИП для клиента без договора."""
+def add_estimate(db, client_id=None, title='', client_name=''):
+    """Новая смета ИП без договора. Клиент — из справочника «Клиенты» или введённый вручную (client_name); вручную введённый клиент попадает в «Клиенты» по общему правилу программы (смета с именем создаёт клиента)."""
     from . import estimates_domain as ed
-    if not db.fetchone('SELECT 1 FROM crm.clients WHERE id=?', (client_id,)):
-        raise ValueError('Выберите клиента')
-    eid = ed.create_estimate(db, title, client=('person', client_id))
+    client_name = str(client_name or '').strip()
+    if client_id:
+        if not db.fetchone('SELECT 1 FROM crm.clients WHERE id=?', (client_id,)):
+            raise ValueError('Клиент не найден')
+        eid = ed.create_estimate(db, title, client=('person', client_id))
+    elif client_name:
+        eid = ed.create_estimate(db, title or f'Смета · {client_name}')
+        db.execute('UPDATE estimates SET client_name=? WHERE id=?', (client_name, eid))
+    else:
+        raise ValueError('Выберите клиента или впишите его вручную')
     db.execute('INSERT INTO ip_estimates(estimate_id,client_id,added_at) VALUES(?,?,?)', (eid, client_id, date.today().isoformat()))
     return eid
 
@@ -211,6 +221,58 @@ def export_statement(db, year, month, path):
     return path
 
 
+# --- РУЧНЫЕ ДАННЫЕ ДЛЯ НАЛОГА -----------------------------------------------------------------------
+
+MANUAL_KINDS = {'revenue': 'Выручка (сумма)', 'tax_paid': 'Уплаченный налог'}
+
+
+def save_manual(db, year, quarter, month, kind, amount, note='', mid=None):
+    """Данные, которых нет в договорах и актах (например, суммы за 1–2 кварталы 2026): month=0 — сумма за весь квартал, иначе за указанный месяц квартала."""
+    if kind not in MANUAL_KINDS:
+        raise ValueError('Неизвестный вид записи')
+    quarter, month = int(quarter), int(month)
+    if quarter not in (1, 2, 3, 4):
+        raise ValueError('Квартал — от 1 до 4')
+    if month and not quarter * 3 - 2 <= month <= quarter * 3:
+        raise ValueError('Месяц не входит в выбранный квартал')
+    amount = float(amount or 0)
+    if amount <= 0:
+        raise ValueError('Сумма должна быть больше нуля')
+    if mid:
+        db.execute('UPDATE ip_manual SET year=?,quarter=?,month=?,kind=?,amount=?,note=? WHERE id=?', (year, quarter, month, kind, amount, str(note or '').strip(), mid))
+        return mid
+    return db.execute('INSERT INTO ip_manual(year,quarter,month,kind,amount,note) VALUES(?,?,?,?,?,?)', (year, quarter, month, kind, amount, str(note or '').strip())).lastrowid
+
+
+def delete_manual(db, mid):
+    db.execute('DELETE FROM ip_manual WHERE id=?', (mid,))
+
+
+def manual_list(db, year):
+    return db.fetchall('SELECT id,quarter,month,kind,amount,note FROM ip_manual WHERE year=? ORDER BY quarter,month,id', (year,))
+
+
+def manual_revenue_by_month(db, year, quarter):
+    """{месяц: ручная выручка}: суммы по месяцам плюс сумма за квартал, разделённая поровну на три месяца (копейки — в последнем)."""
+    months = [quarter * 3 - 2, quarter * 3 - 1, quarter * 3]
+    out = {m: 0.0 for m in months}
+    for _id, _q, month, kind, amount, _note in manual_list(db, year):
+        if _q != quarter or kind != 'revenue':
+            continue
+        if month:
+            out[month] += amount
+        else:
+            part = round(amount / 3, 2)
+            out[months[0]] += part
+            out[months[1]] += part
+            out[months[2]] += round(amount - 2 * part, 2)
+    return {m: round(v, 2) for m, v in out.items()}
+
+
+def manual_paid(db, year, quarter):
+    return round(sum(a for _i, q, _m, kind, a, _n in manual_list(db, year) if q == quarter and kind == 'tax_paid'), 2)
+
+
 # --- ПОДОХОДНЫЙ НАЛОГ -----------------------------------------------------------------------------
 
 def params(db, year):
@@ -258,14 +320,17 @@ def quarter_report(db, year, quarter, today=None):
         raise ValueError('Квартал — от 1 до 4')
     today = today or date.today()
     p = params(db, year)
-    months, revenue_total = [], 0.0
+    months, revenue_total, manual_total = [], 0.0, 0.0
+    manual = manual_revenue_by_month(db, year, quarter)
     for m in range(quarter * 3 - 2, quarter * 3 + 1):
         start, end = month_range(year, m)
-        revenue = sum(r['amount'] for r in incomes(db, start, min(end, today) if start <= today else start))if start <= today else 0.0
+        recorded = sum(r['amount'] for r in incomes(db, start, min(end, today))) if start <= today else 0.0
+        revenue = recorded + manual[m]
         row = month_tax(revenue, p)
-        row.update(month=m, name=MONTHS[m])
+        row.update(month=m, name=MONTHS[m], recorded=round(recorded, 2), manual=manual[m])
         months.append(row)
         revenue_total += revenue
+        manual_total += manual[m]
     if p['monthly']:
         base = round(sum(r['base'] for r in months), 2)
         tax = round(sum(r['tax'] for r in months), 2)
@@ -274,7 +339,9 @@ def quarter_report(db, year, quarter, today=None):
         base = max(0.0, raw)
         tax = round(base * p['tax_rate'] / 100, 2)
     last_day = month_range(year, quarter * 3)[1]
-    return dict(year=year, quarter=quarter, months=months, revenue=round(revenue_total, 2), base=base, tax=tax, params=p, complete=today >= last_day)
+    paid = manual_paid(db, year, quarter)
+    return dict(year=year, quarter=quarter, months=months, revenue=round(revenue_total, 2), manual=round(manual_total, 2), base=base, tax=tax, paid=paid, to_pay=round(tax - paid, 2),
+                params=p, complete=today >= last_day)
 
 
 def year_report(db, year, today=None):

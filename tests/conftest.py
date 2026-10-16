@@ -1,6 +1,15 @@
 import os
+import sys
+sys.path.insert(0, os.path.dirname(__file__))
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 import pytest
+
+if os.environ.get('PTO_TEST_REMOTE') == '1':
+    import sys
+    sys.path.insert(0, os.path.dirname(__file__))
+    import remote_mode
+    remote_mode.install()
+    sys.excepthook = lambda *a: print('UNHANDLED', a[1], file=sys.stderr)       # без этого PyQt аварийно завершает процесс при исключении в слоте
 
 
 @pytest.fixture(scope='session', autouse=True)
@@ -21,3 +30,14 @@ def wait_job(owner, timeout=15):
     while job is not None and job in background._ACTIVE and time.time() < deadline:
         QApplication.processEvents()
         time.sleep(0.01)
+
+
+SKIP_IN_REMOTE = {'test_close_hides_window_at_once_and_backs_up_in_background': 'в сетевом клиенте копии при закрытии не делаются'}
+
+
+def pytest_collection_modifyitems(config, items):
+    if os.environ.get('PTO_TEST_REMOTE') == '1':
+        for item in items:
+            reason = SKIP_IN_REMOTE.get(item.name)
+            if reason:
+                item.add_marker(pytest.mark.skip(reason=reason))

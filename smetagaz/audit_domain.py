@@ -55,6 +55,11 @@ def migrate(db):
                        action TEXT NOT NULL, label TEXT DEFAULT '', old_json TEXT, new_json TEXT, restored INTEGER NOT NULL DEFAULT 0)""")
         db.execute(f'CREATE INDEX IF NOT EXISTS {schema}.idx_audit_ts ON audit_log(ts)')
         db.execute(f'CREATE INDEX IF NOT EXISTS {schema}.idx_audit_rec ON audit_log(table_name,record_id)')
+        if 'user' not in {r[1] for r in db.fetchall(f'PRAGMA {schema}.table_info(audit_log)')}:
+            db.execute(f"ALTER TABLE {schema}.audit_log ADD COLUMN user TEXT DEFAULT ''")
+        # имя пользователя сетевой работы: сервер записывает его в audit_ctx перед командами клиента, триггеры берут отсюда
+        db.execute(f"CREATE TABLE IF NOT EXISTS {schema}.audit_ctx(id INTEGER PRIMARY KEY CHECK(id=1), user TEXT NOT NULL DEFAULT '')")
+        db.execute(f'INSERT OR IGNORE INTO {schema}.audit_ctx(id,user) VALUES(1,\'\')')
     for table, (schema, _title) in AUDITED.items():
         if not db.fetchone(f"SELECT 1 FROM {schema}.sqlite_master WHERE type='table' AND name=?", (table,)):
             continue
@@ -62,7 +67,7 @@ def migrate(db):
         cols = [c for c, t in cols_types if t != 'BLOB']
         if not has_id or 'id' not in cols:
             continue
-        fingerprint = ','.join(cols)
+        fingerprint = ','.join(cols) + '|user1'
         key = f'audit_cols_{table}'
         existing = db.fetchone(f"SELECT 1 FROM {schema}.sqlite_master WHERE type='trigger' AND name=?", (f'audit_{table}_d',))
         if existing and db.get_setting(key, '') == fingerprint:
@@ -71,13 +76,13 @@ def migrate(db):
             db.execute(f'DROP TRIGGER IF EXISTS {schema}.audit_{table}_{suffix}')
         changed = ' OR '.join(f'OLD.{_q(c)} IS NOT NEW.{_q(c)}' for c in cols if c not in NOISY) or '0'
         db.execute(f"""CREATE TRIGGER {schema}.audit_{table}_i AFTER INSERT ON {table} BEGIN
-            INSERT INTO audit_log(ts,table_name,record_id,action,label) VALUES({TS},'{table}',NEW.id,'I',{_label_expr(cols, 'NEW')}); END""")
+            INSERT INTO audit_log(ts,table_name,record_id,action,label,user) VALUES({TS},'{table}',NEW.id,'I',{_label_expr(cols, 'NEW')},(SELECT user FROM audit_ctx WHERE id=1)); END""")
         db.execute(f"""CREATE TRIGGER {schema}.audit_{table}_u AFTER UPDATE ON {table} WHEN {changed} BEGIN
-            INSERT INTO audit_log(ts,table_name,record_id,action,label,old_json,new_json)
-            VALUES({TS},'{table}',NEW.id,'U',{_label_expr(cols, 'NEW')},{_json_expr(cols, 'OLD')},{_json_expr(cols, 'NEW')}); END""")
+            INSERT INTO audit_log(ts,table_name,record_id,action,label,old_json,new_json,user)
+            VALUES({TS},'{table}',NEW.id,'U',{_label_expr(cols, 'NEW')},{_json_expr(cols, 'OLD')},{_json_expr(cols, 'NEW')},(SELECT user FROM audit_ctx WHERE id=1)); END""")
         db.execute(f"""CREATE TRIGGER {schema}.audit_{table}_d AFTER DELETE ON {table} BEGIN
-            INSERT INTO audit_log(ts,table_name,record_id,action,label,old_json)
-            VALUES({TS},'{table}',OLD.id,'D',{_label_expr(cols, 'OLD')},{_json_expr(cols, 'OLD')}); END""")
+            INSERT INTO audit_log(ts,table_name,record_id,action,label,old_json,user)
+            VALUES({TS},'{table}',OLD.id,'D',{_label_expr(cols, 'OLD')},{_json_expr(cols, 'OLD')},(SELECT user FROM audit_ctx WHERE id=1)); END""")
         db.set_setting(key, fingerprint)
     limit = (datetime.now() - timedelta(days=KEEP_DAYS)).strftime('%Y-%m-%d %H:%M:%S')
     for schema in ('main', 'crm'):
@@ -97,9 +102,9 @@ def entries(db, table='', action='', text='', limit=300, offset=0, only_unrestor
             where.append("(label LIKE ? OR coalesce(old_json,'') LIKE ?)"); params += [f'%{text}%', f'%{text}%']
         if only_unrestored_deleted:
             where.append("action='D' AND restored=0")
-        sql = f"SELECT id,ts,table_name,record_id,action,label,old_json,new_json,restored FROM {schema}.audit_log" + (' WHERE ' + ' AND '.join(where) if where else '') + ' ORDER BY ts DESC,id DESC LIMIT ?'
+        sql = f"SELECT id,ts,table_name,record_id,action,label,old_json,new_json,restored,coalesce(user,'') FROM {schema}.audit_log" + (' WHERE ' + ' AND '.join(where) if where else '') + ' ORDER BY ts DESC,id DESC LIMIT ?'
         for r in db.fetchall(sql, (*params, limit + offset)):
-            result.append(dict(id=r[0], ts=r[1], table=r[2], record_id=r[3], action=r[4], label=r[5], old=r[6], new=r[7], restored=r[8], schema=schema))
+            result.append(dict(id=r[0], ts=r[1], table=r[2], record_id=r[3], action=r[4], label=r[5], old=r[6], new=r[7], restored=r[8], user=r[9], schema=schema))
     result.sort(key=lambda e: (e['ts'], e['id']), reverse=True)
     return result[offset:offset + limit]
 

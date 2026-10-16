@@ -40,6 +40,15 @@ class SettingsView(QWidget):
         layout.setSpacing(15)
         self.backup_status=QLabel(db.get_setting('backup_status','Резервных копий пока нет'))
         self.backup_status.setWordWrap(True);layout.addWidget(self.backup_status)
+        from .network_ui import NetworkDialog
+        net_box = QGroupBox('Сетевая работа')
+        net_layout = QHBoxLayout(net_box)
+        remote = getattr(db, 'is_remote', False)
+        net_layout.addWidget(QLabel(f'Режим: клиент, вы вошли как {db.user}' if remote else 'Режим: локальная база на этом компьютере'), 1)
+        btn_net = QPushButton('Сетевая работа…')
+        btn_net.clicked.connect(lambda: NetworkDialog(db, self).exec())
+        net_layout.addWidget(btn_net)
+        layout.addWidget(net_box)
         btn_password=QPushButton('Установить / изменить пароль входа')
         btn_password.clicked.connect(self.change_password);layout.addWidget(btn_password)
         self.job=None
@@ -109,6 +118,9 @@ class SettingsView(QWidget):
         box_db_layout.addWidget(btn_backup)
         box_db_layout.addWidget(btn_restore)
         layout.addWidget(box_db)
+        if getattr(db, 'is_remote', False):
+            box_db.setEnabled(False)
+            box_db.setToolTip('Резервные копии и восстановление выполняются на компьютере с ПТО Сервером')
 
         # 4. Папки договоров: где создаются новые папки (по разделам)
         box_folders = QGroupBox("Папки договоров (где создавать новые папки)")
@@ -185,6 +197,11 @@ class SettingsView(QWidget):
         off.addWidget(QLabel("Раз в месяц программа сама расшифровывает самую свежую копию, восстанавливает её во временную папку и проверяет базы. Пароль хранится в настройках: "
                              "он защищает копию в облаке и на чужом диске, но не от человека с доступом к этому компьютеру."), 8, 0, 1, 3)
         layout.addWidget(box_off)
+        if getattr(db, 'is_remote', False):          # копии делает сервер; настроить их можно только с самого компьютера-сервера (пароль копий защищён средствами этого компьютера)
+            from .network_ui import is_loopback
+            if not (is_loopback(db.cfg['host']) and db.role == 'admin'):
+                box_off.setEnabled(False)
+                box_off.setToolTip('Настройте копии вне компьютера на компьютере с ПТО Сервером (подключитесь к 127.0.0.1 администратором)')
         self.off_refresh()
 
         # 5. Excel-снимок реестров договоров, отдельно от обычных бэкапов.

@@ -75,7 +75,12 @@ class NewEstimateDialog(QDialog):
         self.rb_legal = QRadioButton("Юрлицо из справочника")
         self.rb_contract = QRadioButton("Клиент из карточки договора")
         self.rb_none = QRadioButton("Пока без клиента")
-        for rb in (self.rb_person, self.rb_legal, self.rb_contract, self.rb_none):
+        self.rb_manual = QRadioButton("Произвольный клиент — ввести вручную")
+        self.inp_manual = QLineEdit()
+        self.inp_manual.setPlaceholderText("ФИО или название клиента")
+        self.inp_manual_phone = QLineEdit()
+        self.inp_manual_phone.setPlaceholderText("Телефон (необязательно)")
+        for rb in (self.rb_person, self.rb_legal, self.rb_manual, self.rb_contract, self.rb_none):
             self.group.addButton(rb)
         self.rb_person.setChecked(True)
         self.cmb_person, self.cmb_legal = QComboBox(), QComboBox()
@@ -97,6 +102,11 @@ class NewEstimateDialog(QDialog):
         lay.addWidget(self.cmb_person)
         lay.addWidget(self.rb_legal)
         lay.addWidget(self.cmb_legal)
+        lay.addWidget(self.rb_manual)
+        manual_row = QHBoxLayout()
+        manual_row.addWidget(self.inp_manual, 2)
+        manual_row.addWidget(self.inp_manual_phone, 1)
+        lay.addLayout(manual_row)
         lay.addWidget(self.rb_contract)
         lay.addLayout(row)
         lay.addWidget(self.chk_link)
@@ -109,11 +119,14 @@ class NewEstimateDialog(QDialog):
         self.group.buttonToggled.connect(self.refresh)
         self.cmb_person.currentIndexChanged.connect(lambda *_: self.rb_person.setChecked(True))
         self.cmb_legal.currentIndexChanged.connect(lambda *_: self.rb_legal.setChecked(True))
+        self.inp_manual.textChanged.connect(lambda *_: self.rb_manual.setChecked(True))
         self.refresh()
 
     def refresh(self, *_):
         self.cmb_person.setEnabled(self.rb_person.isChecked())
         self.cmb_legal.setEnabled(self.rb_legal.isChecked())
+        self.inp_manual.setEnabled(self.rb_manual.isChecked())
+        self.inp_manual_phone.setEnabled(self.rb_manual.isChecked())
         self.chk_link.setEnabled(self.rb_contract.isChecked() and bool(self.contract) and self.contract[0] in ed.CONTRACT_TABLES)
 
     def choose_contract(self):
@@ -133,6 +146,8 @@ class NewEstimateDialog(QDialog):
             client = ("person", self.cmb_person.currentData())
         elif self.rb_legal.isChecked() and self.cmb_legal.currentData():
             client = ("legal", self.cmb_legal.currentData())
+        elif self.rb_manual.isChecked() and self.inp_manual.text().strip():
+            client = ("manual", self.inp_manual.text().strip(), self.inp_manual_phone.text().strip())
         elif self.rb_contract.isChecked() and self.contract:
             contract = self.contract
             link = self.chk_link.isChecked() and contract[0] in ed.CONTRACT_TABLES

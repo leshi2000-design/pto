@@ -240,7 +240,7 @@ class DatabaseManager:
                 ('export_font', 'Segoe UI'), ('export_font_size', '13'),
                 ('export_company_name', 'ООО "ГазМонтаж"'),
                 ('export_excel_template', ''), ('export_word_template', ''),
-                ('app_name', 'ПТО 4.0.0'), ('tabs_config', json.dumps(default_tabs))
+                ('app_name', 'ПТО 4.1.0'), ('tabs_config', json.dumps(default_tabs))
             ]
             c.executemany("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", defaults)
 
@@ -313,4 +313,13 @@ class DatabaseManager:
             self.conn.close()
 
 
-db = DatabaseManager()
+def _make_db():
+    """Локальная база или (в сетевом клиенте) база на ПТО Сервере: вся остальная программа работает с `db` одинаково."""
+    from . import net_config
+    if net_config.is_client():
+        from .remote_db import RemoteDatabaseManager
+        return RemoteDatabaseManager()
+    return DatabaseManager()
+
+
+db = _make_db()

@@ -9,6 +9,18 @@ from .contracts_excel_export import export_registries,EXPORT_FILENAME
 
 CONTRACTS_EXPORT_INTERVAL=3600  # раз в час, пока программа запущена; файлы перезаписываются
 
+class NoBackupService:
+    """В сетевом клиенте копии и выгрузки делает ПТО Сервер: здесь ничего не запускается."""
+    def exit_backup_needed(self):
+        return False
+
+    def start_exit_backup(self):
+        return None
+
+    def close(self):
+        pass
+
+
 class AutoBackupService(QObject):
     def __init__(self):
         super().__init__()

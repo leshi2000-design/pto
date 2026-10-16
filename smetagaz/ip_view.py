@@ -63,7 +63,10 @@ class NewEstimateDialog(QDialog):
         row.addWidget(new)
         self.title = QLineEdit()
         self.title.setPlaceholderText('Например: ремонт кровли, ул. Лесная 5')
+        self.manual = QLineEdit()
+        self.manual.setPlaceholderText('или впишите клиента вручную (если выбран в списке — не нужно)')
         f.addRow('Клиент', row)
+        f.addRow('Клиент вручную', self.manual)
         f.addRow('Название сметы', self.title)
         ok = QPushButton('Создать и открыть')
         ok.setProperty('type', 'primary')
@@ -76,10 +79,12 @@ class NewEstimateDialog(QDialog):
             populate_person_combo(self.client, d.person_id)
 
     def accept_data(self):
-        if not self.client.currentData():
-            QMessageBox.warning(self, 'Смета', 'Выберите клиента')
+        name = self.manual.text().strip()
+        client_id = None if name else self.client.currentData()      # впечатанное вручную имеет приоритет над списком
+        if not client_id and not name:
+            QMessageBox.warning(self, 'Смета', 'Выберите клиента или впишите его вручную')
             return
-        self.result = (self.client.currentData(), self.title.text().strip())
+        self.result = (client_id, self.title.text().strip(), name)
         self.accept()
 
 
@@ -200,7 +205,10 @@ class IncomeDialog(QDialog):
         self.title = QLineEdit()
         self.title.setPlaceholderText('За что оплата')
         self.note = QLineEdit()
+        self.manual = QLineEdit()
+        self.manual.setPlaceholderText('или впишите клиента вручную (если выбран в списке — не нужно)')
         f.addRow('Клиент', row)
+        f.addRow('Клиент вручную', self.manual)
         f.addRow('Дата оплаты', self.date)
         f.addRow('Сумма', self.amount)
         f.addRow('За что', self.title)
@@ -210,8 +218,10 @@ class IncomeDialog(QDialog):
         ok.clicked.connect(self.save)
         f.addRow(ok)
         if iid:
-            r = db.fetchone('SELECT client_id,income_date,amount,title,note FROM ip_income WHERE id=?', (iid,))
+            r = db.fetchone('SELECT client_id,income_date,amount,title,note,client_name FROM ip_income WHERE id=?', (iid,))
             populate_person_combo(self.client, r[0])
+            if not r[0]:
+                self.manual.setText(r[5] or '')
             self.date.setDate(QDate.fromString(r[1], 'yyyy-MM-dd'))
             self.amount.setValue(r[2])
             self.title.setText(r[3] or '')
@@ -224,7 +234,8 @@ class IncomeDialog(QDialog):
 
     def save(self):
         try:
-            ip.save_income(db, dict(client_id=self.client.currentData(), date=self.date.date().toString('yyyy-MM-dd'), amount=self.amount.value(), title=self.title.text(), note=self.note.text()), self.iid)
+            name = self.manual.text().strip()
+            ip.save_income(db, dict(client_id=None if name else self.client.currentData(), client_name=name, date=self.date.date().toString('yyyy-MM-dd'), amount=self.amount.value(), title=self.title.text(), note=self.note.text()), self.iid)
         except ValueError as e:
             QMessageBox.warning(self, 'Оплата не сохранена', str(e))
             return
@@ -384,6 +395,67 @@ class StatementTab(QWidget):
         print_ui.print_html(self, *self.html())
 
 
+class ManualDialog(QDialog):
+    """Ручные данные для налога: сумма выручки за квартал или месяц (когда нет договоров и актов) и уже уплаченный налог."""
+    def __init__(self, year, mid=None, parent=None):
+        super().__init__(parent)
+        self.year, self.mid = year, mid
+        self.setWindowTitle(f'Ручные данные для налога · {year} год')
+        self.resize(480, 300)
+        f = QFormLayout(self)
+        self.kind = QComboBox()
+        for key, text in ip.MANUAL_KINDS.items():
+            self.kind.addItem(text, key)
+        self.quarter = QComboBox()
+        for q in (1, 2, 3, 4):
+            self.quarter.addItem(f'{q}-й квартал', q)
+        self.month = QComboBox()
+        self.quarter.currentIndexChanged.connect(self.fill_months)
+        self.amount = QDoubleSpinBox()
+        self.amount.setRange(0, 1e9)
+        self.amount.setDecimals(2)
+        self.amount.setSuffix(' BYN')
+        self.note = QLineEdit()
+        self.note.setPlaceholderText('Например: итого за квартал по книге учёта')
+        f.addRow('Что вводится', self.kind)
+        f.addRow('Квартал', self.quarter)
+        f.addRow('Период внутри квартала', self.month)
+        f.addRow('Сумма', self.amount)
+        f.addRow('Примечание', self.note)
+        hint = QLabel('Сумма за весь квартал при расчёте делится поровну на три месяца (вычет на бедность применяется к каждому месяцу отдельно). Лучше вводить по месяцам, если суммы известны. Ручная выручка складывается с оплатами, внесёнными в программу.')
+        hint.setWordWrap(True)
+        hint.setStyleSheet('color: #605E5C;')
+        f.addRow(hint)
+        ok = QPushButton('Сохранить')
+        ok.setProperty('type', 'primary')
+        ok.clicked.connect(self.save)
+        f.addRow(ok)
+        self.fill_months()
+        if mid:
+            r = db.fetchone('SELECT quarter,month,kind,amount,note FROM ip_manual WHERE id=?', (mid,))
+            self.kind.setCurrentIndex(self.kind.findData(r[2]))
+            self.quarter.setCurrentIndex(r[0] - 1)
+            self.fill_months()
+            self.month.setCurrentIndex(max(0, self.month.findData(r[1])))
+            self.amount.setValue(r[3])
+            self.note.setText(r[4] or '')
+
+    def fill_months(self, *_):
+        q = self.quarter.currentData()
+        self.month.clear()
+        self.month.addItem('Весь квартал', 0)
+        for m in range(q * 3 - 2, q * 3 + 1):
+            self.month.addItem(ip.MONTHS[m].capitalize(), m)
+
+    def save(self):
+        try:
+            ip.save_manual(db, self.year, self.quarter.currentData(), self.month.currentData(), self.kind.currentData(), self.amount.value(), self.note.text(), self.mid)
+        except ValueError as e:
+            QMessageBox.warning(self, 'Данные не сохранены', str(e))
+            return
+        self.accept()
+
+
 class TaxTab(QWidget):
     """Подоходный налог ИП: параметры года (меняются вручную в начале года) и автоматический расчёт за квартал."""
     def __init__(self):
@@ -435,10 +507,24 @@ class TaxTab(QWidget):
         save.clicked.connect(self.save_params)
         g.addWidget(save, 5, 0, 1, 4)
         layout.addWidget(box)
-        layout.addWidget(QLabel('<b>Налог по кварталам года</b> (по поступившей выручке на сегодня)'))
-        self.quarters = make_table(['Квартал', 'Выручка', 'Налоговая база', 'К уплате'], 0)
-        self.quarters.setMaximumHeight(170)
+        layout.addWidget(QLabel('<b>Налог по кварталам года</b> (оплаты из программы + ручные данные)'))
+        self.quarters = make_table(['Квартал', 'Выручка', 'в т.ч. вручную', 'Налоговая база', 'Налог', 'Уплачено', 'Осталось уплатить'], 0)
+        self.quarters.setMaximumHeight(190)
         layout.addWidget(self.quarters)
+        manual_box = QGroupBox('Ручные данные (суммы за кварталы без договоров и актов, уплаченный налог)')
+        ml = QVBoxLayout(manual_box)
+        bar = QHBoxLayout()
+        for text, fn in (('Добавить', self.add_manual), ('Изменить', self.edit_manual), ('Удалить', self.delete_manual)):
+            b = QPushButton(text)
+            b.clicked.connect(fn)
+            bar.addWidget(b)
+        bar.addStretch()
+        ml.addLayout(bar)
+        self.manual_table = make_table(['Квартал', 'Период', 'Что', 'Сумма', 'Примечание'], 4)
+        self.manual_table.setMaximumHeight(170)
+        self.manual_table.doubleClicked.connect(lambda *_: self.edit_manual())
+        ml.addWidget(self.manual_table)
+        layout.addWidget(manual_box)
         layout.addStretch()
         self.year.valueChanged.connect(self.reload_all)
         self.quarter.currentIndexChanged.connect(self.load_data)
@@ -452,6 +538,21 @@ class TaxTab(QWidget):
             w.blockSignals(False)
         self.monthly.setChecked(bool(p['monthly']))
         self.load_data()
+
+    def add_manual(self):
+        if ManualDialog(self.year.value(), None, self).exec():
+            self.load_data()
+
+    def edit_manual(self):
+        mid = current_id(self.manual_table)
+        if mid and ManualDialog(self.year.value(), mid, self).exec():
+            self.load_data()
+
+    def delete_manual(self):
+        mid = current_id(self.manual_table)
+        if mid and QMessageBox.question(self, 'Удалить', 'Удалить выбранную запись?') == QMessageBox.StandardButton.Yes:
+            ip.delete_manual(db, mid)
+            self.load_data()
 
     def save_params(self):
         try:
@@ -473,10 +574,20 @@ class TaxTab(QWidget):
                 f.setBold(True)
                 self.table.item(last, c).setFont(f)
         state = 'квартал завершён' if r['complete'] else f'по состоянию на {date.today():%d.%m.%Y}, квартал ещё идёт'
-        self.result.setText(f'<b>К уплате за {q}-й квартал {y} года: {money(r["tax"])} BYN</b><br><span style="font-size:10pt">Выручка {money(r["revenue"])} · налоговая база {money(r["base"])} · {state}</span>')
+        paid_text = f' · уплачено {money(r["paid"])} · осталось уплатить {money(r["to_pay"])}' if r['paid'] else ''
+        self.result.setText(f'<b>К уплате за {q}-й квартал {y} года: {money(r["tax"])} BYN</b><br><span style="font-size:10pt">Выручка {money(r["revenue"])} · налоговая база {money(r["base"])}{paid_text} · {state}</span>')
         quarters = ip.year_report(db, y)
-        fill(self.quarters, [(f'{x["quarter"]}-й квартал', money(x['revenue']), money(x['base']), money(x['tax'])) for x in quarters] +
-             [('Итого за год', money(sum(x['revenue'] for x in quarters)), money(sum(x['base'] for x in quarters)), money(sum(x['tax'] for x in quarters)))], right=(1, 2, 3))
+        total = lambda key: sum(x[key] for x in quarters)
+        fill(self.quarters, [(f'{x["quarter"]}-й квартал', money(x['revenue']), money(x['manual']), money(x['base']), money(x['tax']), money(x['paid']), money(x['to_pay'])) for x in quarters] +
+             [('Итого за год', money(total('revenue')), money(total('manual')), money(total('base')), money(total('tax')), money(total('paid')), money(total('to_pay')))], right=(1, 2, 3, 4, 5, 6))
+        last_row = self.quarters.rowCount() - 1
+        for c in range(7):
+            if self.quarters.item(last_row, c):
+                font = self.quarters.item(last_row, c).font()
+                font.setBold(True)
+                self.quarters.item(last_row, c).setFont(font)
+        rows = ip.manual_list(db, y)
+        fill(self.manual_table, [(f'{q_}-й', ip.MONTHS[m].capitalize() if m else 'весь квартал', ip.MANUAL_KINDS[k], money(a), n) for _i, q_, m, k, a, n in rows], data=[r_[0] for r_ in rows], right=(3,))
 
 
 class IpView(QWidget):
