@@ -23,6 +23,7 @@ SESSION_IDLE = 12 * 3600          # сессия без запросов зак�
 TX_IDLE = 30                      # транзакция без запросов откатывается через 30 секунд
 LOGIN_FAILS, LOGIN_WINDOW, LOGIN_LOCK = 5, 300, 60
 PBKDF2_ROUNDS = 200_000
+TOKEN_DAYS = 180                  # сохранённый вход («запомнить меня») действует столько дней с последнего использования
 
 
 # --- ПОЛЬЗОВАТЕЛИ ---------------------------------------------------------------------------------
@@ -35,6 +36,8 @@ class UserStore:
         with self._connect() as con:
             con.execute("""CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, login TEXT NOT NULL UNIQUE COLLATE NOCASE, full_name TEXT DEFAULT '', role TEXT NOT NULL DEFAULT 'editor',
                 salt TEXT NOT NULL, hash TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created TEXT DEFAULT '', last_login TEXT DEFAULT '')""")
+            con.execute("""CREATE TABLE IF NOT EXISTS remember_tokens(id INTEGER PRIMARY KEY, uid INTEGER NOT NULL, hash TEXT NOT NULL UNIQUE, device TEXT DEFAULT '',
+                created TEXT DEFAULT '', last_used TEXT DEFAULT '')""")
 
     @contextmanager
     def _connect(self):
@@ -77,6 +80,7 @@ class UserStore:
         salt = secrets.token_hex(16)
         with self._lock, self._connect() as con:
             con.execute('UPDATE users SET salt=?,hash=? WHERE id=?', (salt, self._hash(password, salt), uid))
+            con.execute('DELETE FROM remember_tokens WHERE uid=?', (uid,))         # смена пароля отменяет все сохранённые входы
 
     def update(self, uid, role=None, active=None, full_name=None):
         with self._lock, self._connect() as con:
@@ -91,6 +95,8 @@ class UserStore:
                 if con.execute("SELECT count(*) FROM users WHERE role='admin' AND active=1 AND id<>?", (uid,)).fetchone()[0] == 0:
                     raise ValueError('Нельзя отключить или понизить последнего администратора')
             con.execute('UPDATE users SET role=?,active=?,full_name=coalesce(?,full_name) WHERE id=?', (new_role, new_active, full_name, uid))
+            if not new_active:
+                con.execute('DELETE FROM remember_tokens WHERE uid=?', (uid,))
 
     def delete(self, uid):
         with self._lock, self._connect() as con:
@@ -98,6 +104,7 @@ class UserStore:
             if row and row[0] == 'admin' and row[1] and con.execute("SELECT count(*) FROM users WHERE role='admin' AND active=1 AND id<>?", (uid,)).fetchone()[0] == 0:
                 raise ValueError('Нельзя удалить последнего администратора')
             con.execute('DELETE FROM users WHERE id=?', (uid,))
+            con.execute('DELETE FROM remember_tokens WHERE uid=?', (uid,))
 
     def listing(self):
         with self._connect() as con:
@@ -118,6 +125,46 @@ class UserStore:
                 con.execute('UPDATE users SET last_login=? WHERE id=?', (datetime.now().isoformat(timespec='seconds'), row[0]))
             return row[0], row[1], row[2], row[3]
         return None
+
+
+    # --- сохранённый вход: вместо пароля компьютер хранит случайный ключ, который можно отозвать
+    @staticmethod
+    def _token_hash(raw):
+        return hashlib.sha256(str(raw or '').encode('utf-8')).hexdigest()
+
+    def make_token(self, uid, device=''):
+        raw = secrets.token_urlsafe(32)
+        now = datetime.now().isoformat(timespec='seconds')
+        with self._lock, self._connect() as con:
+            con.execute('INSERT INTO remember_tokens(uid,hash,device,created,last_used) VALUES(?,?,?,?,?)', (uid, self._token_hash(raw), str(device or '')[:60], now, now))
+        return raw
+
+    def verify_token(self, login, raw):
+        """-> (id, login, full_name, role) или None. Ключ привязан к логину, не истёк и не отозван."""
+        if not raw:
+            return None
+        with self._connect() as con:
+            row = con.execute('SELECT u.id,u.login,u.full_name,u.role,u.active,t.id,t.last_used FROM remember_tokens t JOIN users u ON u.id=t.uid WHERE t.hash=?',
+                              (self._token_hash(raw),)).fetchone()
+        if not row or not row[4] or str(row[1]).lower() != str(login or '').strip().lower():
+            return None
+        try:
+            if datetime.now() - datetime.fromisoformat(row[6]) > timedelta(days=TOKEN_DAYS):
+                return None
+        except ValueError:
+            return None
+        with self._lock, self._connect() as con:
+            con.execute('UPDATE remember_tokens SET last_used=? WHERE id=?', (datetime.now().isoformat(timespec='seconds'), row[5]))
+            con.execute('UPDATE users SET last_login=? WHERE id=?', (datetime.now().isoformat(timespec='seconds'), row[0]))
+        return row[0], row[1], row[2], row[3]
+
+    def revoke_token(self, raw):
+        with self._lock, self._connect() as con:
+            con.execute('DELETE FROM remember_tokens WHERE hash=?', (self._token_hash(raw),))
+
+    def revoke_all(self, uid):
+        with self._lock, self._connect() as con:
+            con.execute('DELETE FROM remember_tokens WHERE uid=?', (uid,))
 
 
 # --- СЕРТИФИКАТ -------------------------------------------------------------------------------------
@@ -320,7 +367,6 @@ class PtoServer:
         self.cert_path, self.key_path, self.fingerprint = ensure_certificate(tls_dir)
         self.httpd = None
         self.thread = None
-        self._audit_user = {'main': None, 'crm': None}
 
     # --- жизненный цикл
     def start(self):
@@ -394,10 +440,13 @@ class PtoServer:
         self.failures[key] = fails
         return len(fails) >= LOGIN_FAILS and now - fails[-1] < LOGIN_LOCK
 
-    def login(self, ip, login, password):
+    def login(self, ip, login, password, remember_token='', remember=False, device=''):
         if self._throttled(ip, login):
             raise proto.RemoteError('Слишком много неудачных попыток входа. Подождите минуту.', 'throttled')
-        row = self.users.verify(login, password)
+        row = self.users.verify_token(login, remember_token) if remember_token else self.users.verify(login, password)
+        if not row and remember_token:
+            self.failures.setdefault((ip, str(login).lower()), []).append(time.time())
+            raise proto.RemoteError('Сохранённый вход больше не действует. Введите логин и пароль.', 'bad_token')
         if not row:
             self.failures.setdefault((ip, str(login).lower()), []).append(time.time())
             raise proto.RemoteError('Неверный логин или пароль', 'bad_login')
@@ -406,7 +455,10 @@ class PtoServer:
         with self._lock:
             self.sessions[token] = Session(token, row[0], row[1], row[2] or row[1], row[3], ip)
         logging.info('Вход: %s (%s) с %s', row[1], row[3], ip)
-        return dict(token=token, login=row[1], name=row[2] or row[1], role=row[3])
+        info = dict(token=token, login=row[1], name=row[2] or row[1], role=row[3])
+        if remember and not remember_token:
+            info['remember_token'] = self.users.make_token(row[0], device or ip)
+        return info
 
     def session(self, token):
         with self._lock:
@@ -443,9 +495,11 @@ class PtoServer:
         if method == 'hello':
             return dict(service='PTO Server', proto=proto.PROTOCOL, version=self.app_version, fingerprint=self.fingerprint, needs_setup=self.users.count() == 0)
         if method == 'login':
-            return self.login(ip, req.get('login'), req.get('password'))
+            return self.login(ip, req.get('login'), req.get('password'), req.get('remember_token') or '', bool(req.get('remember')), str(req.get('device') or ''))
         s = self.session(req.get('token'))
         if method == 'logout':
+            if req.get('forget'):
+                self.users.revoke_token(req.get('forget'))
             self.gate.forget(s.token)
             with self._lock:
                 self.sessions.pop(s.token, None)
@@ -474,14 +528,15 @@ class PtoServer:
         raise proto.RemoteError('Неизвестная команда', 'bad_method')
 
     def _set_audit_user(self, s):
-        """Имя пользователя для журнала изменений (таблица audit_ctx в каждой базе); пишется только при смене пользователя."""
+        """Имя пользователя для журнала изменений (таблица audit_ctx в каждой базе). Читается из базы, а не запоминается:
+        на этом же компьютере параллельно может работать обычная программа в локальном режиме и менять то же имя."""
         for schema in ('main', 'crm'):
-            if self._audit_user[schema] != s.name:
-                try:
+            try:
+                row = self.db.conn.execute(f'SELECT user FROM {schema}.audit_ctx WHERE id=1').fetchone()
+                if row is None or row[0] != s.name:
                     self.db.conn.execute(f'UPDATE {schema}.audit_ctx SET user=? WHERE id=1', (s.name,))
-                    self._audit_user[schema] = s.name
-                except sqlite3.Error:
-                    pass
+            except sqlite3.Error:
+                pass
 
     def run_sql(self, s, sql, params, many=False):
         kind = classify(sql)
@@ -489,7 +544,7 @@ class PtoServer:
             raise proto.RemoteError('Команда запрещена: изменение структуры базы и опасные команды выполняет только сервер; режим «только просмотр» не позволяет менять данные', 'forbidden')
         with self.gate.access(s.token):
             with self.db._lock:                    # установка имени для журнала и сама команда — одним неразрывным действием
-                if self.gate.owner != s.token:
+                if kind != 'read' and self.gate.owner != s.token:
                     self._set_audit_user(s)
                 if many:
                     cur = self.db.executemany(sql, [tuple(p) for p in params])

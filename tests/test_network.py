@@ -238,3 +238,82 @@ def test_windows_and_dialogs_offscreen(net, monkeypatch, tmp_path):
     label = nu.attach_status(None, r)
     r.fetchone('SELECT 1')
     assert label.text().startswith('●')
+
+
+def test_saved_login_and_silent_relogin(net):
+    r = RemoteDatabaseManager(dict(mode='client', host='127.0.0.1', port=net.port, fingerprint=net.server.fingerprint, login='admin'))
+    info = r.connect('admin', 'secret1', remember=True)
+    saved = info['remember_token']
+    assert saved
+    r2 = RemoteDatabaseManager(dict(mode='client', host='127.0.0.1', port=net.port, fingerprint=net.server.fingerprint, login='admin'))
+    r2.connect('admin', remember_token=saved)                        # пароль не нужен
+    assert r2.role == 'admin' and r2.fetchone('SELECT 1')[0] == 1
+    net.server.sessions.clear()                                      # сервер перезапущен: сеанс потерян
+    assert r2.fetchone('SELECT 2')[0] == 2                           # клиент тихо вошёл заново
+    r2.disconnect(forget=True)                                       # «Забыть вход» отзывает ключ на сервере
+    r3 = RemoteDatabaseManager(dict(mode='client', host='127.0.0.1', port=net.port, fingerprint=net.server.fingerprint, login='admin'))
+    with pytest.raises(proto.RemoteError) as e:
+        r3.connect('admin', remember_token=saved)
+    assert e.value.code == 'bad_token'
+    net.users.set_password(net.users.listing()[0][0], 'secret2')
+    r4 = RemoteDatabaseManager(dict(mode='client', host='127.0.0.1', port=net.port, fingerprint=net.server.fingerprint, login='admin'))
+    with pytest.raises(proto.RemoteError):
+        r4.connect('admin', remember_token=info['remember_token'])    # смена пароля тоже отзывает
+
+
+def test_card_lock_between_two_clients(net, monkeypatch):
+    from smetagaz import edit_locks as locks
+    net.users.add('ivan', 'pass12', 'editor', 'Иванов Иван')
+    a, b = net.client(), net.client('ivan', 'pass12')
+    locks.migrate(net.db)
+    locks._held.clear()
+    monkeypatch.setattr(locks, 'SID', 'sid-a')
+    assert locks.acquire(a, 'gsn:77') is None
+    monkeypatch.setattr(locks, 'SID', 'sid-b')
+    other = locks.acquire(b, 'gsn:77')
+    assert other['user'] == 'Администратор' and other['host']
+    monkeypatch.setattr(locks, 'SID', 'sid-a')
+    locks.release(a, 'gsn:77')
+    monkeypatch.setattr(locks, 'SID', 'sid-b')
+    assert locks.acquire(b, 'gsn:77') is None
+    viewer_id = net.users.add('view', 'pass12', 'viewer', 'Наблюдатель')
+    v = net.client('view', 'pass12')
+    assert locks.acquire(v, 'gsn:77') is None                       # наблюдателю карточки не блокируются и он их не блокирует
+
+
+def test_local_mode_next_to_server_signs_its_changes(net):
+    from smetagaz.database import DatabaseManager
+    c = net.client()
+    c.execute("INSERT INTO estimates(title,date,total) VALUES('Сетевая','2026-01-01',1)")
+    local = DatabaseManager(net.path / 'smetagaz.db')
+    local.init_db()
+    local.side_by_side = True
+    lid = local.execute("INSERT INTO estimates(title,date,total) VALUES('Локальная','2026-01-02',1)").lastrowid
+    with local.transaction():
+        local.execute("UPDATE estimates SET title='Локальная 2' WHERE id=?", (lid,))
+    c.execute("INSERT INTO estimates(title,date,total) VALUES('Сетевая 2','2026-01-03',1)")
+    rows = net.db.fetchall("SELECT action,user FROM audit_log WHERE table_name='estimates' ORDER BY id")
+    users = [u for _, u in rows]
+    assert users[0] == 'Администратор' and users[1].endswith('(локально)') and users[2].endswith('(локально)') and users[3] == 'Администратор'
+    assert net.db.fetchone("SELECT title FROM estimates WHERE id=?", (lid,))[0] == 'Локальная 2'      # оба видят одну базу
+    local.close()
+
+
+def test_saved_login_flow_in_client(net, monkeypatch, tmp_path):
+    from smetagaz import net_config, network_ui
+    monkeypatch.setattr(net_config, 'PATH', tmp_path / 'network.json')
+    mgr = RemoteDatabaseManager(dict(mode='client', host='127.0.0.1', port=net.port, fingerprint=net.server.fingerprint, login='admin'))
+    assert network_ui.try_saved_login(mgr) is None                    # ничего не сохранено — окно входа покажется как обычно
+    info = mgr.connect('admin', 'secret1', remember=True)
+    net_config.save(dict(mode='client', host='127.0.0.1', port=net.port, fingerprint=net.server.fingerprint, login='admin', token=info['remember_token']))
+    assert (tmp_path / 'network.json').stat().st_mode & 0o077 == 0     # ключ входа читает только владелец
+    fresh = RemoteDatabaseManager(dict(mode='client'))
+    assert network_ui.try_saved_login(fresh) == '' and fresh.user == 'Администратор'
+    net.users.revoke_all(net.users.listing()[0][0])
+    again = RemoteDatabaseManager(dict(mode='client'))
+    assert 'больше не действует' in network_ui.try_saved_login(again)
+    assert net_config.load()['token'] == ''                            # недействительный ключ стёрт
+    net_config.save(dict(net_config.load(), token='x', port=net.port + 1))
+    lost = RemoteDatabaseManager(dict(mode='client'))
+    assert 'Сохранённый вход не потерян' in network_ui.try_saved_login(lost)
+    assert net_config.load()['token'] == 'x'                           # при недоступном сервере ключ остаётся

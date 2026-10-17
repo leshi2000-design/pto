@@ -11,6 +11,7 @@ from . import staff_domain as sd
 from .database import db
 from .date_widgets import DateEdit
 from .domain_widgets import OptionalDate
+from .edit_lock_ui import guarded
 
 STATE_COLORS = {'expired': '#DC2626', 'soon': '#D97706', 'ok': '#15803D', 'none': '#605E5C'}
 STATE_TEXT = {'expired': 'просрочен', 'soon': 'скоро истекает', 'ok': 'действует', 'none': 'без срока'}
@@ -115,6 +116,7 @@ class DocDialog(QDialog):
         self.accept()
 
 
+@guarded('staff', lambda d: d.sid, 'Карточка сотрудника')
 class StaffDialog(QDialog):
     def __init__(self, sid=None, parent=None):
         super().__init__(parent)

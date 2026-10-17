@@ -6,7 +6,7 @@ import os
 from .config import DATA_DIR
 
 PATH = DATA_DIR / 'network.json'
-DEFAULTS = {'mode': 'local', 'host': '', 'port': 8765, 'fingerprint': '', 'login': ''}
+DEFAULTS = {'mode': 'local', 'host': '', 'port': 8765, 'fingerprint': '', 'login': '', 'token': ''}
 
 
 def load():
@@ -33,6 +33,10 @@ def save(cfg):
     with open(tmp, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     os.replace(tmp, PATH)
+    try:
+        os.chmod(PATH, 0o600)               # в файле лежит ключ сохранённого входа
+    except OSError:
+        pass
     return data
 
 

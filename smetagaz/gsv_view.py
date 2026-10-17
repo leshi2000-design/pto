@@ -44,6 +44,7 @@ os.makedirs(TEMPLATES_DIR, exist_ok=True)
 os.makedirs(BACKUP_EXCEL_DIR, exist_ok=True)
 
 from .gsv_project_domain import MONTHS_GENITIVE, format_date_word, get_initials_first, format_cost_rubles, num_to_words_byn
+from .edit_lock_ui import guarded
 
 def open_file_or_dir(path):
     if path and os.path.exists(path): open_local(os.path.abspath(path))
@@ -551,6 +552,7 @@ class FastCompactTableModel(QAbstractTableModel):
     def get_row_record(self, row_idx):
         return self._data[row_idx] if 0 <= row_idx < len(self._data) else None
 
+@guarded('gsv', lambda d: d.project_id, 'Договор проекта ГСВ')
 class ProjectEditDialog(QDialog):
     """Договор на проект ГСВ: первичный документ раздела. После первого сохранения поля закрыты до нажатия «Изменить»."""
     def __init__(self, project_id=None, parent=None):

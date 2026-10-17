@@ -41,6 +41,10 @@ class LoginDialog(QDialog):
         f.addRow('Логин', self.login)
         f.addRow('Пароль', self.password)
         layout.addLayout(f)
+        self.remember = QCheckBox('Запомнить вход на этом компьютере')
+        self.remember.setToolTip('Пароль не сохраняется: компьютер получает отдельный ключ входа, который можно отозвать (смена пароля, отключение пользователя, «Забыть вход»).')
+        self.remember.setChecked(True)
+        layout.addWidget(self.remember)
         self.info = QLabel('')
         self.info.setWordWrap(True)
         layout.addWidget(self.info)
@@ -87,24 +91,53 @@ class LoginDialog(QDialog):
                 pinned = fingerprint
             self.db.cfg = dict(self.cfg, host=host, port=port, fingerprint=pinned, mode='client')
             self.db._local.conn = None
-            self.db.connect(self.login.text().strip(), self.password.text())
+            info = self.db.connect(self.login.text().strip(), self.password.text(), remember=self.remember.isChecked())
         except proto.RemoteError as e:
             self.info.setText(f'<span style="color:#DC2626">{e}</span>')
             return
         except proto.ConnectionLost as e:
             self.info.setText(f'<span style="color:#DC2626">Не удаётся подключиться к {host}:{port}. Проверьте адрес, что ПТО Сервер запущен и порт открыт в брандмауэре.<br>{e}</span>')
             return
-        net_config.save(dict(mode='client', host=host, port=port, fingerprint=pinned, login=self.login.text().strip()))
+        net_config.save(dict(mode='client', host=host, port=port, fingerprint=pinned, login=self.login.text().strip(),
+                             token=info.get('remember_token', '') if self.remember.isChecked() else ''))
         self.accept()
 
 
+def try_saved_login(db):
+    """Тихий вход по сохранённому ключу. -> '' если вошли, иначе текст для окна входа (пустой ключ — просто нет сохранённого входа, None)."""
+    cfg = net_config.load()
+    if not (cfg['token'] and cfg['host'] and cfg['login'] and cfg['fingerprint']):
+        return None
+    db.cfg = dict(cfg, mode='client')
+    db._local.conn = None
+    try:
+        db.connect(cfg['login'], remember_token=cfg['token'])
+        return ''
+    except proto.ConnectionLost as e:
+        return f'Не удаётся подключиться к серверу {cfg["host"]}:{cfg["port"]}: проверьте, что ПТО Сервер запущен. Сохранённый вход не потерян.'
+    except proto.RemoteError as e:
+        if e.code in ('bad_token', 'bad_login', 'throttled'):
+            if e.code == 'bad_token':
+                forget_saved_login()
+            return str(e)
+        return str(e)
+
+
+def forget_saved_login():
+    cfg = net_config.load()
+    cfg['token'] = ''
+    net_config.save(cfg)
+
+
 def connect_client(db, message=''):
-    """Вход на сервер перед открытием главного окна. True — подключено."""
-    while True:
-        dlg = LoginDialog(db, None, message)
-        if not dlg.exec():
-            return False
-        return True
+    """Вход на сервер перед открытием главного окна. True — подключено. Если на этом компьютере есть сохранённый вход — окно не показывается."""
+    if not message:
+        saved = try_saved_login(db)
+        if saved == '':
+            return True
+        message = saved or ''
+    dlg = LoginDialog(db, None, message)
+    return bool(dlg.exec())
 
 
 class NetworkDialog(QDialog):
@@ -136,9 +169,28 @@ class NetworkDialog(QDialog):
         bar.addWidget(client)
         bar.addWidget(local)
         layout.addLayout(bar)
+        if remote:
+            saved = bool(cfg.get('token'))
+            forget = QPushButton('Забыть сохранённый вход' if saved else 'Вход не сохранён')
+            forget.setEnabled(saved)
+            forget.setToolTip('При следующем запуске программа снова спросит логин и пароль. Ключ входа отзывается на сервере.')
+            forget.clicked.connect(lambda: self.forget(forget))
+            layout.addWidget(forget)
         close = QPushButton('Закрыть')
         close.clicked.connect(self.accept)
         layout.addWidget(close)
+
+    def forget(self, button):
+        try:
+            self.db.disconnect(forget=True)
+        except Exception:
+            pass
+        forget_saved_login()
+        button.setText('Вход не сохранён')
+        button.setEnabled(False)
+        QMessageBox.information(self, 'Вход забыт', 'При следующем запуске потребуются логин и пароль. Программа сейчас закроется.')
+        from PyQt6.QtWidgets import QApplication
+        QApplication.closeAllWindows()
 
     def switch(self, mode):
         if mode == 'client' and QMessageBox.question(self, 'Сетевой режим', 'После перезапуска программа запросит адрес сервера и вход. Локальная база не изменится. Включить сетевой режим?') != QMessageBox.StandardButton.Yes:

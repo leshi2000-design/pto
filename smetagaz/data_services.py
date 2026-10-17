@@ -68,6 +68,8 @@ def initialize(db):
         task_migrate(db)
         from .agenda_domain import migrate as agenda_migrate
         agenda_migrate(db)
+        from .edit_locks import migrate as locks_migrate
+        locks_migrate(db)
         from .gsv_project_domain import migrate as gsv_project_migrate
         gsv_project_migrate(db)
         from .gsvm_domain import migrate as gsvm_migrate

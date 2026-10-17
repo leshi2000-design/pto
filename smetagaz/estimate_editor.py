@@ -32,8 +32,10 @@ from . import payments_domain
 from .dialogs_common import PaymentDialog, CustomItemDialog, WorkSelectionDialog, MaterialSelectionDialog
 from .contract_card import ContractCardDialog
 from . import estimates_domain as ed
+from .edit_lock_ui import guarded
 
 
+@guarded('estimate', lambda d: d.estimate_id, 'Смета')
 class EstimateEditorDialog(QDialog):
     def __init__(self, estimate_id, title, parent=None):
         super().__init__(parent)

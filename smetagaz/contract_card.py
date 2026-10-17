@@ -15,8 +15,10 @@ from .gsv_domain import get_client, save_client
 from . import gsvm_domain as md
 from . import gsvm_docs as dd
 from .gsvm_tabs import EquipmentTab, PipesTab, IdTab, TemplatesTab, WorkEntryDialog, ConsumptionDialog, STATE_TEXT, open_file, print_files
+from .edit_lock_ui import guarded
 
 
+@guarded('gsvm', lambda d: d.contract_id, 'Договор монтажа ГСВ')
 class ContractCardDialog(QDialog):
     def __init__(self, estimate_id=None, title='', parent=None, contract_id=None):
         super().__init__(parent)

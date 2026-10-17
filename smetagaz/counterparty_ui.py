@@ -17,6 +17,7 @@ from .legal_entities_domain import DIRECTIONS
 from .pagebar import PageBar
 from .registry_tools import RegistryTools, search_clause
 from .gsv_project_domain import date_short
+from .edit_lock_ui import guarded
 
 
 def money(value):
@@ -360,6 +361,7 @@ class ActDialog(QDialog):
 
 # --- Договор -----------------------------------------------------------------------------------
 
+@guarded('cp', lambda d: f'{d.mod}:{d.contract_id}' if d.contract_id else None, 'Договор')
 class ContractDialog(QDialog):
     def __init__(self, mod, contract_id=None, parent=None, preset=None):
         super().__init__(parent)

@@ -96,6 +96,7 @@ class RemoteDatabaseManager:
         self.server_version = ''
         self._tx_depth = 0
         self._local = threading.local()
+        self._resume = None               # (логин, ключ сохранённого входа): позволяет войти заново, если сеанс на сервере закончился
         self.on_status = None             # callback(bool connected, str text) для индикатора связи
 
     # --- соединение
@@ -145,6 +146,12 @@ class RemoteDatabaseManager:
 
     def _call(self, method, **payload):
         reply = self._post(dict(payload, m=method, token=self.token))
+        err = reply.get('error')
+        if err and err.get('code') == 'no_session' and self._resume and self._resume[1] and self._tx_depth == 0 and method not in ('login', 'logout'):
+            fresh = self._post(dict(m='login', login=self._resume[0], remember_token=self._resume[1]))      # сервер перезапускали или сеанс устарел: тихо входим по сохранённому ключу
+            if 'error' not in fresh:
+                self.token = fresh['result']['token']
+                reply = self._post(dict(payload, m=method, token=self.token))
         if 'error' in reply:
             err = reply['error']
             kind = err.get('type', 'RemoteError')
@@ -173,20 +180,23 @@ class RemoteDatabaseManager:
             raise proto.RemoteError(reply['error'].get('message', 'Ошибка сервера'))
         return tmp._local.fingerprint, reply['result']
 
-    def connect(self, login, password):
-        """Вход на сервер. Проверяет версию протокола и программы."""
+    def connect(self, login, password='', remember=False, remember_token=''):
+        """Вход на сервер. Проверяет версию протокола и программы. remember=True — сервер выдаёт ключ сохранённого входа (info['remember_token']);
+        remember_token — вход по ранее выданному ключу вместо пароля."""
         hello = self._call('hello')
         if hello.get('service') != 'PTO Server' or hello.get('proto') != proto.PROTOCOL:
             raise proto.RemoteError('Версия сервера несовместима с этой программой. Обновите программу и сервер до одной версии.', 'proto')
         from . import __version__
         if tuple(str(hello.get('version', '')).split('.')[:2]) != tuple(__version__.split('.')[:2]):
             raise proto.RemoteError(f'Версия программы {__version__} не совпадает с версией сервера {hello.get("version")}. Обновите её (должны совпадать первые два числа).', 'version')
-        result = self._post(dict(m='login', login=login, password=password))
+        import socket as _socket
+        result = self._post(dict(m='login', login=login, password=password, remember=bool(remember), remember_token=remember_token, device=_socket.gethostname()))
         if 'error' in result:
             raise proto.RemoteError(result['error'].get('message', 'Вход не выполнен'), result['error'].get('code', ''))
         info = result['result']
         self.token, self.user, self.login_name, self.role = info['token'], info['name'], info['login'], info['role']
         self.server_version = hello.get('version', '')
+        self._resume = (login, remember_token or info.get('remember_token', ''))
         self._status(True, f'{self.user} · сервер {self.cfg["host"]}')
         return info
 
@@ -194,10 +204,11 @@ class RemoteDatabaseManager:
     def connected(self):
         return bool(self.token)
 
-    def disconnect(self):
+    def disconnect(self, forget=False):
+        """forget=True — ещё и отозвать сохранённый вход этого компьютера."""
         if self.token:
             try:
-                self._call('logout')
+                self._call('logout', forget=(self._resume[1] if forget and self._resume else ''))
             except Exception:
                 pass
         self.token = None

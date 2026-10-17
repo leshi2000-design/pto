@@ -7,7 +7,9 @@ from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton,
 
 from .database import db
 from .work_pricing import compute_work_price
+from .edit_lock_ui import guarded
 
+@guarded('material', lambda d: d.material_id, 'Карточка позиции')
 class MaterialCardDialog(QDialog):
     def __init__(self, material_id, parent=None):
         super().__init__(parent)

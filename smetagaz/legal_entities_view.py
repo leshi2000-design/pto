@@ -17,6 +17,7 @@ from PyQt6.QtCore import Qt, QDate
 from .date_widgets import DateEdit
 from .database import db
 from .legal_entities_domain import DIRECTIONS, STATUSES, next_outgoing_number
+from .edit_lock_ui import guarded
 
 
 def fmt_amount(value, vat_included):
@@ -199,6 +200,7 @@ class LegalClientsRegistry(QWidget):
 
 # --- Договоры ---
 
+@guarded('lecontract', lambda d: d.contract_id, 'Договор юрлица')
 class LegalContractDialog(QDialog):
     def __init__(self, contract_id=None, parent=None):
         super().__init__(parent)

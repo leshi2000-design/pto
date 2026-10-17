@@ -13,12 +13,14 @@ from . import gsn_domain as gn
 from . import gsn_docs as dd
 from .gsn_tabs import GsnPipelineTab, GsnIdTab, TemplatesTab
 from .gsvm_tabs import STATE_TEXT, open_file, print_files
+from .edit_lock_ui import guarded
 
 
 def money_text(value):
     return f'{float(value or 0):,.2f}'.replace(',', ' ').replace('.', ',') + ' BYN'
 
 
+@guarded('gsn', lambda d: d.contract_id, 'Договор монтажа ГСН')
 class GsnContractDialog(QDialog):
     def __init__(self, rid=None, parent=None):
         super().__init__(parent)

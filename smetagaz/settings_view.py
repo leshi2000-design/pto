@@ -44,7 +44,9 @@ class SettingsView(QWidget):
         net_box = QGroupBox('Сетевая работа')
         net_layout = QHBoxLayout(net_box)
         remote = getattr(db, 'is_remote', False)
-        net_layout.addWidget(QLabel(f'Режим: клиент, вы вошли как {db.user}' if remote else 'Режим: локальная база на этом компьютере'), 1)
+        side = getattr(db, 'side_by_side', False)
+        net_layout.addWidget(QLabel(f'Режим: клиент, вы вошли как {db.user}' if remote else
+                                    ('Режим: локально, параллельно с ПТО Сервером этого компьютера' if side else 'Режим: локальная база на этом компьютере')), 1)
         btn_net = QPushButton('Сетевая работа…')
         btn_net.clicked.connect(lambda: NetworkDialog(db, self).exec())
         net_layout.addWidget(btn_net)
@@ -118,9 +120,9 @@ class SettingsView(QWidget):
         box_db_layout.addWidget(btn_backup)
         box_db_layout.addWidget(btn_restore)
         layout.addWidget(box_db)
-        if getattr(db, 'is_remote', False):
+        if getattr(db, 'is_remote', False) or getattr(db, 'side_by_side', False):
             box_db.setEnabled(False)
-            box_db.setToolTip('Резервные копии и восстановление выполняются на компьютере с ПТО Сервером')
+            box_db.setToolTip('Резервные копии и восстановление выполняет ПТО Сервер: пока он работает, база не должна подменяться')
 
         # 4. Папки договоров: где создаются новые папки (по разделам)
         box_folders = QGroupBox("Папки договоров (где создавать новые папки)")

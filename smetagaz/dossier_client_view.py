@@ -6,6 +6,7 @@ from PyQt6.QtGui import QColor
 
 from .database import db
 from . import dossier_client as dc
+from .edit_lock_ui import guarded
 
 
 def money(v):
@@ -214,9 +215,11 @@ class DossierWidget(QWidget):
             self.load()
 
 
+@guarded('dossier', lambda d: f'{d.kind}:{d.cid}' if d.cid else None, 'Досье клиента')
 class DossierDialog(QDialog):
     def __init__(self, kind, cid, parent=None):
         super().__init__(parent)
+        self.kind, self.cid = kind, cid
         self.setWindowTitle('Досье клиента')
         self.resize(1000, 640)
         layout = QVBoxLayout(self)

@@ -112,10 +112,12 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(self.app_name)
         if getattr(db, 'is_remote', False):
             self.setWindowTitle(f'{self.app_name} · {db.user} · сервер {db.cfg["host"]}')
+        elif getattr(db, 'side_by_side', False):
+            self.setWindowTitle(f'{self.app_name} · локально, параллельно с ПТО Сервером')
         self.setAcceptDrops(True)       # файлы можно перетаскивать в любое место окна: откроется проверка входящего документа
         self.err_timer = QTimer(self); self.err_timer.setInterval(20000); self.err_timer.timeout.connect(self.update_error_badge); self.err_timer.start()
         self.resize(1350, 820)
-        self.backup_service = NoBackupService() if getattr(db, 'is_remote', False) else AutoBackupService()
+        self.backup_service = NoBackupService() if (getattr(db, 'is_remote', False) or getattr(db, 'side_by_side', False)) else AutoBackupService()
         QShortcut(QKeySequence("Ctrl+K"), self).activated.connect(lambda: GlobalSearchDialog(self).exec())
         for keys, handler in (("Ctrl+N", self.shortcut_new), ("Ctrl+S", self.shortcut_save), ("Ctrl+F", self.shortcut_find), ("F1", self.show_help)):
             QShortcut(QKeySequence(keys), self).activated.connect(handler)
@@ -366,6 +368,8 @@ class MainWindow(QMainWindow):
         if getattr(self, '_exit_ready', False) or not self.backup_service.exit_backup_needed():
             self.backup_service.close()
             self._exit_ready = True
+            from . import edit_locks
+            edit_locks.release_all(db)          # открытые карточки не должны оставаться «занятыми»
             event.accept()
             return
         event.ignore()
@@ -440,9 +444,10 @@ def main():
             return
     else:
         server_lock = QLockFile(str(DATA_DIR / 'server.lock'))
-        if not server_lock.tryLock(100):
-            QMessageBox.warning(None, 'ПТО', 'На этом компьютере запущен ПТО Сервер, он владеет локальной базой. Запустите программу в режиме клиента (Настройки → Сетевая работа) и подключитесь к 127.0.0.1.');return
-        server_lock.unlock()
+        if server_lock.tryLock(100):
+            server_lock.unlock()
+        else:
+            db.side_by_side = True          # ПТО Сервер уже работает с этой базой: работаем рядом с ним (копии и восстановление отключены, карточки блокируются)
     db.init_db()
     from .security import login
     if not login(db):return

@@ -40,6 +40,8 @@ def safe_font_size(value, default=10):
 
 
 class DatabaseManager:
+    side_by_side = False        # True: на этом компьютере одновременно работает ПТО Сервер с той же базой (включается при запуске программы)
+
     def __init__(self, db_name=DB_NAME):
         self._lock = threading.RLock()
         self._init_connection(db_name)
@@ -60,6 +62,15 @@ class DatabaseManager:
         except OSError:
             pass
 
+    def _stamp_audit(self):
+        """Рядом с ПТО Сервером: подписываем свои изменения в журнале, иначе они припишутся последнему сетевому пользователю."""
+        label = f'{__import__("getpass").getuser()} (локально)'
+        for schema in ('main', 'crm'):
+            try:
+                self.conn.execute(f'UPDATE {schema}.audit_ctx SET user=? WHERE id=1 AND user<>?', (label, label))
+            except sqlite3.Error:
+                pass
+
     @contextmanager
     def transaction(self):
         """Контекстный менеджер для безопасных транзакций."""
@@ -67,6 +78,8 @@ class DatabaseManager:
             nested = self.conn.in_transaction
             name = "sp_" + __import__("uuid").uuid4().hex
             self.conn.execute(f"SAVEPOINT {name}" if nested else "BEGIN IMMEDIATE")
+            if self.side_by_side and not nested:
+                self._stamp_audit()
             try:
                 yield self.conn.cursor()
                 self.conn.execute(f"RELEASE {name}" if nested else "COMMIT")
@@ -78,12 +91,16 @@ class DatabaseManager:
 
     def execute(self, query, params=()):
         with self._lock:
+            if self.side_by_side and not self.conn.in_transaction and not str(query).lstrip()[:6].upper() in ('SELECT', 'PRAGMA'):
+                self._stamp_audit()
             cursor = self.conn.cursor()
             cursor.execute(query, params)
             return cursor
 
     def executemany(self, query, seq_of_params):
         with self._lock:
+            if self.side_by_side and not self.conn.in_transaction:
+                self._stamp_audit()
             cursor = self.conn.cursor()
             cursor.executemany(query, seq_of_params)
             return cursor
@@ -240,7 +257,7 @@ class DatabaseManager:
                 ('export_font', 'Segoe UI'), ('export_font_size', '13'),
                 ('export_company_name', 'ООО "ГазМонтаж"'),
                 ('export_excel_template', ''), ('export_word_template', ''),
-                ('app_name', 'ПТО 4.1.0'), ('tabs_config', json.dumps(default_tabs))
+                ('app_name', 'ПТО 4.2.0'), ('tabs_config', json.dumps(default_tabs))
             ]
             c.executemany("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", defaults)
 
