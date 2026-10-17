@@ -3,7 +3,7 @@ import os
 from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 
 hidden = (collect_submodules('smetagaz') + collect_submodules('pyqtgraph') + collect_submodules('openpyxl') +
-          ['pandas', 'bs4', 'lxml', 'lxml.etree', 'requests', 'docx', 'reportlab', 'cryptography', 'PyQt6.QtSvg', 'pytesseract', 'pypdfium2', 'PIL'])
+          ['pandas', 'bs4', 'lxml', 'lxml.etree', 'requests', 'docx', 'reportlab', 'cryptography', 'PyQt6.QtSvg', 'pypdfium2', 'PIL'])
 datas = [('smetagaz/assets', 'smetagaz/assets')] + collect_data_files('PyQt6', includes=['Qt6/translations/qt_ru.qm', 'Qt6/translations/qtbase_ru.qm']) + collect_data_files('docx') + collect_data_files('reportlab') + collect_data_files('pyqtgraph') + collect_data_files('pypdfium2')
 
 a = Analysis(['run.py'], pathex=['.'], datas=datas, hiddenimports=hidden, excludes=['tkinter', 'matplotlib', 'scipy', 'pytest'])

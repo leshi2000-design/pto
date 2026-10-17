@@ -542,21 +542,34 @@ def find_tesseract(configured=''):
     return ''
 
 
+def _popen_kwargs():
+    import subprocess
+    kwargs = dict(stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if os.name == 'nt':
+        kwargs['creationflags'] = 0x08000000              # CREATE_NO_WINDOW: без мигающего чёрного окна
+    return kwargs
+
+
+def _tesseract(exe, args, timeout=180):
+    """Запуск tesseract.exe напрямую, без дополнительных Python-модулей. -> (код возврата, stdout, stderr)."""
+    import subprocess
+    proc = subprocess.run([exe] + list(args), timeout=timeout, **_popen_kwargs())
+    return proc.returncode, proc.stdout.decode('utf-8', errors='replace'), proc.stderr.decode('utf-8', errors='replace')
+
+
 def ocr_available(configured=''):
-    try:
-        import pytesseract  # noqa: F401
-    except ImportError:
-        return False, 'Не установлен модуль pytesseract (pip install pytesseract).'
+    """(можно ли читать фото, путь к tesseract или объяснение, что установить)."""
     exe = find_tesseract(configured)
     if not exe:
         return False, ('Не найден Tesseract OCR. Установите его (Windows: сборка UB Mannheim, при установке отметьте язык Russian) '
-                       'или укажите путь в «Настройки → Распознавание документов».')
+                       'или укажите путь к tesseract.exe в «Настройки → Распознавание накладных по фотографии».')
     try:
-        import pytesseract
-        pytesseract.pytesseract.tesseract_cmd = exe
-        langs = pytesseract.get_languages(config='')
+        code, out, err = _tesseract(exe, ['--list-langs'], 30)
     except Exception as e:
         return False, f'Tesseract не запускается: {e}'
+    langs = {line.strip() for line in (out + '\n' + err).splitlines()}
+    if code != 0 and not langs:
+        return False, 'Tesseract не запускается: ' + err.strip()[:200]
     if 'rus' not in langs:
         return False, 'В Tesseract нет русского языка (файл rus.traineddata). Переустановите Tesseract и отметьте язык Russian.'
     return True, exe
@@ -579,22 +592,46 @@ def prepare_image(path, scale_to=2400):
     return img.filter(ImageFilter.SHARPEN)
 
 
-def _auto_rotate(img, pytesseract):
-    """Если фото снято боком или вверх ногами — поворачиваем по определению ориентации Tesseract."""
+def _save_temp(img):
+    import tempfile
+    handle, path = tempfile.mkstemp(suffix='.png', prefix='pto_ocr_')
+    os.close(handle)
+    img.save(path)
+    return path
+
+
+def _auto_rotate(img, exe):
+    """Если фото снято боком или вверх ногами — поворачиваем по определению ориентации Tesseract (режим --psm 0)."""
+    path = _save_temp(img)
     try:
-        osd = pytesseract.image_to_osd(img, config='--psm 0', output_type=pytesseract.Output.DICT)
-        angle = int(osd.get('rotate', 0))
-        if angle and osd.get('orientation_conf', 0) > 2:
+        code, out, err = _tesseract(exe, [path, 'stdout', '--psm', '0'], 60)
+        m = re.search(r'Rotate:\s*(\d+)', out)
+        conf = re.search(r'Orientation confidence:\s*([\d.]+)', out)
+        angle = int(m.group(1)) if m else 0
+        if angle and conf and float(conf.group(1)) > 2:
             return img.rotate(-angle, expand=True, fillcolor=255)
     except Exception:
         pass
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
     return img
 
 
-def ocr_text(img, configured='', psm=6):
-    import pytesseract
-    pytesseract.pytesseract.tesseract_cmd = find_tesseract(configured)
-    return pytesseract.image_to_string(img, lang='rus+eng', config=f'--oem 1 --psm {psm} -c preserve_interword_spaces=1')
+def ocr_text(img, exe, psm=6):
+    path = _save_temp(img)
+    try:
+        code, out, err = _tesseract(exe, [path, 'stdout', '-l', 'rus+eng', '--oem', '1', '--psm', str(psm), '-c', 'preserve_interword_spaces=1'])
+        if code != 0 and not out.strip():
+            raise OcrUnavailable('Tesseract не смог прочитать изображение: ' + err.strip()[:300])
+        return out
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 
 def _score(result):
@@ -608,12 +645,12 @@ def parse_image(path, configured='', pages=None):
     ok, info = ocr_available(configured)
     if not ok:
         raise OcrUnavailable(info)
-    import pytesseract
+    exe = info
     img = prepare_image(path)
-    img = _auto_rotate(img, pytesseract)
+    img = _auto_rotate(img, exe)
     best = None
     for psm in (6, 4, 11):
-        text = ocr_text(img, configured, psm)
+        text = ocr_text(img, exe, psm)
         result = parse_text(text, 'ocr')
         if best is None or _score(result) > _score(best):
             best = result
@@ -624,7 +661,10 @@ def parse_image(path, configured='', pages=None):
 
 
 def render_pdf_pages(path, limit=6):
-    import pypdfium2 as pdfium
+    try:
+        import pypdfium2 as pdfium
+    except ImportError:
+        raise OcrUnavailable('Для чтения PDF-сканов нужен модуль pypdfium2 (pip install pypdfium2). Либо сфотографируйте или сохраните страницу как картинку (JPG/PNG).')
     pdf = pdfium.PdfDocument(path)
     pages = []
     for index in range(min(len(pdf), limit)):
@@ -642,12 +682,11 @@ def parse_pdf(path, configured=''):
     ok, info = ocr_available(configured)
     if not ok:
         raise OcrUnavailable('В PDF нет текста (это скан). ' + info)
-    import tempfile
-    import pytesseract
+    exe = info
     texts = []
     for page in render_pdf_pages(path):
         gray = page.convert('L')
-        texts.append(ocr_text(_auto_rotate(gray, pytesseract), configured, 6))
+        texts.append(ocr_text(_auto_rotate(gray, exe), exe, 6))
     result = parse_text('\n'.join(texts), 'ocr')
     result['warnings'].insert(0, 'Распознано по скану: внимательно проверьте названия, количества и суммы.')
     return result

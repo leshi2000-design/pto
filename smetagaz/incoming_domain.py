@@ -1,7 +1,7 @@
 """Входящие документы: накладные, сертификаты, подписанные акты. Файл перетаскивается в программу, из текста берутся реквизиты (вид, номер, дата, сумма, контрагент),
 предлагается объект для привязки; пользователь проверяет и исправляет результат до сохранения. Ничего не сохраняется само.
 
-Текст извлекается из PDF (нужен pypdf), Word, Excel и текстовых файлов. Для сканов и фотографий нужен модуль pytesseract с установленным Tesseract;
+Текст извлекается из PDF (нужен pypdf), Word, Excel и текстовых файлов. Для сканов и фотографий нужна установленная программа Tesseract OCR (никаких Python-модулей);
 без него реквизиты вводятся вручную, а программа всё равно подберёт объект по имени файла."""
 import os
 import re
@@ -16,6 +16,14 @@ MAX_CHARS = 200_000
 TEXT_EXT = {'.txt', '.csv', '.md'}
 IMAGE_EXT = {'.png', '.jpg', '.jpeg', '.tif', '.tiff', '.bmp'}
 MONTHS = {'января': 1, 'февраля': 2, 'марта': 3, 'апреля': 4, 'мая': 5, 'июня': 6, 'июля': 7, 'августа': 8, 'сентября': 9, 'октября': 10, 'ноября': 11, 'декабря': 12}
+
+
+def db_setting(key):
+    try:
+        from .database import db
+        return db.get_setting(key, '')
+    except Exception:
+        return ''
 
 
 def migrate(db):
@@ -58,12 +66,11 @@ def extract_text(path):
             with open(path, encoding='utf-8', errors='replace') as f:
                 return f.read(MAX_CHARS), ''
         if ext in IMAGE_EXT:
-            try:
-                import pytesseract
-                from PIL import Image
-                return pytesseract.image_to_string(Image.open(path), lang='rus+eng')[:MAX_CHARS], ''
-            except Exception:
-                return '', 'Для фотографий и сканов нужен OCR (pytesseract и Tesseract); реквизиты введите вручную.'
+            from . import invoice_parse as ip
+            ok, info = ip.ocr_available(db_setting('tesseract_cmd'))
+            if not ok:
+                return '', info + ' Реквизиты можно ввести вручную.'
+            return ip.ocr_text(ip.prepare_image(path), info, 6)[:MAX_CHARS], ''
     except Exception as e:
         return '', f'Не удалось прочитать файл: {e}'
     return '', 'Тип файла не поддерживается для распознавания; заполните реквизиты вручную.'
