@@ -11,6 +11,9 @@ class PaymentsDialog(QDialog):
         b=QPushButton('Внести оплату');b.clicked.connect(self.add);bar.addWidget(b);l.addLayout(bar);bar=QHBoxLayout();b=QPushButton('Заполнить остаток');b.clicked.connect(lambda:self.amount.setValue(max(0,float(domain.summary(db,self.owner,self.rid)['debt']))));bar.addWidget(b);b=QPushButton('Удалить ошибочный платёж');b.clicked.connect(self.remove);bar.addWidget(b)
         if owner!='estimates':b=QPushButton('Связать со сметой…');b.clicked.connect(self.link);bar.addWidget(b)
         l.addLayout(bar);self.load_data()
+        if 'payments' in getattr(db,'hidden',()):          # ввод и правка оплат закрыты для этого пользователя: окно только для просмотра
+            for w in self.findChildren((QPushButton,QDoubleSpinBox,QLineEdit)):w.setEnabled(False)
+            self.day.setEnabled(False);self.setWindowTitle(self.windowTitle()+' (только просмотр)')
     def done(self,result):
         super().done(result)
         parent=self.parent()

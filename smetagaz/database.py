@@ -40,6 +40,7 @@ def safe_font_size(value, default=10):
 
 
 class DatabaseManager:
+    hidden = frozenset()        # разделы, скрытые от пользователя (в сетевом режиме приходят с сервера)
     side_by_side = False        # True: на этом компьютере одновременно работает ПТО Сервер с той же базой (включается при запуске программы)
 
     def __init__(self, db_name=DB_NAME):
@@ -61,6 +62,18 @@ class DatabaseManager:
             __import__('os').chmod(self.db_name,0o600)
         except OSError:
             pass
+
+    def poll_changes(self):
+        """Рядом с ПТО Сервером: изменения, сделанные другими подключениями к этой же базе ({'*'} — что-то изменилось)."""
+        if not self.side_by_side:
+            return set()
+        try:
+            with self._lock:
+                version = (self.conn.execute('PRAGMA main.data_version').fetchone()[0], self.conn.execute('PRAGMA crm.data_version').fetchone()[0])
+        except sqlite3.Error:
+            return set()
+        previous, self._data_version = getattr(self, '_data_version', None), version
+        return {'*'} if previous is not None and previous != version else set()
 
     def _stamp_audit(self):
         """Рядом с ПТО Сервером: подписываем свои изменения в журнале, иначе они припишутся последнему сетевому пользователю."""
@@ -257,7 +270,7 @@ class DatabaseManager:
                 ('export_font', 'Segoe UI'), ('export_font_size', '13'),
                 ('export_company_name', 'ООО "ГазМонтаж"'),
                 ('export_excel_template', ''), ('export_word_template', ''),
-                ('app_name', 'ПТО 4.2.0'), ('tabs_config', json.dumps(default_tabs))
+                ('app_name', 'ПТО 4.3.0'), ('tabs_config', json.dumps(default_tabs))
             ]
             c.executemany("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", defaults)
 

@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 
 OK, WARN, BAD = 'ok', 'warn', 'bad'
 LOCAL_OK_H, LOCAL_BAD_H = 2, 24
+INTEGRITY_STALE_DAYS = 14
 
 
 def _parse(value):
@@ -63,7 +64,25 @@ def report(db, now=None):
         verify = db.get_setting('offsite_verify_status', '')
         if 'ОШИБКА' in verify:
             rows.append((BAD, verify))
+    rows += integrity_rows(db, now)
     return rows
+
+
+def integrity_rows(db, now):
+    last = _parse(db.get_setting('last_integrity_check', ''))
+    if last is None:
+        return [(WARN, 'Проверка целостности базы ещё не проводилась (она запускается раз в неделю)')]
+    try:
+        errors, warns, _info = (int(x) for x in db.get_setting('integrity_counts', '0,0,0').split(','))
+    except ValueError:
+        errors = warns = 0
+    age = now - last
+    text = f'Проверка целостности базы: {db.get_setting("integrity_status", "")} ({_ago(age)})'
+    if errors:
+        return [(BAD, text)]
+    if age > timedelta(days=INTEGRITY_STALE_DAYS):
+        return [(WARN, text + ' — давно не проверялась')]
+    return [(WARN if warns else OK, text)]
 
 
 def worst(rows):

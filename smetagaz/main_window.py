@@ -200,6 +200,11 @@ class MainWindow(QMainWindow):
             self.net_timer = QTimer(self)
             self.net_timer.timeout.connect(db.ping)
             self.net_timer.start(30000)
+        if getattr(db, 'is_remote', False) or getattr(db, 'side_by_side', False):
+            self._changes_pending = False
+            self.live_timer = QTimer(self)
+            self.live_timer.timeout.connect(self.live_refresh)
+            self.live_timer.start(3000)         # раз в 3 секунды спрашиваем, не менял ли данные кто-то другой
         self.btn_toggle_theme = QPushButton("Переключить тему")
         self.btn_toggle_theme.clicked.connect(self.toggle_theme)
         self.sidebar_layout.addWidget(self.btn_toggle_theme)
@@ -230,7 +235,8 @@ class MainWindow(QMainWindow):
         from .icons import icon
         shown_sections = 0
         for title, ids in sections:
-            visible = [i for i in ids if i in self.view_classes and config.get(i, {}).get("visible", 1)]
+            hidden = set(getattr(db, 'hidden', ()))           # разделы, закрытые для этого пользователя администратором сервера
+            visible = [i for i in ids if i in self.view_classes and config.get(i, {}).get("visible", 1) and i not in hidden]
             if not visible:
                 continue
             if shown_sections:      # разделы отделены друг от друга линией; сворачиваемых деревьев нет
@@ -268,6 +274,25 @@ class MainWindow(QMainWindow):
 
         if self.tabs_buttons:
             self.switch_tab(0, self.tabs_buttons[0])
+
+    def live_refresh(self):
+        """Данные изменил другой пользователь — открытый раздел перечитывается сам (если человек в нём сейчас ничего не вводит)."""
+        from . import live_refresh
+        changed = db.poll_changes()
+        if changed and live_refresh.relevant(changed):
+            self._changes_pending = True
+        if not self._changes_pending:
+            return
+        view = self._current_view()
+        if view is None:
+            return
+        if live_refresh.can_refresh(view):
+            self._changes_pending = False
+            try:
+                if live_refresh.refresh(view):
+                    self.statusBar().showMessage('Данные обновлены: их изменил другой пользователь.', 3000)
+            except Exception:
+                logging.exception('Автообновление раздела не удалось')
 
     def _current_view(self):
         idx = self.stack.currentIndex()
@@ -340,6 +365,7 @@ class MainWindow(QMainWindow):
         error_log.set_section(target_btn.text())
 
         view = self.views[idx]
+        self._changes_pending = False
         if hasattr(view, 'load_data'): view.load_data()
         elif hasattr(view, 'calculate'): view.calculate()
 
@@ -439,9 +465,10 @@ def main():
     import os
     os.chdir(DATA_DIR)
     if getattr(db, 'is_remote', False):
-        from .network_ui import connect_client
+        from .network_ui import connect_client, wait_for_connection
         if not connect_client(db):
             return
+        db.on_lost = lambda: wait_for_connection(db)          # при обрыве связи действие не теряется, а ждёт возвращения сервера
     else:
         server_lock = QLockFile(str(DATA_DIR / 'server.lock'))
         if server_lock.tryLock(100):

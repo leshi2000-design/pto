@@ -266,6 +266,11 @@ class EstimateEditorDialog(QDialog):
         self.pay_summary = QLabel()
         self.pay_summary.setWordWrap(True)
         pay_layout.addWidget(self.pay_summary)
+        if 'payments' in getattr(db, 'hidden', ()):          # ввод и правка оплат закрыты для этого пользователя
+            pay_group.setTitle('Оплаты по смете (только просмотр)')
+            for w in pay_group.findChildren((QDoubleSpinBox, QLineEdit, QPushButton)):
+                w.setEnabled(False)
+            self.pay_date.setEnabled(False)
         right_panel.addWidget(pay_group)
 
         right_panel.addStretch()

@@ -1,5 +1,5 @@
 """Клиентский режим: окно входа на ПТО Сервер, выбор режима работы, индикатор связи."""
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import QCheckBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QSpinBox, QVBoxLayout
 
 from . import net_config, net_proto as proto
@@ -169,6 +169,10 @@ class NetworkDialog(QDialog):
         bar.addWidget(client)
         bar.addWidget(local)
         layout.addLayout(bar)
+        if remote and db.role in ('admin', 'manager'):
+            who = QPushButton('Кто в сети и что открыто…' + (' · журнал входов' if db.role == 'admin' else ''))
+            who.clicked.connect(self.show_ops)
+            layout.addWidget(who)
         if remote:
             saved = bool(cfg.get('token'))
             forget = QPushButton('Забыть сохранённый вход' if saved else 'Вход не сохранён')
@@ -179,6 +183,10 @@ class NetworkDialog(QDialog):
         close = QPushButton('Закрыть')
         close.clicked.connect(self.accept)
         layout.addWidget(close)
+
+    def show_ops(self):
+        from .ops_ui import client_dialog
+        client_dialog(self.db, self).exec()
 
     def forget(self, button):
         try:
@@ -214,3 +222,76 @@ def attach_status(window, db):
     db.on_status = show
     show(True, f'{db.user} · сервер {db.cfg["host"]}')
     return label
+
+
+class LostConnectionDialog(QDialog):
+    """«Нет связи с сервером»: программа сама повторяет подключение и продолжает прерванное действие, когда сервер снова доступен.
+    Данные в открытых окнах не теряются; если отказаться ждать, действие завершится ошибкой, а окно с данными останется открытым."""
+    def __init__(self, db, parent=None):
+        super().__init__(parent)
+        self.db, self.ok, self.waited = db, False, 0
+        self.setWindowTitle('Нет связи с сервером')
+        self.setModal(True)
+        self.resize(480, 190)
+        layout = QVBoxLayout(self)
+        self.label = QLabel()
+        self.label.setWordWrap(True)
+        layout.addWidget(self.label)
+        bar = QHBoxLayout()
+        now = QPushButton('Повторить сейчас')
+        now.clicked.connect(self.attempt)
+        cancel = QPushButton('Отмена')
+        cancel.setToolTip('Прервать действие. Данные в открытых окнах останутся — их можно будет сохранить позже.')
+        cancel.clicked.connect(self.reject)
+        bar.addStretch()
+        bar.addWidget(now)
+        bar.addWidget(cancel)
+        layout.addLayout(bar)
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.tick)
+        self.timer.start(1000)
+        self.show_text()
+
+    def show_text(self, extra=''):
+        cfg = self.db.cfg
+        self.label.setText(f'<b>Нет связи с сервером {cfg["host"]}:{cfg["port"]}.</b><br>Проверьте сеть и что «ПТО Сервер» запущен. Программа повторяет подключение сама '
+                           f'(ждём уже {self.waited} с) и продолжит ваше действие, как только связь вернётся.<br>Всё, что вы ввели в открытых окнах, сохранено в них.{extra}')
+
+    def tick(self):
+        self.waited += 1
+        self.show_text()
+        if self.waited % 3 == 0:
+            self.attempt()
+
+    def attempt(self):
+        try:
+            self.db._connection(fresh=True)
+        except proto.RemoteError as e:                 # другой сертификат — ждать бессмысленно
+            self.timer.stop()
+            self.show_text(f'<br><span style="color:#DC2626">{e}</span>')
+            return
+        except (OSError, proto.ConnectionLost):
+            return
+        self.ok = True
+        self.accept()
+
+    def done(self, result):
+        self.timer.stop()
+        super().done(result)
+
+
+def wait_for_connection(db):
+    """Для RemoteDatabaseManager.on_lost: -> True, если связь вернулась. Вне основного потока Qt не ждёт (там просто ошибка)."""
+    import threading
+    from PyQt6.QtWidgets import QApplication
+    if threading.current_thread() is not threading.main_thread() or QApplication.instance() is None:
+        return False
+    if getattr(db, '_lost_dialog_open', False):
+        return False
+    db._lost_dialog_open = True
+    try:
+        dlg = LostConnectionDialog(db, QApplication.activeWindow())
+        dlg.exec()
+        return dlg.ok
+    finally:
+        db._lost_dialog_open = False

@@ -96,6 +96,9 @@ class RemoteDatabaseManager:
         self.server_version = ''
         self._tx_depth = 0
         self._local = threading.local()
+        self.hidden = frozenset()         # разделы, скрытые от этого пользователя на сервере
+        self._rev = None                  # номер последнего известного изменения данных на сервере
+        self.on_lost = None               # callback() -> bool: показать окно «нет связи» и дождаться сервера; True — повторить запрос
         self._resume = None               # (логин, ключ сохранённого входа): позволяет войти заново, если сеанс на сервере закончился
         self.on_status = None             # callback(bool connected, str text) для индикатора связи
 
@@ -126,10 +129,20 @@ class RemoteDatabaseManager:
         self._local.fingerprint = fp
         return conn
 
-    def _post(self, payload, retry=True):
+    @staticmethod
+    def _is_read(payload):
+        from .server_core import classify
+        method = payload.get('m')
+        if method in ('hello', 'ping', 'poll', 'online', 'access_log', 'total_changes'):
+            return True
+        return method == 'exec' and classify(payload.get('sql')) == 'read'
+
+    def _post(self, payload, retry=True, wait=True):
         body = proto.dumps(payload)
+        phase = 'connect'
         try:
             conn = self._connection()
+            phase = 'sent'
             conn.request('POST', '/rpc', body=body, headers={'Content-Type': 'application/json', 'Content-Length': str(len(body))})
             response = conn.getresponse()
             data = response.read()
@@ -138,20 +151,25 @@ class RemoteDatabaseManager:
         except (OSError, http.client.HTTPException, ssl.SSLError) as e:
             self._local.conn = None
             if retry and self._tx_depth == 0 and payload.get('m') not in ('execmany',):
-                return self._post(payload, retry=False)
+                return self._post(payload, retry=False, wait=wait)
+            # запрос, который сервер не получил (или чтение), можно безопасно повторить, когда связь вернётся; запись неясной судьбы — нет
+            if wait and self.on_lost and (phase == 'connect' or self._is_read(payload)):
+                self._status(False, 'нет связи с сервером')
+                if self.on_lost():
+                    return self._post(payload, retry=False, wait=wait)
             self._status(False, 'нет связи с сервером')
             raise proto.ConnectionLost(f'Нет связи с сервером ({self.cfg["host"]}:{self.cfg["port"]}): {e}')
         self._status(True, f'{self.user} · сервер {self.cfg["host"]}')
         return proto.loads(data)
 
-    def _call(self, method, **payload):
-        reply = self._post(dict(payload, m=method, token=self.token))
+    def _call(self, method, _wait=True, **payload):
+        reply = self._post(dict(payload, m=method, token=self.token), wait=_wait)
         err = reply.get('error')
         if err and err.get('code') == 'no_session' and self._resume and self._resume[1] and self._tx_depth == 0 and method not in ('login', 'logout'):
             fresh = self._post(dict(m='login', login=self._resume[0], remember_token=self._resume[1]))      # сервер перезапускали или сеанс устарел: тихо входим по сохранённому ключу
             if 'error' not in fresh:
                 self.token = fresh['result']['token']
-                reply = self._post(dict(payload, m=method, token=self.token))
+                reply = self._post(dict(payload, m=method, token=self.token), wait=_wait)
         if 'error' in reply:
             err = reply['error']
             kind = err.get('type', 'RemoteError')
@@ -195,6 +213,8 @@ class RemoteDatabaseManager:
             raise proto.RemoteError(result['error'].get('message', 'Вход не выполнен'), result['error'].get('code', ''))
         info = result['result']
         self.token, self.user, self.login_name, self.role = info['token'], info['name'], info['login'], info['role']
+        self.hidden = frozenset(info.get('hidden') or ())
+        self._rev = None
         self.server_version = hello.get('version', '')
         self._resume = (login, remember_token or info.get('remember_token', ''))
         self._status(True, f'{self.user} · сервер {self.cfg["host"]}')
@@ -219,10 +239,34 @@ class RemoteDatabaseManager:
 
     def ping(self):
         try:
-            self._call('ping')
+            self._call('ping', _wait=False)
             return True
         except Exception:
             return False
+
+    def poll_changes(self):
+        """Какие таблицы изменили другие пользователи с прошлого вызова (пусто — ничего; {'*'} — неизвестно/сервер перезапускали). Никогда не бросает исключений."""
+        try:
+            reply = self._call('poll', _wait=False, since=self._rev)
+        except Exception:
+            return set()
+        changed = set(reply.get('tables') or ())
+        if self._rev is not None and reply['rev'] < self._rev:
+            changed = {'*'}                              # сервер перезапущен: счётчик начался заново
+        if self._rev is None:
+            changed = set()
+        self._rev = reply['rev']
+        return changed
+
+    # --- сведения для администратора и руководителя
+    def ops_online(self):
+        return self._call('online', _wait=False)
+
+    def ops_release_lock(self, key):
+        return self._call('release_lock', key=key)
+
+    def ops_journal(self, limit=500, event=None):
+        return self._call('access_log', limit=limit, event=event)
 
     # --- интерфейс DatabaseManager
     def execute(self, query, params=()):

@@ -51,3 +51,30 @@ def test_offsite_states(db, monkeypatch):
     rows = bh.report(db, now)
     assert any(l == bh.OK and 'вне компьютера' in t for l, t in rows) and any('повреждён' in t for l, t in rows)
     assert '✔' in bh.html(rows) and '✖' in bh.html(rows)
+
+
+def test_integrity_rows(db):
+    now = datetime(2026, 10, 17, 12, 0)
+    assert bh.integrity_rows(db, now)[0][0] == bh.WARN                   # ещё не проводилась
+    db.set_setting('last_integrity_check', (now - timedelta(days=2)).isoformat())
+    db.set_setting('integrity_counts', '0,0,3')
+    db.set_setting('integrity_status', '15.10.2026 03:00: проблем не найдено')
+    assert bh.integrity_rows(db, now)[0][0] == bh.OK
+    db.set_setting('integrity_counts', '0,2,0')
+    assert bh.integrity_rows(db, now)[0][0] == bh.WARN
+    db.set_setting('integrity_counts', '1,0,0')
+    assert bh.integrity_rows(db, now)[0][0] == bh.BAD
+    db.set_setting('integrity_counts', '0,0,0')
+    db.set_setting('last_integrity_check', (now - timedelta(days=20)).isoformat())
+    assert 'давно' in bh.integrity_rows(db, now)[0][1]
+
+
+def test_weekly_integrity_service_runs_and_records(db, monkeypatch):
+    from smetagaz import services
+    monkeypatch.setattr(services, 'db', db)
+    svc = services.AutoBackupService.__new__(services.AutoBackupService)       # без таймеров и потоков: проверяем только саму задачу
+    now = datetime(2026, 10, 17, 12, 0)
+    services.AutoBackupService.integrity_check(svc, now)
+    assert db.get_setting('last_integrity_check') == now.isoformat()
+    assert 'проблем не найдено' in db.get_setting('integrity_status') or 'предупреждений' in db.get_setting('integrity_status')
+    assert len(db.get_setting('integrity_counts').split(',')) == 3

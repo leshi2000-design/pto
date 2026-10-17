@@ -7,6 +7,7 @@ from .database import db
 from .backup import create_backup
 from .contracts_excel_export import export_registries,EXPORT_FILENAME
 
+INTEGRITY_INTERVAL_DAYS=7
 CONTRACTS_EXPORT_INTERVAL=3600  # раз в час, пока программа запущена; файлы перезаписываются
 
 class NoBackupService:
@@ -29,6 +30,7 @@ class AutoBackupService(QObject):
         self.contracts_future=None
         self.projects_future=None
         self.offsite_future=None
+        self.integrity_future=None
         self.timer=QTimer(self);self.timer.timeout.connect(self.run_checks);self.timer.start(60000)
         QTimer.singleShot(5000,self.run_checks)
     def run_checks(self):
@@ -45,9 +47,27 @@ class AutoBackupService(QObject):
             try:last=datetime.fromisoformat(db.get_setting('last_projects_excel',''))
             except ValueError:last=datetime.min
             if (datetime.now()-last).total_seconds()>CONTRACTS_EXPORT_INTERVAL:self.projects_future=self.pool.submit(self.export_projects_excel,datetime.now())
+        if not (self.integrity_future and not self.integrity_future.done()):
+            try:last=datetime.fromisoformat(db.get_setting('last_integrity_check',''))
+            except ValueError:last=datetime.min
+            if (datetime.now()-last).days>=INTEGRITY_INTERVAL_DAYS:self.integrity_future=self.pool.submit(self.integrity_check,datetime.now())
         if not (self.offsite_future and not self.offsite_future.done()):
             from . import offsite_backup
             if any(offsite_backup.due(db)):self.offsite_future=self.pool.submit(self.offsite_backup,datetime.now())
+    def integrity_check(self,now):
+        """Раз в неделю: целостность файлов баз SQLite и логические связи (раздел «Проверка данных»). Результат виден в блоке копий окна сервера."""
+        try:
+            from . import integrity
+            counts=integrity.summary(integrity.check(db))
+            db.set_setting('last_integrity_check',now.isoformat())
+            db.set_setting('integrity_counts',f"{counts['error']},{counts['warn']},{counts['info']}")
+            if counts['error']:text=f"{now:%d.%m.%Y %H:%M}: найдено ошибок {counts['error']}, предупреждений {counts['warn']} — откройте «Настройки → Проверка данных»"
+            elif counts['warn']:text=f"{now:%d.%m.%Y %H:%M}: ошибок нет, предупреждений {counts['warn']}"
+            else:text=f"{now:%d.%m.%Y %H:%M}: проблем не найдено"
+            db.set_setting('integrity_status',text)
+        except Exception as e:
+            logging.exception('Integrity check failed')
+            db.set_setting('integrity_status',f'{now:%d.%m.%Y %H:%M}: проверка не выполнена — {e}')
     def offsite_backup(self,now):
         try:
             from . import offsite_backup

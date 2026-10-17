@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QDialog
 
 from . import __version__
 from .config import DATA_DIR
-from .server_core import ROLES, local_addresses, pretty_fingerprint
+from .server_core import RESTRICTABLE, ROLES, local_addresses, pretty_fingerprint
 
 
 class UserDialog(QDialog):
@@ -27,6 +27,23 @@ class UserDialog(QDialog):
         self.password.setPlaceholderText('не короче 6 символов' if not uid else 'оставьте пустым, чтобы не менять')
         for label, w in (('Логин', self.login), ('Имя (для журнала)', self.name), ('Роль', self.role), ('Пароль', self.password)):
             f.addRow(label, w)
+        from PyQt6.QtWidgets import QListWidget, QListWidgetItem
+        from .permissions import assignable
+        self.sections = QListWidget()
+        self.sections.setMinimumHeight(220)
+        hidden = users.raw_hidden(uid) if uid else frozenset()
+        for key, title in assignable():
+            item = QListWidgetItem(title)
+            item.setData(Qt.ItemDataRole.UserRole, key)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Unchecked if key in hidden else Qt.CheckState.Checked)
+            self.sections.addItem(item)
+        self.sections_note = QLabel()
+        self.sections_note.setWordWrap(True)
+        f.addRow('Что видит пользователь', self.sections)
+        f.addRow(self.sections_note)
+        self.role.currentIndexChanged.connect(self.role_changed)
+        self.role_changed()
         ok = QPushButton('Сохранить')
         ok.setProperty('type', 'primary')
         ok.clicked.connect(self.save)
@@ -38,14 +55,25 @@ class UserDialog(QDialog):
             self.name.setText(row[2])
             self.role.setCurrentIndex(self.role.findData(row[3]))
 
+    def role_changed(self):
+        restrict = self.role.currentData() in RESTRICTABLE
+        self.sections.setEnabled(restrict)
+        self.sections_note.setText('Снимите галочки с разделов, которые нужно скрыть от этого сотрудника. «Налоги и доходы ИП» закрываются и на уровне базы; '
+                                  '«Оплаты» — ввод и правка закрываются на сервере, просмотр остаётся (суммы входят в общие сводки). Остальные разделы скрываются в интерфейсе.'
+                                  if restrict else 'Администратору и руководителю доступны все разделы.')
+
+    def hidden(self):
+        return [self.sections.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.sections.count())
+                if self.sections.item(i).checkState() == Qt.CheckState.Unchecked]
+
     def save(self):
         try:
             if self.uid:
-                self.users.update(self.uid, role=self.role.currentData(), full_name=self.name.text().strip())
+                self.users.update(self.uid, role=self.role.currentData(), full_name=self.name.text().strip(), hidden=self.hidden(), actor='сервер')
                 if self.password.text():
-                    self.users.set_password(self.uid, self.password.text())
+                    self.users.set_password(self.uid, self.password.text(), actor='сервер')
             else:
-                self.users.add(self.login.text(), self.password.text(), self.role.currentData(), self.name.text())
+                self.users.add(self.login.text(), self.password.text(), self.role.currentData(), self.name.text(), hidden=self.hidden(), actor='сервер')
         except ValueError as e:
             QMessageBox.warning(self, 'Пользователь', str(e))
             return
@@ -57,7 +85,7 @@ class UsersDialog(QDialog):
         super().__init__(parent)
         self.users = users
         self.setWindowTitle('Пользователи ПТО Сервера')
-        self.resize(720, 420)
+        self.resize(800, 460)
         layout = QVBoxLayout(self)
         bar = QHBoxLayout()
         for text, fn in (('Добавить', self.add), ('Изменить / сменить пароль', self.edit), ('Отключить / включить', self.toggle), ('Удалить', self.delete)):
@@ -72,7 +100,7 @@ class UsersDialog(QDialog):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         layout.addWidget(self.table, 1)
-        layout.addWidget(QLabel('Роли: администратор — всё; сотрудник — работа с данными; только просмотр — чтение без изменений.'))
+        layout.addWidget(QLabel('Роли: администратор — всё, включая пользователей; руководитель — все разделы и данные, видит «Кто в сети» и снимает зависшие блокировки; сотрудник — работа с данными (разделы можно скрыть); только просмотр — чтение без изменений.'))
         self.load()
 
     def load(self):
@@ -106,7 +134,7 @@ class UsersDialog(QDialog):
             return
         row = next(r for r in self.users.listing() if r[0] == uid)
         try:
-            self.users.update(uid, active=not row[4])
+            self.users.update(uid, active=not row[4], actor='сервер')
         except ValueError as e:
             QMessageBox.warning(self, 'Пользователь', str(e))
         self.load()
@@ -115,7 +143,7 @@ class UsersDialog(QDialog):
         uid = self.current()
         if uid and QMessageBox.question(self, 'Удалить пользователя', 'Удалить пользователя? Записи журнала с его именем останутся.') == QMessageBox.StandardButton.Yes:
             try:
-                self.users.delete(uid)
+                self.users.delete(uid, actor='сервер')
             except ValueError as e:
                 QMessageBox.warning(self, 'Пользователь', str(e))
             self.load()
@@ -126,7 +154,7 @@ class ServerWindow(QMainWindow):
         super().__init__()
         self.db, self.users, self.server = db, users, server
         self.setWindowTitle(f'ПТО Сервер {__version__}')
-        self.resize(780, 560)
+        self.resize(900, 720)
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
@@ -138,14 +166,12 @@ class ServerWindow(QMainWindow):
         self.health.setTextFormat(Qt.TextFormat.RichText)
         self.health.setWordWrap(True)
         layout.addWidget(self.health)
-        layout.addWidget(QLabel('<b>Подключённые пользователи</b>'))
-        self.table = QTableWidget(0, 6)
-        self.table.setHorizontalHeaderLabels(['Логин', 'Имя', 'Роль', 'С компьютера', 'Вошёл', 'Последний запрос'])
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        layout.addWidget(self.table, 1)
+        from .ops_ui import OnlineWidget
+        self.online = OnlineWidget(lambda: ([list(x) for x in self.server.active_sessions()], self.server.locks()),
+                                   lambda key: self.server.release_lock(key, 'сервер'))
+        layout.addWidget(self.online, 1)
         bar = QHBoxLayout()
-        for text, fn in (('Пользователи…', self.manage_users), ('Копия сейчас', self.backup_now), ('Скопировать данные для подключения', self.copy_info), ('Изменить порт…', self.change_port)):
+        for text, fn in (('Пользователи…', self.manage_users), ('Журнал входов…', self.show_journal), ('Копия сейчас', self.backup_now), ('Скопировать данные для подключения', self.copy_info), ('Изменить порт…', self.change_port)):
             b = QPushButton(text)
             b.clicked.connect(fn)
             bar.addWidget(b)
@@ -171,11 +197,6 @@ class ServerWindow(QMainWindow):
                             f'Отпечаток сертификата: <code>{pretty_fingerprint(self.server.fingerprint)}</code><br>'
                             f'<span style="color:#605E5C">Папка данных: {DATA_DIR}</span>')
         self.refresh_health()
-        sessions = self.server.active_sessions()
-        self.table.setRowCount(len(sessions))
-        for r, s in enumerate(sessions):
-            for c, v in enumerate((s[0], s[1], ROLES.get(s[2], s[2]), s[3], s[4], s[5])):
-                self.table.setItem(r, c, QTableWidgetItem(str(v)))
 
     def refresh_health(self):
         from . import backup_health
@@ -188,6 +209,18 @@ class ServerWindow(QMainWindow):
 
     def manage_users(self):
         UsersDialog(self.users, self).exec()
+
+    def show_journal(self):
+        from .ops_ui import JournalWidget
+        dlg = QDialog(self)
+        dlg.setWindowTitle('Журнал входов и действий администратора')
+        dlg.resize(900, 520)
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(JournalWidget(lambda event: self.users.journal(500, event)))
+        close = QPushButton('Закрыть')
+        close.clicked.connect(dlg.accept)
+        lay.addWidget(close)
+        dlg.exec()
 
     def backup_now(self):
         try:

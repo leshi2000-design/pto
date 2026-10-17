@@ -595,8 +595,10 @@ class IpView(QWidget):
         super().__init__()
         layout = QVBoxLayout(self)
         self.tabs = QTabWidget()
-        self.pages = [(ContractsRegistry('ip'), 'Договоры'), (ActsRegistry('ip'), 'Акты'), (EstimatesTab(), 'Сметы'), (IncomeTab(), 'Оплаты'), (StatementTab(), 'Ведомость по месяцам'),
-                      (TaxTab(), 'Налог'), (TemplatesTab('ip'), 'Шаблоны и теги')]
+        self.pages = [(ContractsRegistry('ip'), 'Договоры'), (ActsRegistry('ip'), 'Акты'), (EstimatesTab(), 'Сметы')]
+        if 'ip_tax' not in getattr(db, 'hidden', ()):         # доходы и налог ИП может закрыть администратор сервера (на уровне базы тоже)
+            self.pages += [(IncomeTab(), 'Оплаты'), (StatementTab(), 'Ведомость по месяцам'), (TaxTab(), 'Налог')]
+        self.pages.append((TemplatesTab('ip'), 'Шаблоны и теги'))
         for widget, title in self.pages:
             self.tabs.addTab(widget, title)
         layout.addWidget(self.tabs)
