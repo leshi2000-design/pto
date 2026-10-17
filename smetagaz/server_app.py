@@ -134,6 +134,10 @@ class ServerWindow(QMainWindow):
         self.status.setTextFormat(Qt.TextFormat.RichText)
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
+        self.health = QLabel()
+        self.health.setTextFormat(Qt.TextFormat.RichText)
+        self.health.setWordWrap(True)
+        layout.addWidget(self.health)
         layout.addWidget(QLabel('<b>Подключённые пользователи</b>'))
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(['Логин', 'Имя', 'Роль', 'С компьютера', 'Вошёл', 'Последний запрос'])
@@ -166,11 +170,21 @@ class ServerWindow(QMainWindow):
         self.status.setText(f'<h3 style="margin:0">Сервер работает</h3>Адреса для подключения: <b>{" · ".join(self.addresses())}</b><br>'
                             f'Отпечаток сертификата: <code>{pretty_fingerprint(self.server.fingerprint)}</code><br>'
                             f'<span style="color:#605E5C">Папка данных: {DATA_DIR}</span>')
+        self.refresh_health()
         sessions = self.server.active_sessions()
         self.table.setRowCount(len(sessions))
         for r, s in enumerate(sessions):
             for c, v in enumerate((s[0], s[1], ROLES.get(s[2], s[2]), s[3], s[4], s[5])):
                 self.table.setItem(r, c, QTableWidgetItem(str(v)))
+
+    def refresh_health(self):
+        from . import backup_health
+        try:
+            rows = backup_health.report(self.db)
+        except Exception:
+            return
+        self.health.setText('<b>Резервные копии</b>' + backup_health.html(rows))
+        self.setWindowTitle(f'ПТО Сервер {__version__}' + ('' if backup_health.worst(rows) == backup_health.OK else '  ·  ВНИМАНИЕ: копии'))
 
     def manage_users(self):
         UsersDialog(self.users, self).exec()
@@ -184,6 +198,8 @@ class ServerWindow(QMainWindow):
             folder.mkdir(exist_ok=True)
             path = folder / f'manual_{datetime.now():%Y%m%d_%H%M%S}.zip'
             create_backup(self.db, path)
+            self.db.set_setting('last_db_backup', datetime.now().isoformat())
+            self.refresh_health()
             QMessageBox.information(self, 'Копия', f'Копия создана:\n{path}')
         except Exception as e:
             QMessageBox.warning(self, 'Копия не создана', str(e))
