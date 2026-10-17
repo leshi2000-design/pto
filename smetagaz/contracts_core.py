@@ -15,6 +15,7 @@ from pathlib import Path
 
 from . import gsv_project_domain as gd
 from . import gsvm_domain as md
+from . import section_codes as sc
 from .agenda_domain import short_name
 from .gsvm_docs import FORMATS, apply_format, money, norm_tag, tag_text
 
@@ -257,12 +258,13 @@ def next_number(db, mod, contract_date=None):
     day = gd._parse(contract_date) or date.today()
     yy = day.year % 100
     top = db.fetchone(f"SELECT coalesce(max(seq_num),0) FROM {c['contracts']} WHERE year_num=?", (yy,))[0]
-    pattern = re.compile(rf"^(\d+)-{c['code']}/(\d{{2}})$")
-    for (number,) in db.fetchall(f"SELECT contract_number FROM {c['contracts']} WHERE contract_number LIKE '%-{c['code']}/%'"):
+    pattern = sc.regex(db, mod)
+    clause, params = sc.like_clauses(db, mod)
+    for (number,) in db.fetchall(f"SELECT contract_number FROM {c['contracts']} WHERE {clause}", params):
         m = pattern.match(str(number or '').strip())
         if m and int(m.group(2)) == yy:
             top = max(top, int(m.group(1)))
-    return top + 1, yy, f'{top + 1:02}-{c["code"]}/{yy:02}'
+    return top + 1, yy, sc.format_number(db, mod, top + 1, yy)
 
 
 def folder_name(number, address='', party_name=''):
@@ -617,7 +619,7 @@ def save_contract(db, mod, values, cid=None):
             if not number or number.upper().startswith('XX'):
                 seq, year, number = next_number(db, mod, data.get('contract_date'))
             else:
-                m = re.match(rf"^(\d+)-{c['code']}/(\d{{2}})$", number)
+                m = sc.regex(db, mod).match(number)
                 if m:
                     seq, year = int(m.group(1)), int(m.group(2))
             data.update(contract_number=number, seq_num=seq, year_num=year)

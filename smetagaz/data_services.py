@@ -72,6 +72,8 @@ def initialize(db):
         locks_migrate(db)
         from .material_groups import migrate as groups_migrate
         groups_migrate(db)
+        from .invoices_domain import migrate as invoices_migrate
+        invoices_migrate(db)
         from .gsv_project_domain import migrate as gsv_project_migrate
         gsv_project_migrate(db)
         from .gsvm_domain import migrate as gsvm_migrate

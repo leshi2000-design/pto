@@ -2,7 +2,7 @@
 import os
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox,
+from PyQt6.QtWidgets import (QTabWidget, QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox,
                               QPlainTextEdit, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from . import incoming_domain as inc
@@ -134,18 +134,56 @@ def process_files(parent, paths):
     """Последовательно открывает окно проверки для каждого файла; возвращает число сохранённых."""
     saved = 0
     for path in paths:
-        if os.path.isfile(path):
+        if not os.path.isfile(path):
+            continue
+        if is_invoice(path, parent):
+            from .invoice_ui import InvoiceReviewDialog
+            d = InvoiceReviewDialog(path, parent)
+        else:
             d = ReviewDialog(path, parent)
-            d.exec()
-            saved += int(d.saved)
+        d.exec()
+        saved += int(d.saved)
     return saved
+
+
+def is_invoice(path, parent=None):
+    """Накладная ли это: Excel с таблицей товаров, PDF со словом «накладная», фото (по имени файла или по вопросу пользователю)."""
+    from . import invoice_parse as ip
+    ext = os.path.splitext(path)[1].lower()
+    try:
+        if ext in ('.xlsx', '.xlsm'):
+            head, _mapping = ip.find_header(ip.read_excel_rows(path, 80))
+            return head is not None
+        if ext == '.pdf':
+            text, _warn = inc.extract_text(path)
+            return inc.guess_kind(text, os.path.basename(path)) == 'Накладная'
+        if ext in inc.IMAGE_EXT:
+            if ip.looks_like_invoice(path):
+                return True
+            box = QMessageBox(parent)
+            box.setWindowTitle('Что на фотографии?')
+            box.setText(f'{os.path.basename(path)}\n\nЭто накладная? Для накладной программа распознает товары и реквизиты.')
+            yes = box.addButton('Накладная', QMessageBox.ButtonRole.AcceptRole)
+            box.addButton('Другой документ', QMessageBox.ButtonRole.RejectRole)
+            box.exec()
+            return box.clickedButton() is yes
+    except Exception:
+        return False
+    return False
 
 
 class IncomingView(QWidget):
     def __init__(self):
         super().__init__()
         self.setAcceptDrops(True)
-        layout = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self.tabs = QTabWidget()
+        outer.addWidget(self.tabs)
+        page = QWidget()
+        page.setAcceptDrops(False)
+        self.tabs.addTab(page, 'Документы')
+        layout = QVBoxLayout(page)
         hint = QLabel('Перетащите сюда накладные, сертификаты и подписанные акты (или нажмите «Добавить файлы»). Программа предложит реквизиты и объект, а сохранится только то, что вы подтвердите.')
         hint.setWordWrap(True)
         hint.setStyleSheet('border: 2px dashed #9AA5A3; border-radius: 8px; padding: 14px; color: #605E5C;')
@@ -178,8 +216,14 @@ class IncomingView(QWidget):
         self.rows = []
         self.search.textChanged.connect(self.load_data)
         self.kind.currentIndexChanged.connect(self.load_data)
+        from .invoice_ui import InvoicesTab
+        self.invoices_tab = InvoicesTab()
+        self.tabs.addTab(self.invoices_tab, 'Накладные и товары')
+        self.tabs.currentChanged.connect(lambda *_: self.load_data())
 
     def load_data(self, *_):
+        if hasattr(self, 'invoices_tab') and self.tabs.currentIndex() == 1:
+            self.invoices_tab.load_data()
         self.rows = inc.listing(db, self.search.text().strip(), self.kind.currentData() or '')
         self.table.setRowCount(len(self.rows))
         for r, d in enumerate(self.rows):

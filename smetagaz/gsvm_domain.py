@@ -123,16 +123,19 @@ def _import_legacy(db):
 # --- НОМЕР, ПАПКА ----------------------------------------------------------------------------
 
 def next_number(db, contract_date=None):
-    """(порядковый, год, '01-02/26'): номер договора монтажа ГСВ — порядок, раздел 02, год заключения."""
+    """(порядковый, год, '01-02/26'): номер договора монтажа ГСВ — порядок, номер раздела (по умолчанию 02, меняется в настройках), год заключения."""
     day = gd._parse(contract_date) or date.today()
     yy = day.year % 100
+    from . import section_codes as sc
     top = db.fetchone('SELECT coalesce(max(seq_num),0) FROM contracts WHERE year_num=?', (yy,))[0]
-    for (number,) in db.fetchall("SELECT contract_number FROM contracts WHERE contract_number LIKE '%-02/%'"):
-        m = re.match(r'^(\d+)-02/(\d{2})$', str(number or '').strip())
+    pattern = sc.regex(db, 'contracts')
+    clause, params = sc.like_clauses(db, 'contracts')
+    for (number,) in db.fetchall(f"SELECT contract_number FROM contracts WHERE {clause}", params):
+        m = pattern.match(str(number or '').strip())
         if m and int(m.group(2)) == yy:
             top = max(top, int(m.group(1)))
     seq = top + 1
-    return seq, yy, f'{seq:02}-02/{yy:02}'
+    return seq, yy, sc.format_number(db, 'contracts', seq, yy)
 
 
 def folder_name(number, address='', client=''):

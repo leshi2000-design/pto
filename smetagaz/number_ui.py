@@ -22,7 +22,8 @@ class NumberDialog(QDialog):
         box = QGroupBox('Изменить номер')
         f = QFormLayout(box)
         self.new = QLineEdit()
-        self.new.setPlaceholderText('например 07-26' if section == 'gsv_projects' else 'например 07-02/26')
+        from . import section_codes
+        self.new.setPlaceholderText('например 07-26' if section == 'gsv_projects' else f"например 07-{section_codes.code(db, section)}/26")
         f.addRow('Новый номер', self.new)
         hint = QLabel('Если номер занят другой карточкой, программа предложит поменяться номерами.')
         hint.setStyleSheet('color: #605E5C;')

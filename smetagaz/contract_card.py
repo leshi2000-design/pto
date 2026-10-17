@@ -16,6 +16,7 @@ from . import gsvm_domain as md
 from . import gsvm_docs as dd
 from .gsvm_tabs import EquipmentTab, PipesTab, IdTab, TemplatesTab, WorkEntryDialog, ConsumptionDialog, STATE_TEXT, open_file, print_files
 from .edit_lock_ui import guarded
+from . import section_codes
 
 
 @guarded('gsvm', lambda d: d.contract_id, 'Договор монтажа ГСВ')
@@ -336,7 +337,7 @@ class ContractCardDialog(QDialog):
                 self.client_form.fill(get_client(db, row[0]) or dict(name=row[1], phone=row[2]), row[0])
             self.pull_amount_from_estimate(silent=True)
         if not self.contract_id:
-            self.inp_number.setText(f'XX-02/{QDate.currentDate().year() % 100:02d} (авто)')
+            self.inp_number.setText(f"XX-{section_codes.code(db, 'contracts')}/{QDate.currentDate().year() % 100:02d} (авто)")
         self.equipment_tab.load(self.contract_id)
         self.pipes_tab.load(self.contract_id)
         self.refresh_estimate_ui()
@@ -389,7 +390,7 @@ class ContractCardDialog(QDialog):
                 if not self.contract_id and (not number or number.upper().startswith('XX')):
                     seq, year, number = md.next_number(db, contract_date)
                 else:
-                    m = re.match(r'^(\d+)-02/(\d{2})$', number)
+                    m = section_codes.regex(db, 'contracts').match(number)
                     if m:
                         seq, year = int(m.group(1)), int(m.group(2))
                 fields = dict(

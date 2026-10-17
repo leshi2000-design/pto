@@ -71,7 +71,9 @@ def test_unreadable_files_warn_not_fail(d, tmp_path):
 
 def test_view_and_dialog(d, tmp_path, monkeypatch):
     from smetagaz import incoming_view as iv, staff_view
+    from smetagaz import invoice_ui
     monkeypatch.setattr(iv, 'db', d)
+    monkeypatch.setattr(invoice_ui, 'db', d)
     path = write_docx(tmp_path / 'n.docx', NAKL)
     dlg = iv.ReviewDialog(path)
     assert dlg.kind.currentText() == 'Накладная' and dlg.number.text() == '1245/А'

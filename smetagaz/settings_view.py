@@ -22,6 +22,8 @@ import tempfile
 from PyQt6.QtWidgets import QInputDialog
 from PyQt6.QtCore import QTimer
 from .database import db
+from .section_codes_ui import SectionCodesBox
+from .invoice_ui import OcrSettingsBox
 from .widgets import ReorderTableWidget
 
 
@@ -123,6 +125,9 @@ class SettingsView(QWidget):
         if getattr(db, 'is_remote', False) or getattr(db, 'side_by_side', False):
             box_db.setEnabled(False)
             box_db.setToolTip('Резервные копии и восстановление выполняет ПТО Сервер: пока он работает, база не должна подменяться')
+
+        layout.addWidget(OcrSettingsBox())
+        layout.addWidget(SectionCodesBox())          # номера разделов договоров (вручную)
 
         # 4. Папки договоров: где создаются новые папки (по разделам)
         box_folders = QGroupBox("Папки договоров (где создавать новые папки)")

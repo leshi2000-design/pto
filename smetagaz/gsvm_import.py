@@ -171,7 +171,7 @@ def import_rows(db, prepared, on_exists='skip', ctx=None):
                     report['updated'] += 1
                 else:
                     if number:
-                        m = _re.match(r'^(\d+)-02/(\d{2})$', number)
+                        m = __import__('smetagaz.section_codes', fromlist=['x']).regex(db, 'contracts').match(number)
                         seq, year = (int(m.group(1)), int(m.group(2))) if m else (None, None)
                     else:
                         seq, year, number = md.next_number(db, date_c)

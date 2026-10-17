@@ -252,7 +252,7 @@ def import_rows(db, prepared, on_exists='skip', infer_statuses=True, ctx=None):
                     year = data['year'] if data.get('year') is not None else datetime.now().year % 100
                     seq = data['seq'] if data.get('seq') is not None else db.fetchone('SELECT coalesce(max(seq_num),0)+1 FROM gsv_projects WHERE year_num=?', (year,))[0]
                     pd_number = data.get('pd_number') or f'{seq:02}-{year:02} ГСВ'
-                    fields.update(pd_number=pd_number, seq_num=seq, year_num=year, contract_number=data.get('contract_number') or f'{seq:02}-03/{year:02}')
+                    fields.update(pd_number=pd_number, seq_num=seq, year_num=year, contract_number=data.get('contract_number') or __import__('smetagaz.section_codes', fromlist=['x']).format_number(db, 'gsv_projects', seq, year))
                     fields.setdefault('cost', 250.0)
                     pid = db.execute('INSERT INTO gsv_projects(' + ','.join(fields) + ') VALUES(' + ','.join('?' for _ in fields) + ')', tuple(fields.values())).lastrowid
                     report['created'] += 1

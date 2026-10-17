@@ -5,8 +5,10 @@
 import re
 from datetime import date
 
+from . import section_codes as sc
+
 SECTIONS = {
-    'contracts': dict(title='Монтаж ГСВ', code='02'),
+    'contracts': dict(title='Монтаж ГСВ', code='02'),          # код здесь — значение по умолчанию; действующий номер раздела задаётся в настройках (section_codes)
     'gsv_projects': dict(title='Проекты ГСВ', code='03'),
 }
 RESERVE_TEXT = 'Резерв номера'
@@ -30,17 +32,22 @@ def _check(section):
         raise ValueError('Номера меняются только в разделах «Проекты ГСВ» и «Монтаж ГСВ»')
 
 
-def format_number(section, seq, year):
+def _db(db):
+    if db is not None:
+        return db
+    from .database import db as default
+    return default
+
+
+def format_number(section, seq, year, db=None):
     """(номер договора, номер проекта или None)."""
     _check(section)
-    code = SECTIONS[section]['code']
-    return f'{seq:02}-{code}/{year:02}', (f'{seq:02}-{year:02} ГСВ' if section == 'gsv_projects' else None)
+    return sc.format_number(_db(db), section, seq, year), (f'{seq:02}-{year:02} ГСВ' if section == 'gsv_projects' else None)
 
 
-def parse(section, text):
-    """Из текста номера достаёт (порядковый, год) или (None, None)."""
-    code = SECTIONS[section]['code']
-    m = re.match(rf'^\s*(\d+)-{code}/(\d{{2}})\s*$', str(text or ''))
+def parse(section, text, db=None):
+    """Из текста номера достаёт (порядковый, год) или (None, None). Узнаются и прежние номера раздела."""
+    m = sc.regex(_db(db), section).match(str(text or ''))
     if m:
         return int(m.group(1)), int(m.group(2))
     if section == 'gsv_projects':
@@ -84,15 +91,15 @@ def change_number(db, section, rid, text):
     if not text:
         raise ValueError('Введите номер')
     if section == 'gsv_projects':
-        seq, year = parse(section, text)
+        seq, year = parse(section, text, db)
         if seq is None:
             m = re.match(r'^(\d+)[-/ ](\d{2})$', text)
             if not m:
                 raise ValueError('Для проекта ГСВ введите порядковый номер и год, например 07-26')
             seq, year = int(m.group(1)), int(m.group(2))
-        number, pd = format_number(section, seq, year)
+        number, pd = format_number(section, seq, year, db)
     else:
-        seq, year = parse(section, text)
+        seq, year = parse(section, text, db)
         number, pd = text, None
     other = _holder(db, section, number, pd, rid)
     if other:
@@ -143,7 +150,7 @@ def reserve(db, section, count, on_date=None):
             else:
                 year = day.year % 100
                 seq = db.fetchone('SELECT coalesce(max(seq_num),0)+1 FROM gsv_projects WHERE year_num=?', (year,))[0]
-                number, pd = format_number(section, seq, year)
+                number, pd = format_number(section, seq, year, db)
                 rid = db.execute("INSERT INTO gsv_projects(pd_number,seq_num,year_num,contract_number,object_name,client_name,cost,reserved) VALUES(?,?,?,?,?,?,0,1)",
                                  (pd, seq, year, number, '', '')).lastrowid
                 created.append((rid, pd))

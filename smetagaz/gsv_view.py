@@ -45,6 +45,7 @@ os.makedirs(BACKUP_EXCEL_DIR, exist_ok=True)
 
 from .gsv_project_domain import MONTHS_GENITIVE, format_date_word, get_initials_first, format_cost_rubles, num_to_words_byn
 from .edit_lock_ui import guarded
+from . import section_codes
 
 def open_file_or_dir(path):
     if path and os.path.exists(path): open_local(os.path.abspath(path))
@@ -786,7 +787,7 @@ class ProjectEditDialog(QDialog):
     def setup_new_record(self):
         curr_year = datetime.now().year % 100
         self.txt_pd.setText(f"XX-{curr_year:02d} ГСВ (авто)")
-        self.txt_contract_num.setText(f"XX-03/{curr_year:02d} (авто)")
+        self.txt_contract_num.setText(f"XX-{section_codes.code(db, 'gsv_projects')}/{curr_year:02d} (авто)")
 
     def editable_widgets(self):
         return [self.txt_object, self.txt_address, self.txt_tu, self.txt_notes, self.dt_contract, self.chk_contract_signed, self.dt_due,
@@ -895,7 +896,7 @@ class ProjectEditDialog(QDialog):
                     year = datetime.now().year % 100
                     seq = db.fetchone('SELECT coalesce(max(seq_num),0)+1 FROM gsv_projects WHERE year_num=?', (year,))[0]
                     fields += ['pd_number', 'seq_num', 'year_num', 'contract_number']
-                    values += [f'{seq:02}-{year:02} ГСВ', seq, year, f'{seq:02}-03/{year:02}']
+                    values += [f'{seq:02}-{year:02} ГСВ', seq, year, section_codes.format_number(db, 'gsv_projects', seq, year)]
                     rid = db.execute('INSERT INTO gsv_projects(' + ','.join(fields) + ') VALUES(' + ','.join('?' for _ in fields) + ')', values).lastrowid
                 gsvdom.set_project_statuses(db, rid, self.checked_status_ids())
                 from . import numbering
