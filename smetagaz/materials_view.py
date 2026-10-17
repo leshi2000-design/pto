@@ -9,7 +9,7 @@ pd = LazyModule("pandas")
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                               QTableWidget, QTableWidgetItem, QInputDialog, QMessageBox,
                               QFileDialog, QDialog, QAbstractItemView, QTreeWidget,
-                              QTreeWidgetItem, QSplitter, QMenu)
+                              QTreeWidgetItem, QSplitter, QMenu, QTabWidget)
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QAction
 
@@ -93,6 +93,10 @@ class MaterialsTable(QTableWidget):
         act_del.triggered.connect(self.parent_view.del_material)
         menu.addAction(act_del)
 
+        act_group = QAction("Добавить в группу товаров…", self)
+        act_group.triggered.connect(lambda: self.parent_view.add_to_group(mat_ids))
+        menu.addAction(act_group)
+
         menu.addSeparator()
         move_menu = menu.addMenu("Отправить в раздел")
         act_none = QAction(" Без раздела", self)
@@ -114,8 +118,14 @@ class MaterialsTable(QTableWidget):
 class MaterialsView(QWidget):
     def __init__(self):
         super().__init__()
-        self.pager=RegistryPager(self)
-        main_layout = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self.tabs = QTabWidget()
+        outer.addWidget(self.tabs)
+        page = QWidget()                      # вкладка «Справочник»; вторая вкладка — «Группы товаров»
+        self.tabs.addTab(page, 'Справочник')
+        self.pager=RegistryPager(page, callback=self.load_data)
+        main_layout = QVBoxLayout(page)
         actions = QHBoxLayout()
 
         self.btn_toggle_cat = QPushButton("Скрыть разделы")
@@ -188,6 +198,17 @@ class MaterialsView(QWidget):
         self.selected_category_id = None
         self.load_categories()
         self.load_data()
+        from .material_groups_ui import MaterialGroupsTab
+        self.groups_tab = MaterialGroupsTab()
+        self.tabs.addTab(self.groups_tab, 'Группы товаров')
+        self.tabs.currentChanged.connect(lambda i: self.groups_tab.load_data() if i == 1 else None)
+
+    def add_to_group(self, material_ids):
+        from .material_groups_ui import add_to_group_dialog
+        added = add_to_group_dialog(self, material_ids)
+        if added is not None:
+            self.groups_tab.load_data()
+            QMessageBox.information(self, 'Группа товаров', f'Добавлено позиций: {added}' + ('' if added == len(material_ids) else f' (остальные уже были в группе)'))
 
     def remove_duplicates(self):
         reply = QMessageBox.question(self, "Удаление дубликатов",

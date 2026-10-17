@@ -280,6 +280,8 @@ class EstimateEditorDialog(QDialog):
         bottom_bar = QHBoxLayout()
         btn_add_mat = QPushButton("Из справочника")
         btn_add_mat.setProperty("type", "primary")
+        btn_add_group = QPushButton("Группа товаров")
+        btn_add_group.setToolTip("Подставить сразу все позиции выбранной группы из справочника (например, «ГСВ»), останется указать количество")
         btn_add_work = QPushButton("Добавить работу")
         btn_add_custom = QPushButton("Произвольная позиция")
         btn_add_section = QPushButton("Добавить раздел")
@@ -287,6 +289,7 @@ class EstimateEditorDialog(QDialog):
         self.btn_del.setProperty("type", "danger")
 
         bottom_bar.addWidget(btn_add_mat)
+        bottom_bar.addWidget(btn_add_group)
         bottom_bar.addWidget(btn_add_work)
         bottom_bar.addWidget(btn_add_custom)
         bottom_bar.addWidget(btn_add_section)
@@ -296,6 +299,7 @@ class EstimateEditorDialog(QDialog):
         layout.addLayout(bottom_bar)
 
         btn_add_mat.clicked.connect(self.add_material)
+        btn_add_group.clicked.connect(self.add_group)
         btn_add_work.clicked.connect(self.add_work)
         btn_add_custom.clicked.connect(self.add_custom)
         btn_add_section.clicked.connect(self.add_section)
@@ -654,6 +658,17 @@ class EstimateEditorDialog(QDialog):
                 new_id = db.execute("INSERT INTO estimate_items (estimate_id, item_type, name, unit, quantity, price, sum, sort_order, purchase_price) VALUES (?, 'Материал', ?, ?, ?, ?, ?, ?, ?)",
                                     (self.estimate_id, mat['name'], mat['unit'], qty, mat['price'], sm, so, mat['purchase_price'])).lastrowid
                 self.place(new_id, section_id)
+
+    def add_group(self):
+        from . import material_groups as mg
+        from .material_groups_ui import GroupInsertDialog
+        if not mg.groups(db):
+            QMessageBox.information(self, "Группы товаров", "Групп пока нет. Создайте их в «Справочник» → вкладка «Группы товаров».")
+            return
+        dlg = GroupInsertDialog(self.estimate_id, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.entries:
+            mg.insert_into_estimate(db, self.estimate_id, dlg.entries, dlg.section)
+            self.load_items()
 
     def add_work(self):
         dlg = WorkSelectionDialog(self)
