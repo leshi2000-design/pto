@@ -16,9 +16,11 @@ SetupIconFile=..\smetagaz\assets\icon.ico
 Name: "ru"; MessagesFile: "compiler:Languages\Russian.isl"
 [Files]
 Source: "..\dist\ПТО\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
+Source: "server_autostart\*"; DestDir: "{app}\server_autostart"; Flags: ignoreversion
 [Icons]
 Name: "{group}\ПТО"; Filename: "{app}\PTO.exe"
 Name: "{autodesktop}\ПТО"; Filename: "{app}\PTO.exe"
 Name: "{group}\ПТО Сервер"; Filename: "{app}\PTO_Server.exe"
+Name: "{group}\ПТО Сервер — настроить автозапуск"; Filename: "{app}\server_autostart\Настроить_автозапуск_сервера.bat"
 [Run]
 Filename: "{app}\PTO.exe"; Description: "Запустить ПТО"; Flags: postinstall nowait
