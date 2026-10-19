@@ -3,6 +3,7 @@ rem Сборка готовой программы для Windows: dist\ПТО\P
 cd /d "%~dp0"
 if not exist .venv\Scripts\python.exe py -3 -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt pyinstaller || goto :fail
+.venv\Scripts\python.exe -c "import sys, PyQt6.QtCore as q; print('Python', sys.version.split()[0], '| PyQt6', q.PYQT_VERSION_STR)" || (echo PyQt6 не установился в .venv. Смотрите сообщения pip выше. Нужен Python 3.11 или 3.12 ^(64-bit^). & goto :fail)
 .venv\Scripts\python.exe -m PyInstaller --noconfirm --clean smetagaz.spec || goto :fail
 del /q "dist\ПТО\selftest.txt" 2>nul
 start /wait "" "dist\ПТО\PTO_Server.exe" --selftest
