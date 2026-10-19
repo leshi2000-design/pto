@@ -100,6 +100,8 @@ def initialize(db):
         gsn_import_migrate(db)
         from .gsn_domain import migrate as gsn_domain_migrate
         gsn_domain_migrate(db)
+        from .volumes_domain import migrate as volumes_migrate
+        volumes_migrate(db)
         from .dossier_client import migrate as dossier_client_migrate
         dossier_client_migrate(db)
         from .ip_domain import migrate as ip_migrate
@@ -206,7 +208,7 @@ CLIENT_LINKS = [
 def client_links(db, cid):
     """{раздел: число записей}, где используется клиент."""
     links = {label: n for table, label, _cols in CLIENT_LINKS if (n := db.fetchone(f'SELECT count(*) FROM {table} WHERE client_id=?', (cid,))[0])}
-    for table, label in (('smr_contracts', 'СМР (юрлица)'), ('ip_contracts', 'СМР (ИП)')):
+    for table, label in (('smr_contracts', 'СМР (юрлица)'), ('ip_contracts', 'СМР (ИП)'), ('fl_contracts', 'СМР (физлица)')):
         if (n := db.fetchone(f'SELECT count(*) FROM {table} WHERE person_id=?', (cid,))[0]):
             links[label] = n
     return links
@@ -228,6 +230,7 @@ def delete_client(db, cid):
             db.execute(f'UPDATE {table} SET client_id=NULL' + (',' + blank if blank else '') + ' WHERE client_id=?', (cid,))
         db.execute('UPDATE smr_contracts SET person_id=NULL WHERE person_id=?', (cid,))
         db.execute('UPDATE ip_contracts SET person_id=NULL WHERE person_id=?', (cid,))
+        db.execute('UPDATE fl_contracts SET person_id=NULL WHERE person_id=?', (cid,))
         db.execute("DELETE FROM notes WHERE link_table='crm.clients' AND link_id=?", (cid,))
         db.execute('DELETE FROM crm.clients WHERE id=?', (cid,))
     try:

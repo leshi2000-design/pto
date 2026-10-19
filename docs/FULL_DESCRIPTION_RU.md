@@ -284,3 +284,4 @@ Python 3.11/3.12: `start_windows.bat` или `pip install -r requirements.txt` �
 | HISTORY_SECURITY_FILTERS_GUIDE_RU.md | история, безопасность, фильтры |
 | PERFORMANCE_BACKUP_GUIDE_RU.md | быстродействие и копии |
 | UPDATE_*_GUIDE_RU.md | описания обновлений по версиям |
+- `UPDATE_4_6_GUIDE_RU.md` — версия 4.6.0: СМР (физлица), Прочие (юр.лица), перенос договоров, НДС в актах, статусы со значками, Word/Excel шаблоны, подземный/надземный газопровод ГСН, нормы списания, вкладка «Объёмы», быстрая тема.

@@ -9,8 +9,8 @@ from .agenda_domain import norm_date
 from . import gsv_project_domain as gd
 
 MONTHS = ['', 'январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь']
-SECTIONS = {'gsv_projects': 'Проекты ГСВ', 'contracts': 'Монтаж ГСВ', 'gsn_projects': 'Монтаж ГСН', 'le_contracts': 'Юрлица', 'smr_contracts': 'СМР (юрлица)', 'to_contracts': 'ТО (юрлица)', 'ip_contracts': 'СМР (ИП)'}
-COUNTERPARTY = {'le_contracts': 'le', 'smr_contracts': 'smr', 'to_contracts': 'to', 'ip_contracts': 'ip'}
+SECTIONS = {'gsv_projects': 'Проекты ГСВ', 'contracts': 'Монтаж ГСВ', 'gsn_projects': 'Монтаж ГСН', 'le_contracts': 'Прочие (юр.лица)', 'smr_contracts': 'СМР (юрлица)', 'to_contracts': 'ТО (юрлица)', 'ip_contracts': 'СМР (ИП)', 'fl_contracts': 'СМР (физлица)'}
+COUNTERPARTY = {'le_contracts': 'le', 'smr_contracts': 'smr', 'to_contracts': 'to', 'ip_contracts': 'ip', 'fl_contracts': 'fl'}
 SQL = {
     'gsv_projects': ("SELECT id,pd_number,contract_number,contract_date,act_date,coalesce(nullif(client_name,''),party_name),object_name,address,cost,coalesce(act_signed,0) "
                      "FROM gsv_projects WHERE coalesce(act_date,'')<>''"),

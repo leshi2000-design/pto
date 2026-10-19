@@ -141,7 +141,7 @@ DOC_KINDS = {
     'act': ('Акт (Word)', 'gsvp_tpl_act', 'Шаблон_акта_проект_ГСВ.docx', 'Акт'),
     'card': ('Карточка клиента (Excel)', 'gsvp_tpl_card', 'Шаблон_карточки_клиента_проект_ГСВ.xlsx', 'Карточка_клиента'),
 }
-SECTION_DIRS = {'gsv_projects': 'Проекты ГСВ', 'contracts': 'Монтаж ГСВ', 'gsn_projects': 'Монтаж ГСН', 'le': 'Юрлица', 'smr': 'СМР'}
+SECTION_DIRS = {'gsv_projects': 'Проекты ГСВ', 'contracts': 'Монтаж ГСВ', 'gsn_projects': 'Монтаж ГСН', 'le': 'Юрлица', 'smr': 'СМР', 'to': 'ТО юрлица', 'ip': 'СМР ИП', 'fl': 'СМР физлица'}
 PROJECTS_DIR = DATA_DIR / 'projects'
 TEMPLATES_DIR = DATA_DIR / 'templates'
 
@@ -528,6 +528,23 @@ def render_docx(template, out_path, tags, normalize=None):
     _save_atomic(lambda p: doc.save(p), out_path)
 
 
+def render_file(template, out_base, tags, normalize=None, payments=None):
+    """Универсальная подстановка: формат результата повторяет формат шаблона (Word .docx или Excel .xlsx). Возвращает путь итогового файла."""
+    ext = os.path.splitext(str(template))[1].lower()
+    if ext not in TEMPLATE_EXTS:
+        raise ValueError('Шаблон должен быть в формате Word (.docx) или Excel (.xlsx). Файл «%s» сохраните в одном из этих форматов.' % os.path.basename(str(template)))
+    out = os.path.splitext(out_base)[0] + ext
+    if ext == '.xlsx':
+        render_xlsx(template, out, tags, payments or [], normalize=normalize)
+    else:
+        render_docx(template, out, tags, normalize=normalize)
+    return out
+
+
+TEMPLATE_EXTS = ('.docx', '.xlsx')
+TEMPLATE_FILTER = 'Шаблоны Word и Excel (*.docx *.xlsx)'
+
+
 def render_xlsx(template, out_path, tags, payments, normalize=None):
     """Подставляет теги; для каждой оплаты повторяет блок столбцов с ДАТА_ОПЛАТЫ / СУММА_ОПЛАТЫ / ПРИМЕЧАНИЕ_ОПЛАТЫ вправо."""
     import copy
@@ -707,10 +724,7 @@ def generate(db, pid, kind):
     ext = '.xlsx' if kind == 'card' else '.docx'
     number = tags['НОМЕР_ПД'] if kind == 'card' else tags['НОМЕР_ДОГОВОРА']
     out = os.path.join(folder, safe_name(f'{prefix}_{number}').replace(' ', '_') + ext)
-    if kind == 'card':
-        render_xlsx(template, out, tags, payments_list(db, pid))
-    else:
-        render_docx(template, out, tags)
+    out = render_file(template, out, tags, payments=payments_list(db, pid))
     db.execute('INSERT OR REPLACE INTO gsv_project_docs(project_id,kind,file_path,data_hash,generated_at) VALUES(?,?,?,?,?)',
                (pid, kind, out, data_hash(db, pid), datetime.now().isoformat(timespec='seconds')))
     return out

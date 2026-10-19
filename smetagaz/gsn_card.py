@@ -185,6 +185,9 @@ class GsnContractDialog(QDialog):
         self.tabs.addTab(self.pipeline_tab, 'Трубопроводы и оборудование')
         self.id_tab = GsnIdTab(self)
         self.tabs.addTab(self.id_tab, 'Исполнительная документация')
+        from .volumes_ui import VolumesTab
+        self.volumes_tab = VolumesTab('gsn_projects', self, lambda: self.refresh_estimate_ui())
+        self.tabs.addTab(self.volumes_tab, 'Объёмы')
         self.templates_tab = TemplatesTab(self)
         self.tabs.addTab(self.templates_tab, 'Шаблоны и теги')
         self.tabs.currentChanged.connect(self.on_tab)
@@ -432,7 +435,7 @@ class GsnContractDialog(QDialog):
 
         def load():
             q = '%' + search.text().casefold() + '%'
-            taken = ' AND '.join(f'id NOT IN (SELECT estimate_id FROM {t} WHERE estimate_id IS NOT NULL)' for t in ('contracts', 'gsv_projects', 'smr_contracts', 'gsn_projects'))
+            taken = ' AND '.join(f'id NOT IN (SELECT estimate_id FROM {t} WHERE estimate_id IS NOT NULL)' for t in ('contracts', 'gsv_projects', 'smr_contracts', 'to_contracts', 'ip_contracts', 'fl_contracts', 'gsn_projects'))
             rows = db.fetchall(f"SELECT id,title,client_name,total FROM estimates WHERE {taken} AND LOWER(coalesce(title,'')||' '||coalesce(client_name,'')) LIKE ? ORDER BY id DESC LIMIT 300", (q,))
             table.setRowCount(len(rows))
             for r, row in enumerate(rows):

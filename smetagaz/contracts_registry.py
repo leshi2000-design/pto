@@ -5,7 +5,8 @@
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QHeaderView,
                               QTableWidget, QTableWidgetItem, QAbstractItemView, QLineEdit, QMenu, QMessageBox)
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QAction
+from PyQt6.QtGui import QAction, QColor
+from . import status_icons
 
 from .database import db
 from .pagination import RegistryPager
@@ -44,8 +45,8 @@ class ContractsRegistryView(QWidget):
         layout.addLayout(search_bar)
 
         self.table = QTableWidget()
-        self.table.setColumnCount(7)
-        self.table.setHorizontalHeaderLabels(["№ договора", "Дата заключения", "Объект / Адрес", "Клиент", "Стоимость, BYN", "Статусы", "Примечание"])
+        self.table.setColumnCount(8)
+        self.table.setHorizontalHeaderLabels(["№ договора", "Дата заключения", "Объект / Адрес", "Клиент", "Стоимость, BYN", "Состояние", "Статусы", "Примечание"])
         self.table.verticalHeader().setVisible(False)          # порядковые номера строк не нужны: договор определяет его № договора
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -95,7 +96,7 @@ class ContractsRegistryView(QWidget):
 
         query = """
             SELECT c.id, c.contract_number, c.contract_date, c.object_name, c.object_address, coalesce(nullif(c.client_name,''),c.party_name,''),
-                   c.contract_amount, coalesce(c.statuses_text,''), coalesce(c.notes,'')
+                   c.contract_amount, coalesce(c.statuses_text,''), coalesce(c.notes,''), coalesce(c.act_signed,0)
             FROM contracts c
             LEFT JOIN estimates e ON c.estimate_id = e.id
         """
@@ -110,7 +111,7 @@ class ContractsRegistryView(QWidget):
         rows = self.pager.fetch(query, tuple(params))
         self.table.setRowCount(len(rows))
 
-        for r_idx, (c_id, num, c_date, obj_name, address, client, amt, statuses, notes) in enumerate(rows):
+        for r_idx, (c_id, num, c_date, obj_name, address, client, amt, statuses, notes, act_signed) in enumerate(rows):
             i_num = QTableWidgetItem(num or "Б/Н")
             i_num.setData(Qt.ItemDataRole.UserRole, c_id)
             self.table.setItem(r_idx, 0, i_num)
@@ -124,17 +125,23 @@ class ContractsRegistryView(QWidget):
             i_amt = QTableWidgetItem(f"{val:,.2f}".replace(",", " "))
             i_amt.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             self.table.setItem(r_idx, 4, i_amt)
-            self.table.setItem(r_idx, 5, QTableWidgetItem(statuses))
+            i_state = QTableWidgetItem(status_icons.title('done') if act_signed else '')
+            if act_signed:                                       # договор завершён: акт подписан
+                i_state.setIcon(status_icons.icon('done'))
+                i_state.setForeground(QColor(status_icons.color('done')))
+                i_state.setToolTip('Акт подписан — работа сдана')
+            self.table.setItem(r_idx, 5, i_state)
+            self.table.setItem(r_idx, 6, QTableWidgetItem(statuses))
             note = " ".join(str(notes).split())
             i_note = QTableWidgetItem(note[:120] + ("…" if len(note) > 120 else ""))
             i_note.setToolTip(str(notes))
-            self.table.setItem(r_idx, 6, i_note)
+            self.table.setItem(r_idx, 7, i_note)
 
         self.table.setUpdatesEnabled(True)
         self.table_manager.adjust_main_column()
         self.fit_columns()
 
-    CAPS = {0: 130, 1: 170, 2: 340, 3: 190, 4: 150, 5: 240}
+    CAPS = {0: 130, 1: 170, 2: 340, 3: 190, 4: 150, 5: 130, 6: 240}
 
     def fit_columns(self):
         """Колонки по содержимому, но с пределом ширины, чтобы вся таблица помещалась в окно; последняя («Примечание») занимает остаток."""

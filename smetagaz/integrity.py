@@ -24,6 +24,7 @@ FOLDER_CHECKS = [
     ('smr_contracts', 'id', "coalesce(contract_number,'')||' '||coalesce(object_name,'')", 'folder', 'СМР (юрлица)'),
     ('to_contracts', 'id', "coalesce(contract_number,'')||' '||coalesce(object_name,'')", 'folder', 'ТО (юрлица)'),
     ('ip_contracts', 'id', "coalesce(contract_number,'')||' '||coalesce(object_name,'')", 'folder', 'СМР (ИП)'),
+    ('fl_contracts', 'id', "coalesce(contract_number,'')||' '||coalesce(object_name,'')", 'folder', 'СМР (физлица)'),
 ]
 TEMPLATE_SETTINGS = ['gsvp_tpl_contract', 'gsvp_tpl_act', 'gsvp_tpl_card', 'custom_template_path', 'export_excel_template', 'export_word_template']
 LIMIT = 300
@@ -70,7 +71,7 @@ def check(db):
                 found.append(_finding('error', 'Оплаты', f'Оплата {amount} от {day}: смета №{eid} не существует'))
             elif not eid and not owner:
                 found.append(_finding('error', 'Оплаты', f'Оплата {amount} от {day} не привязана ни к одному договору или смете'))
-            elif not eid and owner in ('contracts', 'gsv_projects', 'gsn_projects', 'estimates', 'le_contracts', 'smr_contracts', 'to_contracts', 'ip_contracts') and not db.fetchone(f'SELECT 1 FROM {owner} WHERE id=?', (oid,)):
+            elif not eid and owner in ('contracts', 'gsv_projects', 'gsn_projects', 'estimates', 'le_contracts', 'smr_contracts', 'to_contracts', 'ip_contracts', 'fl_contracts') and not db.fetchone(f'SELECT 1 FROM {owner} WHERE id=?', (oid,)):
                 found.append(_finding('error', 'Оплаты', f'Оплата {amount} от {day}: договор ({owner} №{oid}) не существует'))
             if (amount or 0) <= 0:
                 found.append(_finding('warn', 'Оплаты', f'Оплата от {day} с нулевой или отрицательной суммой'))
@@ -86,7 +87,7 @@ def check(db):
     for num, n in db.fetchall("SELECT contract_number,count(*) FROM contracts WHERE coalesce(contract_number,'')<>'' GROUP BY contract_number HAVING count(*)>1"):
         found.append(_finding('warn', 'Договоры', f'Монтаж ГСВ: номер договора «{num}» повторяется {n} раза'))
     # --- юрлица и СМР ---
-    for mod, label in (('le', 'Юрлица'), ('smr', 'СМР (юрлица)'), ('to', 'ТО (юрлица)'), ('ip', 'СМР (ИП)')):
+    for mod, label in (('le', 'Прочие (юр.лица)'), ('smr', 'СМР (юрлица)'), ('to', 'ТО (юрлица)'), ('ip', 'СМР (ИП)'), ('fl', 'СМР (физлица)')):
         ct, ac = f'{mod}_contracts', f'{mod}_acts'
         if not _table_exists(db, ct):
             continue
@@ -97,7 +98,7 @@ def check(db):
             found.append(_finding('warn', 'Договоры', f'{label}: акт «{num}» отмечен подписанным, но дата акта не указана', (ac, rid)))
         for num, n in db.fetchall(f"SELECT contract_number,count(*) FROM {ct} WHERE coalesce(contract_number,'')<>'' GROUP BY contract_number HAVING count(*)>1"):
             found.append(_finding('warn', 'Договоры', f'{label}: номер договора «{num}» повторяется {n} раза'))
-    for table, label in (('smr_contracts', 'СМР (юрлица)'), ('to_contracts', 'ТО (юрлица)'), ('ip_contracts', 'СМР (ИП)')):
+    for table, label in (('smr_contracts', 'СМР (юрлица)'), ('to_contracts', 'ТО (юрлица)'), ('ip_contracts', 'СМР (ИП)'), ('fl_contracts', 'СМР (физлица)')):
         for rid, num in db.fetchall(f"SELECT id,contract_number FROM {table} WHERE (party_type='person' AND (person_id IS NULL OR person_id NOT IN (SELECT id FROM crm.clients))) OR (party_type='legal' AND (legal_id IS NULL OR legal_id NOT IN (SELECT id FROM le_clients)))"):
             found.append(_finding('error', 'Клиенты', f'{label}: у договора «{num}» нет контрагента или он удалён', (table, rid)))
     # --- файлы и папки ---
@@ -119,7 +120,7 @@ def check(db):
             found.append(_finding('warn', 'Шаблоны', f'Шаблон ({key}) не найден: {path}'))
     # --- копия вне компьютера ---
     from . import offsite_backup as ob
-    has_data = any(db.fetchone(f'SELECT 1 FROM {t} LIMIT 1') for t in ('estimates', 'contracts', 'gsv_projects', 'le_contracts', 'smr_contracts', 'to_contracts', 'ip_contracts') if _table_exists(db, t))
+    has_data = any(db.fetchone(f'SELECT 1 FROM {t} LIMIT 1') for t in ('estimates', 'contracts', 'gsv_projects', 'le_contracts', 'smr_contracts', 'to_contracts', 'ip_contracts', 'fl_contracts') if _table_exists(db, t))
     if not ob.configured(db):
         if has_data:
             found.append(_finding('info', 'Копии', 'Копия вне компьютера не настроена (Настройки → «Копия вне компьютера»): локальные копии не спасут при поломке диска'))

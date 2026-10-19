@@ -115,7 +115,7 @@ class TemplateSettingsPanel(QWidget):
         QTimer.singleShot(1500, lambda: btn.setText("Копировать"))
 
     def browse(self, kind):
-        flt = "Excel (*.xlsx)" if kind == "card" else "Word (*.docx)"
+        flt = "Шаблоны Word и Excel (*.docx *.xlsx)"
         path, _ = QFileDialog.getOpenFileName(self, "Выберите шаблон", "", flt)
         if path:
             self.set_template(kind, path)

@@ -78,25 +78,31 @@ class NormDialog(QDialog):
         super().__init__(parent);self.pid=pid;self.setWindowTitle('Норма расхода на единицу работ');self.resize(900,630);l=QVBoxLayout(self);f=QFormLayout();l.addLayout(f);self.inputs={}
         for key,label in [('name','Название *'),('diameter','Диаметр Ду, мм'),('thickness','Толщина стенки, мм'),('notes','Источник нормы / технология')]:self.inputs[key]=QLineEdit();f.addRow(label,self.inputs[key])
         self.basis=QComboBox();self.basis.addItems(domain.BASES);f.addRow('Норма на один',self.basis)
-        l.addWidget(QLabel('Пусто = норма не задана, расчёт блокируется. 0 = материал не расходуется.\nДля краски можно создать отдельную норму на м², для кругов — на стык, рез (шт) или объект.'))
-        self.table=table(['Материал','Единица','Расход на единицу работ'],True);self.table.setColumnWidth(0,350);l.addWidget(self.table,1)
+        l.addWidget(QLabel('Пусто = норма не задана, расчёт блокируется. 0 = материал не расходуется.\n«Как списывается»: на стык — ацетилен, кислород, проволока; на объект — норма на весь объект строительства (круги — штучно); на футляр — краска и асбестовый шнур.'))
+        self.table=table(['Материал','Единица','Норма','Как списывается'],True);self.table.setColumnWidth(0,350);l.addWidget(self.table,1)
         bar=QHBoxLayout();button(bar,'Добавить материал',self.add_row);button(bar,'Удалить строку',lambda:self.table.removeRow(self.table.currentRow()));l.addLayout(bar)
         if pid:
             d=record('norm_profiles',pid)
             for k,w in self.inputs.items():w.setText(d[k] or '')
             self.basis.setCurrentText(d['basis'])
-            for mid,rate in db.fetchall('SELECT material_id,rate FROM norm_items WHERE profile_id=? ORDER BY id',(pid,)):self.add_row(mid,rate)
+            for mid,rate,per in db.fetchall('SELECT material_id,rate,per FROM norm_items WHERE profile_id=? ORDER BY id',(pid,)):self.add_row(mid,rate,per)
         b=QDialogButtonBox(QDialogButtonBox.StandardButton.Save|QDialogButtonBox.StandardButton.Cancel);b.accepted.connect(self.save);b.rejected.connect(self.reject);l.addWidget(b)
-    def add_row(self,mid=None,rate=None):
+    def add_row(self,mid=None,rate=None,per=None):
         if isinstance(mid,bool):mid=None
         r=self.table.rowCount();self.table.insertRow(r);combo=Choice('stock_materials',mid);self.table.setCellWidget(r,0,combo);item(self.table,r,1,domain.material(db,mid)[2] if mid else '',False);item(self.table,r,2,rate)
+        per_box=QComboBox()
+        for key,label in domain.PER_LABELS.items():per_box.addItem(label,key)
+        if per is None:per=domain.default_per(domain.material(db,mid)[0]) if mid else ''
+        per_box.setCurrentIndex(max(0,per_box.findData(per)));self.table.setCellWidget(r,3,per_box)
         def changed():
             for row in range(self.table.rowCount()):
-                if self.table.cellWidget(row,0) is combo:item(self.table,row,1,domain.material(db,combo.currentData())[2] if combo.currentData() else '',False)
+                if self.table.cellWidget(row,0) is combo:
+                    item(self.table,row,1,domain.material(db,combo.currentData())[2] if combo.currentData() else '',False)
+                    if combo.currentData() and not rate:per_box.setCurrentIndex(max(0,per_box.findData(domain.default_per(domain.material(db,combo.currentData())[0]))))
         combo.currentIndexChanged.connect(changed)
     def save(self):
         try:
-            data={k:w.text().strip() for k,w in self.inputs.items()};data['basis']=self.basis.currentText();items=[(self.table.cellWidget(r,0).currentData(),text(self.table,r,2)) for r in range(self.table.rowCount())]
+            data={k:w.text().strip() for k,w in self.inputs.items()};data['basis']=self.basis.currentText();items=[(self.table.cellWidget(r,0).currentData(),text(self.table,r,2),self.table.cellWidget(r,3).currentData()) for r in range(self.table.rowCount())]
             self.pid=domain.save_profile(db,data,items,self.pid);self.accept()
         except Exception as e:error(self,e)
 
@@ -349,7 +355,7 @@ class Registry(QWidget):
             with db.transaction():
                 old=db.fetchone('SELECT name,diameter,thickness,basis,notes FROM norm_profiles WHERE id=?',(pid,))
                 new=db.execute('INSERT INTO norm_profiles(name,diameter,thickness,basis,notes) VALUES(?,?,?,?,?)',(old[0]+' (копия)',*old[1:])).lastrowid
-                db.execute('INSERT INTO norm_items(profile_id,material_id,rate) SELECT ?,material_id,rate FROM norm_items WHERE profile_id=?',(new,pid))
+                db.execute('INSERT INTO norm_items(profile_id,material_id,rate,per) SELECT ?,material_id,rate,per FROM norm_items WHERE profile_id=?',(new,pid))
             self.load_data()
             NormDialog(new,self).exec();self.load_data()
         except Exception as e:error(self,e)

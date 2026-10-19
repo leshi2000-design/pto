@@ -225,7 +225,7 @@ def open_record(table,rid,parent=None):
     elif table=='gsv_projects':
         from .gsv_view import ProjectEditDialog
         ProjectEditDialog(rid,parent=parent).exec()
-    elif table in ('le_contracts','smr_contracts','to_contracts','ip_contracts'):
+    elif table in ('le_contracts','smr_contracts','to_contracts','ip_contracts','fl_contracts'):
         from .counterparty_ui import ContractDialog
         from .contracts_core import CONTRACT_TABLES
         ContractDialog(CONTRACT_TABLES[table],rid,parent).exec()

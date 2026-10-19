@@ -135,7 +135,7 @@ class SettingsView(QWidget):
         fl.addWidget(QLabel("Если путь не задан, программа спрашивает место при создании папки, а предлагает стандартную папку внутри данных программы."), 0, 0, 1, 3)
         self.folder_edits = {}
         from .gsv_project_domain import SECTION_DIRS
-        for row, key in enumerate(('gsv_projects', 'contracts', 'gsn_projects', 'le', 'smr'), 1):
+        for row, key in enumerate(('gsv_projects', 'contracts', 'gsn_projects', 'smr', 'to', 'ip', 'fl', 'le'), 1):
             fl.addWidget(QLabel(SECTION_DIRS[key] + ":"), row, 0)
             edit = QLineEdit(db.get_setting(f'folder_root_{key}', ''))
             edit.setPlaceholderText("Например: D:\\Договоры\\" + SECTION_DIRS[key])

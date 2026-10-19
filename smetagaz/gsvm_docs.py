@@ -386,10 +386,7 @@ def generate(db, cid, kind):
     number = tags.get('НОМЕР_ДОГОВОРА') or str(cid)
     out = os.path.join(folder, gd.safe_name(f'{prefix}_{number.replace("/", "-")}').replace(' ', '_') + '.' + ext)
     template = template_path(db, kind)
-    if ext == 'xlsx':
-        gd.render_xlsx(template, out, tags, payments(db, cid), normalize=norm_tag)
-    else:
-        gd.render_docx(template, out, tags, normalize=norm_tag)
+    out = gd.render_file(template, out, tags, normalize=norm_tag, payments=payments(db, cid))
     db.execute('INSERT OR REPLACE INTO gsvm_docs(contract_id,kind,file_path,data_hash,generated_at,linked) VALUES(?,?,?,?,?,0)',
                (cid, kind, out, data_hash(db, cid), datetime.now().isoformat(timespec='seconds')))
     return out

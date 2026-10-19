@@ -216,6 +216,9 @@ class ContractCardDialog(QDialog):
         self.tabs.addTab(self.pipes_tab, 'Трубопроводы и стыки')
         self.id_tab = IdTab(self)
         self.tabs.addTab(self.id_tab, 'Исполнительная документация')
+        from .volumes_ui import VolumesTab
+        self.volumes_tab = VolumesTab('contracts', self, lambda: self.refresh_estimate_ui())
+        self.tabs.addTab(self.volumes_tab, 'Объёмы')
         self.templates_tab = TemplatesTab(self)
         self.tabs.addTab(self.templates_tab, 'Шаблоны и теги')
         self.tabs.currentChanged.connect(self.on_tab)

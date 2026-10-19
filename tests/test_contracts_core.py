@@ -95,7 +95,7 @@ def test_integration_with_other_subsystems(db, tmp_path):
     assert events and 'Ромашка' in titles and 'Петров' in titles
     # оплаты
     rows = payments_domain.report(db, '2026-03-01', '2026-03-31')
-    assert {r['section'] for r in rows} == {'Юрлица', 'СМР (ИП)'} and {r['client_name'] for r in rows} == {'ООО Ромашка', 'Петров Пётр'}
+    assert {r['section'] for r in rows} == {'Прочие (юр.лица)', 'СМР (ИП)'} and {r['client_name'] for r in rows} == {'ООО Ромашка', 'Петров Пётр'}
     # проверка базы: акты больше суммы договора
     assert any('больше суммы договора' in f['text'] for f in integrity.check(db))
     # экспорт и поиск

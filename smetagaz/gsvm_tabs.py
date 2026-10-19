@@ -214,9 +214,15 @@ class PipesTab(QWidget):
         self.total = QLabel('')
         self.total.setStyleSheet('font-weight: 700;')
         bar.addWidget(self.total, 1)
+        bar.addWidget(QLabel('Футляров на объекте:'))
+        self.cases = QSpinBox()
+        self.cases.setRange(0, 10000)
+        self.cases.setToolTip('Краска и асбестовый шнур списываются по числу футляров, а не по стыкам')
+        self.cases.valueChanged.connect(self.update_total)
+        bar.addWidget(self.cases)
         layout.addLayout(bar)
         bar = QHBoxLayout()
-        layout.addWidget(QLabel('<b>Расход материалов на объект</b> — считается автоматически: количество стыков × норма из «Списание → Справочник норм».'))
+        layout.addWidget(QLabel('<b>Расход материалов на объект</b> — считается автоматически: по стыкам — только ацетилен, кислород и проволока; краска и асбестовый шнур — по числу футляров; остальное (в том числе круги) — нормой на объект. Нормы — в «Списание → Справочник норм».'))
         self.plan = make_table(['Материал', 'Ед.', 'Расход на объект'], (420, 80))
         self.plan.setMaximumHeight(190)
         layout.addWidget(self.plan, 1)
@@ -385,7 +391,7 @@ class PipesTab(QWidget):
 
     def refresh_plan(self):
         """Пересчёт расхода материалов по текущим данным таблицы (без сохранения)."""
-        plan = md.plan_consumption(db, self.joint_rows())
+        plan = md.plan_consumption(db, self.joint_rows(), self.cases.value())
         self.last_plan = plan
         self.plan.setRowCount(len(plan['materials']))
         for i, m in enumerate(plan['materials']):
@@ -398,7 +404,7 @@ class PipesTab(QWidget):
         self.plan_warn.setText('\n'.join('⚠ ' + w for w in plan['warnings'][:8]) + (f'\n… и ещё {len(plan["warnings"]) - 8}' if len(plan['warnings']) > 8 else ''))
 
     def export_plan(self):
-        plan = getattr(self, 'last_plan', None) or md.plan_consumption(db, self.joint_rows())
+        plan = getattr(self, 'last_plan', None) or md.plan_consumption(db, self.joint_rows(), self.cases.value())
         if not plan['materials'] and not plan['lines']:
             QMessageBox.information(self, 'Расход', 'Введите количество стыков — тогда появится расход материалов.')
             return
@@ -434,6 +440,7 @@ class PipesTab(QWidget):
         if cid:
             for p in md.pipelines(db, cid):
                 self.add_pipe(p['pipeline_id'], p['quantity'], p['note'], p['from_estimate'])
+            self.cases.setValue(int(db.fetchone('SELECT coalesce(cases_count,0) FROM contracts WHERE id=?', (cid,))[0] or 0))
             for j in md.joints(db, cid):
                 self.add_joint_row(j['name'], j['count'], j['note'], j['id'], j['pipeline_id'], j['custom'], j['profile_id'])
         self._loading = False
@@ -450,6 +457,7 @@ class PipesTab(QWidget):
                 r['id'] = existing.get(r['pipeline_id'])
             rows.append(r)
         md.save_joints(db, cid, [r for r in rows if r['id'] or r['custom']])
+        db.execute('UPDATE contracts SET cases_count=? WHERE id=?', (self.cases.value(), cid))
         self.load(cid)
 
 
@@ -1126,8 +1134,7 @@ class TemplatesTab(QWidget):
         kind = self.current_kind()
         if not kind:
             return
-        ext = '*.xlsx' if dd.DOC_KINDS[kind][1] == 'xlsx' else '*.docx'
-        path, _ = QFileDialog.getOpenFileName(self, 'Шаблон документа', '', f'Шаблоны ({ext})')
+        path, _ = QFileDialog.getOpenFileName(self, 'Шаблон документа', '', 'Шаблоны Word и Excel (*.docx *.xlsx)')
         if path:
             db.set_setting(dd.template_setting(kind), path)
             self.tpl.item(self.tpl.currentRow(), 1).setText(path)

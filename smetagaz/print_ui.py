@@ -142,7 +142,7 @@ def gsn_card(db, cid):
         ('Клиент', [('ФИО', c['client_name']), ('Телефон', c['phone']), ('Адрес', c.get('client_address')), ('Паспорт', c['passport']), ('Выдан', c.get('passport_issuer')), ('Дата выдачи', c.get('passport_issue_date'))]),
         ('Проект', [('Шифр', c.get('designer_code')), ('Проектировщик', c.get('designer')), ('Дата проекта', c.get('project_month')), ('ТУ', c.get('tu_text'))]),
         ('Сроки и стоимость', [('Начало работ', c.get('work_start_date')), ('Окончание работ', c.get('work_end_date')), ('Дата акта', c.get('act_date')), ('Акт подписан', _yes(c.get('act_signed'))), ('Стоимость', _money(c.get('contract_amount'))), ('Оплачено', _money(paid))]),
-        ('Трубопроводы', [('ПЭ 32, м', c.get('pe_length')), ('Сталь 25, м', c.get('steel_length')), ('Давление', gn.PRESSURE_TEXT.get(c.get('pressure_type'), '')), ('Врезка', gn.TIE_TEXT.get(c.get('tie_in'), '')), ('Муфт, шт', c.get('couplings'))]),
+        ('Трубопроводы', [('ПЭ 32, м', c.get('pe_length')), ('Сталь 25 подземная, м', c.get('steel_under_length') or (0 if c.get('steel_above_length') else c.get('steel_length'))), ('Сталь 25 надземная, м', c.get('steel_above_length')), ('Давление', gn.PRESSURE_TEXT.get(c.get('pressure_type'), '')), ('Врезка', gn.TIE_TEXT.get(c.get('tie_in'), '')), ('Муфт, шт', c.get('couplings'))]),
         ('Примечания', [('Примечания', c.get('notes'))]),
     ]
     mats = [(m['name'], f'{m["quantity"]:g}', m['unit']) for m in gn.materials(db, cid)]

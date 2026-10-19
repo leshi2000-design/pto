@@ -15,7 +15,7 @@ def db(tmp_path):
 
 
 def test_defaults_and_validation(db):
-    assert {k: sc.code(db, k) for k in sc.KINDS} == {'contracts': '02', 'gsv_projects': '03', 'le': '04', 'smr': '05', 'to': '06', 'ip': '07'}
+    assert {k: sc.code(db, k) for k in sc.KINDS} == {'contracts': '02', 'gsv_projects': '03', 'le': '04', 'smr': '05', 'to': '06', 'ip': '07', 'fl': '08'}
     for bad in ('', 'a b', '1-2', '1/2', '12345'):
         with pytest.raises(ValueError):
             sc.set_code(db, 'smr', bad)
@@ -46,7 +46,7 @@ def test_new_numbers_use_new_code_and_old_numbers_still_recognised(db):
 
 
 def test_each_contract_kind_has_its_own_section(db):
-    sc.save_all(db, {'contracts': '21', 'gsv_projects': '22', 'smr': '23', 'to': '24', 'ip': '25', 'le': '26'})
+    sc.save_all(db, {'contracts': '21', 'gsv_projects': '22', 'smr': '23', 'to': '24', 'ip': '25', 'le': '26', 'fl': '27'})
     day = '2026-05-05'
     assert cc.next_number(db, 'smr', day)[2] == '01-23/26'
     assert cc.next_number(db, 'to', day)[2] == '01-24/26'
@@ -78,7 +78,7 @@ def test_settings_box(db, monkeypatch):
         if name.startswith('smetagaz') and isinstance(getattr(mod, 'db', None), DatabaseManager) and mod.db is not db:
             monkeypatch.setattr(mod, 'db', db)
     box = ui.SectionCodesBox()
-    assert box.table.rowCount() == 6 and box.table.item(0, 1).text() == '02'
+    assert box.table.rowCount() == 7 and box.table.item(0, 1).text() == '02'
     box.table.item(0, 1).setText('11')
     assert '-11/' in box.table.item(0, 2).text()
     monkeypatch.setattr(ui.QMessageBox, 'question', staticmethod(lambda *a, **k: ui.QMessageBox.StandardButton.Yes))

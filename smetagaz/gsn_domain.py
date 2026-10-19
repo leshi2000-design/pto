@@ -22,7 +22,7 @@ CARD_COLUMNS = (('designer_code', "TEXT DEFAULT ''"), ('designer', "TEXT DEFAULT
                 ('contract_signed', 'INTEGER DEFAULT 0'), ('work_start_date', "TEXT DEFAULT ''"), ('work_end_date', "TEXT DEFAULT ''"),
                 ('client_address', "TEXT DEFAULT ''"), ('passport_issuer', "TEXT DEFAULT ''"), ('passport_issue_date', "TEXT DEFAULT ''"),
                 ('est_materials', 'REAL DEFAULT 0'), ('est_works', 'REAL DEFAULT 0'), ('est_rev_synced', 'INTEGER DEFAULT 0'), ('est_synced_at', "TEXT DEFAULT ''"),
-                ('contract_folder', "TEXT DEFAULT ''"), ('pe_length', 'REAL DEFAULT 0'), ('steel_length', 'REAL DEFAULT 0'), ('pressure_type', "TEXT DEFAULT ''"),
+                ('contract_folder', "TEXT DEFAULT ''"), ('pe_length', 'REAL DEFAULT 0'), ('steel_length', 'REAL DEFAULT 0'), ('steel_under_length', 'REAL DEFAULT 0'), ('steel_above_length', 'REAL DEFAULT 0'), ('pressure_type', "TEXT DEFAULT ''"),
                 ('tie_in', "TEXT DEFAULT ''"), ('couplings', 'INTEGER DEFAULT 0'))
 
 
@@ -44,6 +44,8 @@ def migrate(db):
              mode TEXT NOT NULL CHECK(mode IN ('always','steel','pe')))""",
     ):
         db.execute(sql)
+    # прежняя протяжённость стали считалась подземной
+    db.execute('UPDATE gsn_projects SET steel_under_length=steel_length WHERE coalesce(steel_under_length,0)=0 AND coalesce(steel_above_length,0)=0 AND coalesce(steel_length,0)>0')
     # для уже существующих договоров стартовые значения сроков и «подписан»
     db.execute("UPDATE gsn_projects SET work_start_date=contract_date WHERE coalesce(work_start_date,'')='' AND coalesce(contract_date,'')<>''")
 
@@ -103,7 +105,7 @@ def validate(v):
     start, end = str(v.get('work_start_date') or ''), str(v.get('work_end_date') or '')
     if start and end and end < start:
         raise ValueError('Окончание работ раньше начала работ')
-    for key, label in (('pe_length', 'ПЭ'), ('steel_length', 'стального')):
+    for key, label in (('pe_length', 'ПЭ'), ('steel_length', 'стального'), ('steel_under_length', 'подземного стального'), ('steel_above_length', 'надземного стального')):
         if float(v.get(key) or 0) < 0:
             raise ValueError(f'Протяжённость {label} трубопровода не может быть отрицательной')
     if int(v.get('couplings') or 0) < 0:
@@ -115,7 +117,7 @@ def validate(v):
 
 
 FIELDS = ('contract_number', 'contract_date', 'title', 'address', 'notes', 'designer_code', 'designer', 'project_month', 'tu_text', 'contract_signed', 'work_start_date',
-          'work_end_date', 'act_date', 'act_signed', 'contract_amount', 'pe_length', 'steel_length', 'pressure_type', 'tie_in', 'couplings')
+          'work_end_date', 'act_date', 'act_signed', 'contract_amount', 'pe_length', 'steel_length', 'steel_under_length', 'steel_above_length', 'pressure_type', 'tie_in', 'couplings')
 
 
 def save_card(db, values, client, client_id=None, cid=None, items=None):
@@ -134,9 +136,11 @@ def save_card(db, values, client, client_id=None, cid=None, items=None):
         for key in ('contract_signed', 'act_signed', 'couplings'):
             if key in row:
                 row[key] = int(row[key] or 0)
-        for key in ('contract_amount', 'pe_length', 'steel_length'):
+        for key in ('contract_amount', 'pe_length', 'steel_length', 'steel_under_length', 'steel_above_length'):
             if key in row:
                 row[key] = float(row[key] or 0)
+        if 'steel_under_length' in row or 'steel_above_length' in row:
+            row['steel_length'] = float(row.get('steel_under_length') or 0) + float(row.get('steel_above_length') or 0)
         if cid:
             db.execute('UPDATE gsn_projects SET ' + ','.join(f'{k}=?' for k in row) + ' WHERE id=?', (*row.values(), cid))
         else:

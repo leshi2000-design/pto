@@ -25,7 +25,7 @@ def test_notes_free_and_linked_in_calendar(db):
     assert nd.get_note(db, client_note)['title'] == 'Звонить после 18:00'
     assert [n['id'] for n in nd.list_notes(db, 'free')] == [free]
     assert {n['id'] for n in nd.list_notes(db, 'linked')} == {linked, client_note}
-    assert nd.list_notes(db, link=('le_contracts', cid))[0]['link'].startswith('Юрлица · 01-04/26')
+    assert nd.list_notes(db, link=('le_contracts', cid))[0]['link'].startswith('Прочие (юр.лица) · 01-04/26')
     assert nd.count_for(db, 'le_contracts', cid) == 1
     events = [e for e in agenda.events_between(db, date(2026, 10, 12), date(2026, 10, 14)) if e['kind'] == 'note']
     assert {e['title'] for e in events} == {'Купить материалы', 'Договорились о скидке', 'Звонить после 18:00'}

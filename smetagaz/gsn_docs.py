@@ -48,7 +48,7 @@ STATIC_SOURCES = [
     ('work.cost', 'Стоимость работ'), ('estimate.materials', 'Смета: стоимость материалов'), ('estimate.works', 'Смета: стоимость работ'),
     ('payments.dates', 'Оплаты: даты (по строкам)'), ('payments.amounts', 'Оплаты: суммы (по строкам)'), ('payments.notes', 'Оплаты: примечания (по строкам)'),
     ('payments.paid', 'Оплачено всего'), ('payments.rest', 'Остаток к оплате'), ('payments.last_date', 'Дата последней оплаты'),
-    ('gas.pe_length', 'Протяжённость ПЭ трубопровода, м'), ('gas.steel_length', 'Протяжённость стального трубопровода, м'), ('gas.total_length', 'Общая протяжённость, м'),
+    ('gas.pe_length', 'Протяжённость ПЭ трубопровода, м'), ('gas.steel_length', 'Протяжённость стального трубопровода, м (всего)'), ('gas.steel_under', 'Стальной газопровод подземный, м'), ('gas.steel_above', 'Стальной газопровод надземный, м'), ('gas.total_length', 'Общая протяжённость, м'),
     ('gas.pressure', 'Тип газопровода (низкое / среднее давление)'), ('gas.pressure_text', 'Газопровод низкого / среднего давления (в родительном падеже)'),
     ('gas.tie_in', 'Тип врезки (в сталь / в ПЭ)'), ('gas.tie_in_text', 'Врезка: «в стальной газопровод» / «в полиэтиленовый газопровод»'),
     ('gas.couplings', 'Количество муфт'), ('gas.pipes_text', 'Трубопроводы: ПЭ и сталь с протяжённостью'),
@@ -72,7 +72,7 @@ BUILTIN_TAGS = [
     ('ОПЛАЧЕНО', 'payments.paid', 'money'), ('ОПЛАЧЕНО_ПРОПИСЬЮ', 'payments.paid', 'money_words'), ('ОСТАТОК', 'payments.rest', 'money'),
     ('ДАТА_ОПЛАТЫ', 'payments.dates', 'text'), ('СУММА_ОПЛАТЫ', 'payments.amounts', 'text'), ('ПРИМЕЧАНИЕ_ОПЛАТЫ', 'payments.notes', 'text'),
     ('ДАТА_ПОСЛЕДНЕЙ_ОПЛАТЫ', 'payments.last_date', 'date_short'),
-    ('ДЛИНА_ПЭ', 'gas.pe_length', 'number2'), ('ДЛИНА_СТАЛЬ', 'gas.steel_length', 'number2'), ('ДЛИНА_ВСЕГО', 'gas.total_length', 'number2'),
+    ('ДЛИНА_ПЭ', 'gas.pe_length', 'number2'), ('ДЛИНА_СТАЛЬ', 'gas.steel_length', 'number2'), ('ДЛИНА_СТАЛЬ_ПОДЗЕМНАЯ', 'gas.steel_under', 'number2'), ('ДЛИНА_СТАЛЬ_НАДЗЕМНАЯ', 'gas.steel_above', 'number2'), ('ДЛИНА_ВСЕГО', 'gas.total_length', 'number2'),
     ('ДАВЛЕНИЕ', 'gas.pressure', 'text'), ('ДАВЛЕНИЕ_ТЕКСТ', 'gas.pressure_text', 'text'), ('ВРЕЗКА', 'gas.tie_in', 'text'), ('ВРЕЗКА_ТЕКСТ', 'gas.tie_in_text', 'text'),
     ('МУФТЫ_КОЛ', 'gas.couplings', 'text'), ('ТРУБОПРОВОДЫ', 'gas.pipes_text', 'text'),
     ('МАТЕРИАЛЫ', 'materials.list', 'text'), ('МАТЕРИАЛЫ_НАЗВАНИЯ', 'materials.names', 'text'),
@@ -166,15 +166,21 @@ def context(db, cid):
     pays = payments(db, cid)
     paid = sum(a for _d, a, _n in pays)
     cost = float(c.get('contract_amount') or 0)
-    pe, steel = float(c.get('pe_length') or 0), float(c.get('steel_length') or 0)
+    pe = float(c.get('pe_length') or 0)
+    under, above = float(c.get('steel_under_length') or 0), float(c.get('steel_above_length') or 0)
+    if not under and not above:
+        under = float(c.get('steel_length') or 0)
+    steel = under + above
     mats = gn.materials(db, cid, c)
     certs = gn.certificates(db, cid, c)
     atts = gn.attestations(db, cid, c)
     pipes = []
     if pe:
         pipes.append(f'полиэтиленовый {gn.PE_DIAMETER} — {_num(pe)} м')
-    if steel:
-        pipes.append(f'стальной {gn.STEEL_DIAMETER} — {_num(steel)} м')
+    if under:
+        pipes.append(f'стальной подземный {gn.STEEL_DIAMETER} — {_num(under)} м')
+    if above:
+        pipes.append(f'стальной надземный {gn.STEEL_DIAMETER} — {_num(above)} м')
     ctx = {
         'contract.number': c.get('contract_number') or '', 'contract.date': c.get('contract_date') or '', 'contract.signed': 'да' if c.get('contract_signed') else 'нет',
         'client.name': name, 'client.short': get_initials_first(name) if name else '', 'client.phone': client.get('phone') or c.get('phone') or '',
@@ -186,7 +192,7 @@ def context(db, cid):
         'work.act_signed': 'да' if c.get('act_signed') else 'нет', 'work.cost': cost, 'estimate.materials': c.get('est_materials') or 0, 'estimate.works': c.get('est_works') or 0,
         'payments.dates': '\n'.join(gd.date_short(d).rstrip('г.') for d, _a, _n in pays), 'payments.amounts': '\n'.join(money(a) for _d, a, _n in pays),
         'payments.notes': '\n'.join(n for _d, _a, n in pays), 'payments.paid': paid, 'payments.rest': cost - paid, 'payments.last_date': pays[-1][0] if pays else '',
-        'gas.pe_length': pe or '', 'gas.steel_length': steel or '', 'gas.total_length': (pe + steel) or '', 'gas.pressure': gn.PRESSURES.get(c.get('pressure_type'), ''),
+        'gas.pe_length': pe or '', 'gas.steel_length': steel or '', 'gas.steel_under': under or '', 'gas.steel_above': above or '', 'gas.total_length': (pe + steel) or '', 'gas.pressure': gn.PRESSURES.get(c.get('pressure_type'), ''),
         'gas.pressure_text': gn.PRESSURE_TEXT.get(c.get('pressure_type'), ''), 'gas.tie_in': gn.TIE_INS.get(c.get('tie_in'), '').lower(), 'gas.tie_in_text': gn.TIE_TEXT.get(c.get('tie_in'), ''),
         'gas.couplings': str(int(c.get('couplings') or 0)) if c.get('tie_in') else '', 'gas.pipes_text': '; '.join(pipes),
         'materials.list': '\n'.join(f'{m["name"]} — {_num(m["quantity"])} {m["unit"]}'.strip() for m in mats), 'materials.names': '\n'.join(m['name'] for m in mats),
@@ -309,7 +315,7 @@ def generate(db, cid, kind):
     title, ext, _group, prefix = DOC_KINDS[kind]
     number = tags.get('НОМЕР_ДОГОВОРА') or str(cid)
     out = os.path.join(folder, gd.safe_name(f'{prefix}_{number.replace("/", "-")}').replace(' ', '_') + '.' + ext)
-    gd.render_docx(template_path(db, kind), out, tags, normalize=norm_tag)
+    out = gd.render_file(template_path(db, kind), out, tags, normalize=norm_tag)
     db.execute('INSERT OR REPLACE INTO gsn_docs(contract_id,kind,file_path,data_hash,generated_at,linked) VALUES(?,?,?,?,?,0)',
                (cid, kind, out, data_hash(db, cid), datetime.now().isoformat(timespec='seconds')))
     return out

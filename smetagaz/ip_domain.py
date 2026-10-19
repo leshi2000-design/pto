@@ -58,7 +58,7 @@ def attach_estimate(db, eid, client_id=None):
     """Относит существующую смету к ИП (без договора). Смета с договором другого раздела не принимается."""
     if db.fetchone('SELECT 1 FROM ip_estimates WHERE estimate_id=?', (eid,)):
         return
-    for table in ('contracts', 'gsv_projects', 'gsn_projects', 'smr_contracts', 'to_contracts'):
+    for table in ('contracts', 'gsv_projects', 'gsn_projects', 'smr_contracts', 'to_contracts', 'fl_contracts'):
         if db.fetchone(f'SELECT 1 FROM {table} WHERE estimate_id=?', (eid,)):
             raise ValueError('Эта смета привязана к договору другого раздела')
     if client_id is None:

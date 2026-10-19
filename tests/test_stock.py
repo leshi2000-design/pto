@@ -22,7 +22,7 @@ def header(**kw):return dict(number='СП-1',act_date='2026-09-17',object_name='
 def test_missing_norms_explicit_zero_and_decimal(d):
     with pytest.raises(ValueError,match='не задана норма'):s.calculate(d,[(1,'5')])
     pid,mids=setup_norm(d);lines,snapshot=s.calculate(d,[(pid,'10'),(pid,'5')])
-    assert {r['material_id']:r['actual_qty'] for r in lines}=={mids[0]:1500000,mids[1]:3000000,mids[2]:450000,mids[4]:750000}
+    assert {r['material_id']:r['actual_qty'] for r in lines}=={mids[0]:1500000,mids[1]:3000000,mids[2]:450000,mids[4]:50000}
     assert s.fmt(10000000)=='10' and s.fmt(-1200000)=='-1.2'
     with pytest.raises(ValueError,match='целым'):s.calculate(d,[(pid,'1.5')])
     with pytest.raises(ValueError):s.units('nan')

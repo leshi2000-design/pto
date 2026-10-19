@@ -232,7 +232,7 @@ def events_between(db, start, end, today=None):
             out.append(_event(date.fromisoformat(day), kind, title.strip(), detail, (table, rid)))
     # --- договоры и акты «Юрлиц» и «СМР» (названия контрагентов берутся одним запросом) ---
     from . import contracts_core as cc
-    for mod, section in (('le', 'Юрлица'), ('smr', 'СМР (юрлица)'), ('to', 'ТО (юрлица)'), ('ip', 'СМР (ИП)')):
+    for mod, section in (('le', 'Прочие (юр.лица)'), ('smr', 'СМР (юрлица)'), ('to', 'ТО (юрлица)'), ('ip', 'СМР (ИП)'), ('fl', 'СМР (физлица)')):
         c = cc.cfg(mod)
         join, label = cc.party_join(mod)
         for kind, col in (('contract', 'contract_date'), ('work', 'end_date')):

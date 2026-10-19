@@ -216,8 +216,7 @@ class TemplatesTab(QWidget):
         kind = self.current_kind()
         if not kind:
             return
-        ext = '*.xlsx' if dd.DOC_KINDS[kind][1] == 'xlsx' else '*.docx'
-        path, _ = QFileDialog.getOpenFileName(self, 'Шаблон документа', '', f'Шаблоны ({ext})')
+        path, _ = QFileDialog.getOpenFileName(self, 'Шаблон документа', '', 'Шаблоны Word и Excel (*.docx *.xlsx)')
         if path:
             db.set_setting(dd.template_setting(kind), path)
             self.tpl.item(self.tpl.currentRow(), 1).setText(path)
@@ -334,8 +333,9 @@ class GsnPipelineTab(QWidget):
         box = QGroupBox('Трубопровод и врезка')
         form = QFormLayout(box)
         self.pe = QDoubleSpinBox()
-        self.steel = QDoubleSpinBox()
-        for w in (self.pe, self.steel):
+        self.steel_under = QDoubleSpinBox()
+        self.steel_above = QDoubleSpinBox()
+        for w in (self.pe, self.steel_under, self.steel_above):
             w.setRange(0, 1e6)
             w.setDecimals(2)
             w.setSuffix(' м')
@@ -354,7 +354,8 @@ class GsnPipelineTab(QWidget):
         self.hint = QLabel('')
         self.hint.setWordWrap(True)
         form.addRow(f'Протяжённость ПЭ трубопровода ({gn.PE_DIAMETER})', self.pe)
-        form.addRow(f'Протяжённость стального трубопровода ({gn.STEEL_DIAMETER})', self.steel)
+        form.addRow(f'Стальной газопровод подземный ({gn.STEEL_DIAMETER})', self.steel_under)
+        form.addRow(f'Стальной газопровод надземный ({gn.STEEL_DIAMETER})', self.steel_above)
         form.addRow('Тип газопровода', self.pressure)
         form.addRow('Тип врезки', self.tie_in)
         form.addRow('Количество муфт', self.couplings)
@@ -388,7 +389,8 @@ class GsnPipelineTab(QWidget):
 
     # значения формы
     def values(self):
-        return dict(pe_length=self.pe.value(), steel_length=self.steel.value(), pressure_type=self.pressure.currentData() or '', tie_in=self.tie_in.currentData() or '',
+        return dict(pe_length=self.pe.value(), steel_under_length=self.steel_under.value(), steel_above_length=self.steel_above.value(),
+                    steel_length=self.steel_under.value() + self.steel_above.value(), pressure_type=self.pressure.currentData() or '', tie_in=self.tie_in.currentData() or '',
                     couplings=self.couplings.value())
 
     def items(self):
@@ -397,7 +399,11 @@ class GsnPipelineTab(QWidget):
     def fill(self, c, chosen=None):
         self.loading = True
         self.pe.setValue(float(c.get('pe_length') or 0))
-        self.steel.setValue(float(c.get('steel_length') or 0))
+        under, above = float(c.get('steel_under_length') or 0), float(c.get('steel_above_length') or 0)
+        if not under and not above:
+            under = float(c.get('steel_length') or 0)
+        self.steel_under.setValue(under)
+        self.steel_above.setValue(above)
         self.pressure.setCurrentIndex(max(0, self.pressure.findData(c.get('pressure_type') or '')))
         self.tie_in.setCurrentIndex(max(0, self.tie_in.findData(c.get('tie_in') or '')))
         self.couplings.setValue(int(c.get('couplings') or 0))
@@ -464,7 +470,7 @@ class GsnPipelineTab(QWidget):
                 self.att_table.setItem(r, col, QTableWidgetItem(v or ''))
 
     def set_enabled_inputs(self, enabled):
-        for w in (self.pe, self.steel, self.pressure, self.tie_in, self.couplings):
+        for w in (self.pe, self.steel_under, self.steel_above, self.pressure, self.tie_in, self.couplings):
             w.setEnabled(enabled)
         for combo in self.role_combos.values():
             combo.setEnabled(enabled)

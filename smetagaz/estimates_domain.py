@@ -11,7 +11,7 @@ from . import board_domain as board
 from .gsvm_docs import FORMATS, apply_format
 
 # разделы, у которых есть связь со сметой (столбец estimate_id)
-CONTRACT_TABLES = {'contracts': 'Монтаж ГСВ', 'gsv_projects': 'Проект ГСВ', 'gsn_projects': 'Монтаж ГСН', 'smr_contracts': 'СМР (юрлица)', 'to_contracts': 'ТО (юрлица)', 'ip_contracts': 'СМР (ИП)'}
+CONTRACT_TABLES = {'contracts': 'Монтаж ГСВ', 'gsv_projects': 'Проект ГСВ', 'gsn_projects': 'Монтаж ГСН', 'smr_contracts': 'СМР (юрлица)', 'to_contracts': 'ТО (юрлица)', 'ip_contracts': 'СМР (ИП)', 'fl_contracts': 'СМР (физлица)'}
 # значения прежних начислений в контексте шаблонов сохранены нулями, чтобы уже подключённые шаблоны не ломались
 LEGACY_ZERO_KEYS = ('social_total', 'overhead_total', 'profit_total', 'vat_total')
 HIDDEN_KEYS = {'has_overhead', 'overhead_pct', 'has_profit', 'profit_pct', 'has_vat', 'vat_pct', 'has_social', 'social_pct', *LEGACY_ZERO_KEYS}
@@ -139,7 +139,7 @@ def contract_client(db, table, rid):
         row = db.fetchone(f'SELECT client_id,le_client_id FROM {table} WHERE id=?', (rid,))
     elif table == 'gsn_projects':
         row = db.fetchone('SELECT client_id,NULL FROM gsn_projects WHERE id=?', (rid,))
-    elif table in ('smr_contracts', 'to_contracts', 'ip_contracts'):
+    elif table in ('smr_contracts', 'to_contracts', 'ip_contracts', 'fl_contracts'):
         row = db.fetchone(f"SELECT CASE WHEN party_type='person' THEN person_id END,CASE WHEN party_type='legal' THEN legal_id END FROM {table} WHERE id=?", (rid,))
     elif table == 'le_contracts':
         row = db.fetchone('SELECT NULL,client_id FROM le_contracts WHERE id=?', (rid,))
@@ -233,7 +233,7 @@ def link_contract(db, eid, table, rid):
         if table == 'contracts':
             from . import gsvm_domain as md
             md.link_estimate(db, rid, eid)
-        elif table in ('smr_contracts', 'to_contracts', 'ip_contracts'):
+        elif table in ('smr_contracts', 'to_contracts', 'ip_contracts', 'fl_contracts'):
             from . import contracts_core as cc
             cc.link_estimate(db, rid, eid, cc.CONTRACT_TABLES[table])
         else:
@@ -252,7 +252,7 @@ def unlink_contract(db, eid):
     from . import payments_domain
     with db.transaction():
         payments_domain.link(db, current['table'], current['id'], None)
-        if current['table'] in ('contracts', 'smr_contracts', 'to_contracts', 'ip_contracts'):
+        if current['table'] in ('contracts', 'smr_contracts', 'to_contracts', 'ip_contracts', 'fl_contracts'):
             db.execute(f"UPDATE {current['table']} SET est_synced_at='',est_rev_synced=0,est_materials=0,est_works=0 WHERE id=?", (current['id'],))
     return current
 
@@ -400,7 +400,7 @@ def extend_context(db, kind, eid, ctx, tables):
     ctx['contract_number'] = ctx['contract_date'] = ''
     if contract:
         t = contract['table']
-        col = {'gsv_projects': 'contract_number', 'contracts': 'contract_number', 'gsn_projects': 'contract_number', 'smr_contracts': 'contract_number', 'to_contracts': 'contract_number', 'ip_contracts': 'contract_number'}[t]
+        col = {'gsv_projects': 'contract_number', 'contracts': 'contract_number', 'gsn_projects': 'contract_number', 'smr_contracts': 'contract_number', 'to_contracts': 'contract_number', 'ip_contracts': 'contract_number', 'fl_contracts': 'contract_number'}[t]
         r = db.fetchone(f'SELECT {col},contract_date FROM {t} WHERE id=?', (contract['id'],))
         if r:
             ctx['contract_number'], ctx['contract_date'] = r[0] or '', r[1] or ''

@@ -87,16 +87,16 @@ class GlobalSearchDialog(QDialog):
 # Боковое меню по разделам: (название раздела, [модули]). Раздел из одного модуля показывается обычной кнопкой.
 NAV_SECTIONS = [
     ('Сегодня', ['tasks']),
-    ('Услуги', ['gsv', 'contracts', 'gsn', 'ip']),
+    ('Услуги', ['gsv', 'contracts', 'gsn', 'ip', 'fl']),
     ('Сметы', ['estimates']),
     ('Клиенты', ['clients']),
-    ('Юрлица', ['legal_entities', 'smr', 'to']),
+    ('Юрлица', ['legal_entities', 'smr', 'to', 'le_other']),
     ('Дополнительно', ['welders', 'writeoff', 'calculators', 'stats', 'exec', 'workspace', 'staff', 'incoming', 'audit', 'errors']),
     ('Справочники', ['gsv_catalog', 'gsn_catalog', 'materials']),
     ('Настройки', ['settings']),
 ]
 KNOWN_TABS = [
-    ("tasks", "Сегодня"), ("gsv", "Проекты ГСВ"), ("contracts", "Монтаж ГСВ"), ("gsn", "Монтаж ГСН"), ("ip", "СМР (ИП)"),
+    ("tasks", "Сегодня"), ("gsv", "Проекты ГСВ"), ("contracts", "Монтаж ГСВ"), ("gsn", "Монтаж ГСН"), ("ip", "СМР (ИП)"), ("fl", "СМР (физлица)"), ("le_other", "Прочие (юр.лица)"),
     ("clients", "Клиенты"), ("legal_entities", "Справочник юрлиц"), ("smr", "СМР (юрлица)"), ("to", "ТО (юрлица)"),
     ("welders", "Сварщики"), ("writeoff", "Списание"), ("calculators", "Калькуляторы"), ("stats", "Статистика"),
     ("estimates", "Реестр смет"), ("exec", "Исполнительная док."), ("workspace", "Все реестры · быстрый обзор"), ("audit", "Журнал и корзина"), ("errors", "Журнал ошибок"), ("staff", "Сотрудники и бригады"), ("incoming", "Входящие документы"),
@@ -177,6 +177,8 @@ class MainWindow(QMainWindow):
             "smr": lambda: CounterpartyView("smr"),
             "to": lambda: CounterpartyView("to"),
             "ip": IpView,
+            "fl": lambda: CounterpartyView("fl"),
+            "le_other": lambda: CounterpartyView("le"),
             "exec": ExecutiveDocsView,
             "materials": MaterialsView,
             "welders": WeldersView,
@@ -356,6 +358,7 @@ class MainWindow(QMainWindow):
             holder.setWidget(replacement)
             self.stack.insertWidget(idx, holder)
             replacement._tab_id=view._tab_id
+            replacement._factory_saved = view._factory
             self.views[idx] = replacement
             view.deleteLater()
         self.stack.setCurrentIndex(idx)
@@ -419,7 +422,28 @@ class MainWindow(QMainWindow):
     def toggle_theme(self):
         is_dark = db.get_setting("is_dark", "0") == "1"
         db.set_setting("is_dark", "0" if is_dark else "1")
+        self.release_hidden_views()
         self.refresh_ui()
+
+    def release_hidden_views(self):
+        """Открытые ранее, но не показанные сейчас страницы возвращаются в «ленивое» состояние: стиль всего приложения применяется только к видимому
+        (на 4000+ виджетов смена темы занимала секунды); при следующем открытии страница создаётся заново и загружает данные."""
+        current = self.stack.currentIndex()
+        for idx, view in enumerate(self.views):
+            factory = getattr(view, '_factory_saved', None)
+            if idx == current or factory is None or getattr(view, '_keep_alive', False):
+                continue
+            if getattr(view, 'job', None) is not None or getattr(view, '_busy', False):
+                continue                                    # идёт фоновая операция — страницу не трогаем
+            placeholder = QWidget()
+            placeholder._factory = factory
+            placeholder._tab_id = view._tab_id
+            holder = self.stack.widget(idx)
+            self.stack.removeWidget(holder)
+            self.stack.insertWidget(idx, placeholder)
+            self.views[idx] = placeholder
+            from PyQt6 import sip
+            sip.delete(holder)                              # сразу, а не через очередь событий: иначе стиль применится и к ним
 
     def refresh_ui(self):
         is_dark = db.get_setting("is_dark", "0") == "1"
@@ -431,14 +455,18 @@ class MainWindow(QMainWindow):
 
         app = QApplication.instance()
         from . import theme
-        theme.apply(app,is_dark,f_family,f_size,accent)
-        from .icons import icon, logo_pixmap
-        self.logo_mark.setPixmap(logo_pixmap('#3DB2A3' if is_dark else '#1B5E57', 40))
-        for view, btn in zip(self.views, self.tabs_buttons):
-            btn.setIcon(icon(getattr(view, '_tab_id', 'workspace'), theme.icon_color(is_dark)))
-
-        for view in self.views:
-            if hasattr(view, 'refresh_ui'): view.refresh_ui()
+        windows = [w for w in app.topLevelWidgets() if w.isVisible()]
+        for w in windows: w.setUpdatesEnabled(False)       # без промежуточных перерисовок при смене стиля всего приложения
+        try:
+            theme.apply(app,is_dark,f_family,f_size,accent)
+            from .icons import icon, logo_pixmap
+            self.logo_mark.setPixmap(logo_pixmap('#3DB2A3' if is_dark else '#1B5E57', 40))
+            for view, btn in zip(self.views, self.tabs_buttons):
+                btn.setIcon(icon(getattr(view, '_tab_id', 'workspace'), theme.icon_color(is_dark)))
+            for view in self.views:
+                if hasattr(view, 'refresh_ui'): view.refresh_ui()
+        finally:
+            for w in windows: w.setUpdatesEnabled(True)
 
 def global_exception_handler(exc_type, exc_value, exc_traceback):
     if issubclass(exc_type, KeyboardInterrupt): return sys.__excepthook__(exc_type, exc_value, exc_traceback)

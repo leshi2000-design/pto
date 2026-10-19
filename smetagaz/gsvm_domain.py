@@ -32,7 +32,7 @@ def migrate(db):
                       ('designer', "TEXT DEFAULT ''"), ('project_month', "TEXT DEFAULT ''"), ('notes', "TEXT DEFAULT ''"),
                       ('contract_folder', "TEXT DEFAULT ''"), ('object_address', "TEXT DEFAULT ''"), ('seq_num', 'INTEGER'), ('year_num', 'INTEGER'),
                       ('est_rev_synced', 'INTEGER DEFAULT 0'), ('est_materials', 'REAL DEFAULT 0'), ('est_works', 'REAL DEFAULT 0'),
-                      ('est_synced_at', "TEXT DEFAULT ''")):
+                      ('est_synced_at', "TEXT DEFAULT ''"), ('cases_count', 'INTEGER DEFAULT 0')):
         if name not in cols:
             db.execute(f'ALTER TABLE contracts ADD COLUMN {name} {ddl}')
     for sql in (
@@ -509,14 +509,15 @@ def guess_profile(db, name):
     return row[0] if row else None
 
 
-def plan_consumption(db, rows):
+def plan_consumption(db, rows, cases=0):
     """Расход материалов на объект по стыкам: количество стыков × норма расхода из справочника норм («Списание» → «Справочник норм»).
 
-    rows: [{'name', 'count', 'profile_id' (или None — норма подбирается по Ду из названия)}].
+    rows: [{'name', 'count', 'profile_id' (или None — норма подбирается по Ду из названия)}]; cases — число футляров объекта.
+    По стыкам считаются только материалы с нормой «на стык» (ацетилен, кислород, проволока); «на объект» берётся один раз на весь объект, «на футляр» — норма × cases.
     Возвращает {'materials': [{material_id,name,unit,qty}], 'lines': [{name,count,profile_id,profile_name,auto,items:[{name,unit,rate,qty}]}], 'warnings': [текст]}.
     Ничего не блокирует: строки без нормы и материалы без заданной нормы попадают в warnings, остальное считается."""
     from decimal import Decimal, InvalidOperation
-    totals, lines, warnings = {}, [], []
+    totals, lines, warnings, fixed = {}, [], [], {}
     for r in rows:
         count = int(r.get('count') or 0)
         if count <= 0:
@@ -532,28 +533,39 @@ def plan_consumption(db, rows):
             d = diameter_of(name)
             warnings.append(f'«{name}»: не найдена норма расхода' + (f' для Ду {d}' if d else '') + ' — выберите норму в столбце «Норма расхода» или добавьте её в справочник норм.')
             continue
-        items = db.fetchall('SELECT i.material_id,m.name,m.unit,i.rate FROM norm_items i JOIN stock_materials m ON m.id=i.material_id WHERE i.profile_id=? ORDER BY i.id', (pid,))
+        items = db.fetchall('SELECT i.material_id,m.name,m.unit,i.rate,i.per FROM norm_items i JOIN stock_materials m ON m.id=i.material_id WHERE i.profile_id=? ORDER BY i.id', (pid,))
         if not items:
             warnings.append(f'«{name}»: в норме «{profile[0]}» нет материалов.')
-        for mid, mname, unit, rate in items:
+        for mid, mname, unit, rate, per in items:
             if rate in (None, ''):
                 warnings.append(f'«{name}»: в норме «{profile[0]}» не задан расход «{mname}» (введите норму или 0).')
                 continue
             try:
-                qty = Decimal(str(rate).replace(',', '.')) * count
+                base = Decimal(str(rate).replace(',', '.'))
             except InvalidOperation:
                 warnings.append(f'«{name}»: некорректная норма «{mname}»: {rate}')
                 continue
-            line['items'].append(dict(name=mname, unit=unit, rate=rate, qty=qty))
+            if per in ('объект', 'футляр'):
+                qty = base if per == 'объект' else base * int(cases or 0)
+                line['items'].append(dict(name=mname, unit=unit, rate=rate, qty=qty, per=per))
+                bucket = fixed.setdefault(mid, dict(material_id=mid, name=mname, unit=unit, qty=Decimal(0)))
+                bucket['qty'] = max(bucket['qty'], qty)
+                continue
+            qty = base * count
+            line['items'].append(dict(name=mname, unit=unit, rate=rate, qty=qty, per=''))
             cur = totals.setdefault(mid, dict(material_id=mid, name=mname, unit=unit, qty=Decimal(0)))
             cur['qty'] += qty
+    for mid, t in fixed.items():
+        cur = totals.setdefault(mid, dict(material_id=mid, name=t['name'], unit=t['unit'], qty=Decimal(0)))
+        cur['qty'] += t['qty']
     materials = [dict(t, qty=t['qty']) for t in totals.values() if t['qty'] != 0]
     return dict(materials=sorted(materials, key=lambda m: m['name']), lines=lines, warnings=warnings)
 
 
 def object_consumption(db, cid):
     """Расход материалов по стыкам договора «Монтаж ГСВ» (по сохранённым данным)."""
-    return plan_consumption(db, joints(db, cid))
+    row = db.fetchone('SELECT coalesce(cases_count,0) FROM contracts WHERE id=?', (cid,))
+    return plan_consumption(db, joints(db, cid), row[0] if row else 0)
 
 
 def format_qty(value):
@@ -571,6 +583,8 @@ def calc_consumption(db, volumes):
     totals = {}
     for snap in snapshots:
         for it in snap['items']:
+            if it.get('per'):                   # материалы на объект / на футляр списываются по объекту, а не по записи графика
+                continue
             cur = totals.setdefault(it['material_id'], dict(material_id=it['material_id'], name=it['name'], unit=it['unit'], qty=Decimal(0)))
             cur['qty'] += Decimal(it['quantity'])
     return [dict(t, qty=format(t['qty'].normalize(), 'f')) for t in totals.values() if t['qty'] > 0]

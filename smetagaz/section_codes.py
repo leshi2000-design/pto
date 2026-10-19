@@ -6,10 +6,11 @@ import re
 KINDS = {          # ключ -> (название, номер раздела по умолчанию, описание)
     'contracts': ('Договор на монтаж ГСВ', '02', 'раздел «Монтаж ГСВ»'),
     'gsv_projects': ('Договор на проект ГСВ', '03', 'раздел «Проекты ГСВ»'),
-    'le': ('Прочие договоры юрлиц', '04', 'раздел «Справочник юрлиц» (договоры без вида)'),
+    'le': ('Прочие договоры юрлиц', '04', 'раздел «Прочие (юр.лица)»'),
     'smr': ('Договор на СМР (юр. лица)', '05', 'раздел «СМР (юрлица)»'),
     'to': ('Договор на ТО (юр. лица)', '06', 'раздел «ТО (юрлица)»'),
-    'ip': ('Договор на СМР (физ. лица)', '07', 'раздел «СМР (ИП)»'),
+    'ip': ('Договор на СМР (ИП)', '07', 'раздел «СМР (ИП)»'),
+    'fl': ('Договор на СМР (физлица)', '08', 'раздел «СМР (физлица)»'),
 }
 CODE_RE = re.compile(r'^[0-9A-Za-zА-Яа-я]{1,4}$')
 
@@ -52,7 +53,7 @@ def format_number(db, key, seq, year):
 
 def used(db, key):
     """Сколько договоров уже создано с текущим номером раздела (для подсказки в настройках)."""
-    table = {'contracts': 'contracts', 'gsv_projects': 'gsv_projects', 'le': 'le_contracts', 'smr': 'smr_contracts', 'to': 'to_contracts', 'ip': 'ip_contracts'}[key]
+    table = {'contracts': 'contracts', 'gsv_projects': 'gsv_projects', 'le': 'le_contracts', 'smr': 'smr_contracts', 'to': 'to_contracts', 'ip': 'ip_contracts', 'fl': 'fl_contracts'}[key]
     try:
         clause, params = like_clauses(db, key)
         return db.fetchone(f'SELECT count(*) FROM {table} WHERE {clause}', params)[0]

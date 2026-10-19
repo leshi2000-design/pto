@@ -57,6 +57,7 @@ INDEXES = [
     ('smr_contracts', 'idx_perf_smr_estimate', 'estimate_id'), ('smr_acts', 'idx_perf_smr_acts_date', 'act_date'),
     ('to_contracts', 'idx_perf_to_date', 'contract_date'), ('to_contracts', 'idx_perf_to_legal', 'legal_id'), ('to_acts', 'idx_perf_to_acts_date', 'act_date'),
     ('ip_contracts', 'idx_perf_ip_date', 'contract_date'), ('ip_contracts', 'idx_perf_ip_person', 'person_id'), ('ip_acts', 'idx_perf_ip_acts_date', 'act_date'),
+    ('fl_contracts', 'idx_perf_fl_date', 'contract_date'), ('fl_contracts', 'idx_perf_fl_person', 'person_id'), ('fl_acts', 'idx_perf_fl_acts_date', 'act_date'),
     ('estimates', 'idx_perf_estimates_folder', 'folder_id'), ('estimates', 'idx_perf_estimates_le', 'le_client_id'),
     ('estimate_items', 'idx_perf_items_type', 'estimate_id,item_type'),
     ('le_clients', 'idx_perf_le_clients_name', 'name'), ('notes', 'idx_perf_notes_title', 'title'),

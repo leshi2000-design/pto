@@ -1,9 +1,9 @@
 """A single payment ledger, shared by an estimate and its linked contract."""
 from decimal import Decimal
 from datetime import date
-OWNERS={'estimates':('total','Сметы'),'contracts':('contract_amount','ГСВ'),'gsn_projects':('contract_amount','ГСН'),'gsv_projects':('cost','Проектирование ГСВ'),'le_contracts':('amount','Юрлица'),'smr_contracts':('amount','СМР (юрлица)'),'to_contracts':('amount','ТО (юрлица)'),'ip_contracts':('amount','СМР (ИП)'),'client_sales':('amount','Продажа по чеку')}
-ESTIMATE_OWNERS=('contracts','gsn_projects','gsv_projects','smr_contracts','to_contracts','ip_contracts')
-CP_MODS={'le_contracts':'le','smr_contracts':'smr','to_contracts':'to','ip_contracts':'ip'}
+OWNERS={'estimates':('total','Сметы'),'contracts':('contract_amount','ГСВ'),'gsn_projects':('contract_amount','ГСН'),'gsv_projects':('cost','Проектирование ГСВ'),'le_contracts':('amount','Прочие (юр.лица)'),'smr_contracts':('amount','СМР (юрлица)'),'to_contracts':('amount','ТО (юрлица)'),'ip_contracts':('amount','СМР (ИП)'),'fl_contracts':('amount','СМР (физлица)'),'client_sales':('amount','Продажа по чеку')}
+ESTIMATE_OWNERS=('contracts','gsn_projects','gsv_projects','smr_contracts','to_contracts','ip_contracts','fl_contracts')
+CP_MODS={'le_contracts':'le','smr_contracts':'smr','to_contracts':'to','ip_contracts':'ip','fl_contracts':'fl'}
 def migrate(db):
     for table,additions in {'payments':{'owner_type':'TEXT','owner_id':'INTEGER','note':"TEXT DEFAULT ''"},'gsn_projects':{'estimate_id':'INTEGER REFERENCES estimates(id)','contract_amount':'REAL DEFAULT 0'},'gsv_projects':{'estimate_id':'INTEGER REFERENCES estimates(id)'},'estimates':{'payment_opening':'REAL DEFAULT 0'}}.items():
         cols={r[1] for r in db.fetchall(f'PRAGMA table_info({table})')}

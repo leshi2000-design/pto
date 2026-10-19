@@ -20,10 +20,11 @@ from .agenda_domain import short_name
 from .gsvm_docs import FORMATS, apply_format, money, norm_tag, tag_text
 
 MODS = {
-    'le': dict(title='Юрлица', contracts='le_contracts', acts='le_acts', tags='le_tags', docs='le_docs', section='Юрлица', code='04', party='legal', estimate=False),
+    'le': dict(title='Прочие (юр.лица)', contracts='le_contracts', acts='le_acts', tags='le_tags', docs='le_docs', section='Прочие', code='04', party='legal', estimate=False),
     'smr': dict(title='СМР (юрлица)', contracts='smr_contracts', acts='smr_acts', tags='smr_tags', docs='smr_docs', section='СМР', code='05', party='legal', estimate=True),
     'to': dict(title='ТО (юрлица)', contracts='to_contracts', acts='to_acts', tags='to_tags', docs='to_docs', section='ТО', code='06', party='legal', estimate=True),
     'ip': dict(title='СМР (ИП)', contracts='ip_contracts', acts='ip_acts', tags='ip_tags', docs='ip_docs', section='СМР ИП', code='07', party='person', estimate=True),
+    'fl': dict(title='СМР (физлица)', contracts='fl_contracts', acts='fl_acts', tags='fl_tags', docs='fl_docs', section='СМР физ', code='08', party='person', estimate=True),
 }
 ESTIMATE_MODS = tuple(m for m, c in MODS.items() if c['estimate'])
 CONTRACT_TABLES = {c['contracts']: m for m, c in MODS.items()}      # таблица договоров -> раздел
@@ -91,9 +92,12 @@ def migrate(db):
             DELETE FROM {c['docs']} WHERE scope='contract' AND ref_id=old.id; END""")
         db.execute(f"""CREATE TRIGGER IF NOT EXISTS cleanup_act_docs_{c['acts']} AFTER DELETE ON {c['acts']} BEGIN
             DELETE FROM {c['docs']} WHERE scope='act' AND ref_id=old.id; END""")
+    for c in MODS.values():                                            # НДС в актах, сумма договора по актам, признак годового договора
+        _add(db, c['contracts'], [('amount_from_acts', 'INTEGER DEFAULT 0'), ('annual', 'INTEGER DEFAULT 0')])
+        _add(db, c['acts'], [('vat_rate', 'REAL DEFAULT 0')])
     _move_person_contracts_to_ip(db)
     if db.fetchone("SELECT 1 FROM sqlite_master WHERE type='table' AND name='notes'"):
-        for table in ('to_contracts', 'ip_contracts'):
+        for table in ('to_contracts', 'ip_contracts', 'fl_contracts'):
             db.execute(f"CREATE TRIGGER IF NOT EXISTS cleanup_notes_{table} AFTER DELETE ON {table} BEGIN DELETE FROM notes WHERE link_table='{table}' AND link_id=old.id; END")
     # заказчик-юрлицо в карточках проектов и монтажа ГСВ
     for table in ('gsv_projects', 'contracts'):
@@ -250,6 +254,36 @@ def vat_parts(amount, included, rate):
     return round(amount - vat, 2), vat, round(amount, 2)
 
 
+def act_amounts(contract_row, act_row):
+    """(без НДС, НДС, всего) по акту: у акта свои «в том числе НДС» и ставка; если ставка акта не указана, берётся ставка договора."""
+    included = act_row.get('vat_included')
+    rate = float(act_row.get('vat_rate') or 0)
+    if included and rate <= 0:
+        rate = float(contract_row.get('vat_rate') or 0)
+    return vat_parts(act_row.get('amount'), included, rate)
+
+
+def acts_total(db, mod, cid):
+    """(без НДС, НДС, всего) по всем актам договора."""
+    c = contract(db, mod, cid)
+    net = vat = gross = 0.0
+    for a in acts(db, mod, cid):
+        n, v, g = act_amounts(c, a)
+        net, vat, gross = net + n, vat + v, gross + g
+    return round(net, 2), round(vat, 2), round(gross, 2)
+
+
+def recalc_amount(db, mod, cid):
+    """Если у договора включено «сумма = сумма актов», пересчитывает сумму договора по актам. -> новая сумма или None."""
+    table = cfg(mod)['contracts']
+    row = db.fetchone(f'SELECT amount_from_acts FROM {table} WHERE id=?', (cid,))
+    if not row or not row[0]:
+        return None
+    total = acts_total(db, mod, cid)[2]
+    db.execute(f'UPDATE {table} SET amount=? WHERE id=?', (total, cid))
+    return total
+
+
 # --- НОМЕР, ПАПКА, ОПЛАТЫ --------------------------------------------------------------------
 
 def next_number(db, mod, contract_date=None):
@@ -341,6 +375,117 @@ def link_estimate(db, cid, eid, mod='smr'):
             raise ValueError('Эта смета уже привязана к другому договору')
     payments_domain.link(db, table, cid, eid)
     db.execute(f"UPDATE {table} SET est_synced_at='', est_rev_synced=0 WHERE id=?", (cid,))
+
+
+# --- СТАТУСЫ ДОГОВОРОВ -------------------------------------------------------------------------
+
+STATUS_FILTERS = (('', 'Все статусы'), ('work', 'В работе'), ('overdue', 'Просрочен'), ('annual', 'Годовой'), ('done', 'Завершён'), ('cancelled', 'Расторгнут'))
+ANNUAL_DAYS = 360                                  # договор на срок от 360 дней считается годовым, даже если признак не отмечен
+
+
+def display_status(row, today=None):
+    """Ключ визуального статуса договора: 'done' (Завершён), 'cancelled' (Расторгнут), 'overdue' (срок окончания прошёл, а договор не завершён),
+    'annual' (Годовой) или 'work' (В работе)."""
+    status = row.get('status') or 'Действует'
+    if status == 'Завершён':
+        return 'done'
+    if status == 'Расторгнут':
+        return 'cancelled'
+    today = today or date.today()
+    end, start = gd._parse(row.get('end_date')), gd._parse(row.get('start_date'))
+    if end and end < today:
+        return 'overdue'
+    if row.get('annual') or (start and end and (end - start).days >= ANNUAL_DAYS):
+        return 'annual'
+    return 'work'
+
+
+def status_condition(key, alias='c', today=None):
+    """SQL-условие и параметры для фильтра реестра по визуальному статусу (как display_status)."""
+    if not key:
+        return '1=1', []
+    a, day = alias, (today or date.today()).isoformat()
+    active = f"coalesce({a}.status,'Действует') NOT IN ('Завершён','Расторгнут')"
+    overdue = f"(coalesce({a}.end_date,'')<>'' AND {a}.end_date<?)"
+    annual = f"({a}.annual=1 OR (coalesce({a}.start_date,'')<>'' AND coalesce({a}.end_date,'')<>'' AND julianday({a}.end_date)-julianday({a}.start_date)>={ANNUAL_DAYS}))"
+    if key == 'done':
+        return f"{a}.status='Завершён'", []
+    if key == 'cancelled':
+        return f"{a}.status='Расторгнут'", []
+    if key == 'overdue':
+        return f'{active} AND {overdue}', [day]
+    if key == 'annual':
+        return f'{active} AND NOT {overdue} AND {annual}', [day]
+    return f'{active} AND NOT {overdue} AND NOT {annual}', [day]
+
+
+# --- ПЕРЕНОС ДОГОВОРА МЕЖДУ РАЗДЕЛАМИ ЮРЛИЦ ---------------------------------------------------
+
+MOVABLE = ('smr', 'to', 'le')          # разделы, между которыми переносятся договоры с юрлицами
+
+
+def move_contract(db, from_mod, cid, to_mod, renumber=True, drop_estimate=False):
+    """Переносит договор с юрлицом из одного раздела («СМР (юрлица)», «ТО (юрлица)», «Прочие (юр.лица)») в другой: со всеми актами, оплатами, документами,
+    заметками и задачами. renumber=True — договор получает следующий номер в новом разделе (прежний номер запоминается в примечании), иначе номер сохраняется.
+    В «Прочих» смет нет: если у договора есть смета, нужно явно разрешить drop_estimate (смета останется в реестре смет, но от договора отвяжется). -> id нового договора."""
+    if from_mod not in MOVABLE or to_mod not in MOVABLE:
+        raise ValueError('Переносить можно только договоры с юрлицами: СМР (юрлица), ТО (юрлица), Прочие (юр.лица)')
+    if from_mod == to_mod:
+        raise ValueError('Договор уже находится в этом разделе')
+    src, dst = cfg(from_mod), cfg(to_mod)
+    old = contract(db, from_mod, cid)
+    if from_mod != 'le' and old.get('party_type') == 'person':
+        raise ValueError('Договор с физлицом нельзя перенести в раздел юрлиц')
+    estimate_id = old.get('estimate_id') if src['estimate'] else None
+    if estimate_id and not dst['estimate'] and not drop_estimate:
+        raise ValueError('У договора есть смета, а в разделе «Прочие (юр.лица)» смет нет. Отвяжите смету или подтвердите перенос без неё.')
+    legal_id = old.get('client_id') if from_mod == 'le' else old.get('legal_id')
+    if not legal_id:
+        raise ValueError('У договора не выбрано юрлицо')
+    src_cols, dst_cols = _cols(db, src['contracts']), _cols(db, dst['contracts'])
+    skip = {'id', 'client_id', 'legal_id', 'party_type', 'person_id', 'estimate_id', 'direction', 'source_type', 'source_id', 'seq_num', 'year_num', 'contract_number'}
+    shared = [c for c in src_cols if c in dst_cols and c not in skip]
+    note_extra = [f'Перенесён из раздела «{src["title"]}» {date.today():%d.%m.%Y}']
+    if old.get('direction'):
+        note_extra.append(f'Направление: {old["direction"]}')
+    with db.transaction():
+        values = {c: old.get(c) for c in shared}
+        if 'note' in values:
+            values['note'] = '\n'.join(x for x in ((values['note'] or '').strip(), *note_extra) if x)
+        if to_mod == 'le':
+            values['client_id'] = legal_id
+            values['direction'] = old.get('direction') or ''
+        else:
+            values.update(legal_id=legal_id, party_type='legal')
+            if dst['estimate'] and estimate_id:
+                values['estimate_id'] = estimate_id
+        number, seq, year = old.get('contract_number') or '', old.get('seq_num'), old.get('year_num')
+        if renumber:
+            seq, year, number = next_number(db, to_mod, old.get('contract_date'))
+            if old.get('contract_number'):
+                values['note'] = (values.get('note') or '') + f'\nПрежний номер: {old["contract_number"]}'
+        values.update(contract_number=number, seq_num=seq, year_num=year)
+        if estimate_id:
+            db.execute(f'UPDATE {src["contracts"]} SET estimate_id=NULL WHERE id=?', (cid,))      # освобождаем смету до вставки (поле UNIQUE)
+        new = db.execute(f'INSERT INTO {dst["contracts"]}({",".join(values)}) VALUES({",".join("?" for _ in values)})', tuple(values.values())).lastrowid
+        act_shared = [c for c in _cols(db, src['acts']) if c in _cols(db, dst['acts']) and c not in ('id', 'contract_id')]
+        doc_map = {('contract', cid): ('contract', new)}
+        for (aid,) in db.fetchall(f'SELECT id FROM {src["acts"]} WHERE contract_id=? ORDER BY id', (cid,)):
+            row = db.fetchone(f'SELECT {",".join(act_shared)} FROM {src["acts"]} WHERE id=?', (aid,))
+            new_act = db.execute(f'INSERT INTO {dst["acts"]}(contract_id,{",".join(act_shared)}) VALUES(?,{",".join("?" for _ in act_shared)})', (new, *row)).lastrowid
+            doc_map[('act', aid)] = ('act', new_act)
+        for (scope, ref), (nscope, nref) in doc_map.items():
+            for kind, path, linked in db.fetchall(f'SELECT kind,file_path,linked FROM {src["docs"]} WHERE scope=? AND ref_id=?', (scope, ref)):
+                db.execute(f'INSERT OR REPLACE INTO {dst["docs"]}(scope,ref_id,kind,file_path,data_hash,generated_at,linked) VALUES(?,?,?,?,?,?,?)', (nscope, nref, kind, path, '', '', linked))
+        db.execute('UPDATE payments SET owner_type=?, owner_id=? WHERE owner_type=? AND owner_id=?', (dst['contracts'], new, src['contracts'], cid))
+        for table in ('notes', 'kanban_tasks'):
+            try:
+                db.execute(f'UPDATE {table} SET link_table=?, link_id=? WHERE link_table=? AND link_id=?', (dst['contracts'], new, src['contracts'], cid))
+            except Exception:
+                pass
+        db.execute(f'DELETE FROM {src["acts"]} WHERE contract_id=?', (cid,))
+        db.execute(f'DELETE FROM {src["contracts"]} WHERE id=?', (cid,))
+    return new
 
 
 # --- ТЕГИ -------------------------------------------------------------------------------------
@@ -439,6 +584,8 @@ def context(db, mod, cid, act_id=None):
     c = contract(db, mod, cid)
     p = party(db, mod, c)
     net, vat, gross = vat_parts(c.get('amount'), c.get('vat_included'), c.get('vat_rate'))
+    if c.get('amount_from_acts'):                                      # сумма договора = сумма зарегистрированных актов (с НДС каждого акта)
+        net, vat, gross = acts_total(db, mod, cid)
     pays = payments(db, mod, cid)
     paid = sum(a for _d, a, _n in pays)
     ctx = {
@@ -453,7 +600,7 @@ def context(db, mod, cid, act_id=None):
     ctx.update({f'party.{k}': v for k, v in p.items() if k != 'kind'})
     if act_id:
         a = act(db, mod, act_id)
-        a_net, a_vat, a_gross = vat_parts(a.get('amount'), c.get('vat_included') if a.get('vat_included') is None else a.get('vat_included'), c.get('vat_rate'))
+        a_net, a_vat, a_gross = act_amounts(c, a)
         ctx.update({'act.number': a.get('act_number') or '', 'act.date': a.get('act_date') or '', 'act.amount': a_gross, 'act.amount_net': a_net, 'act.vat': a_vat,
                     'act.description': a.get('description') or ''})
     else:
@@ -571,7 +718,7 @@ def generate(db, mod, kind, ref_id):
     number = tags.get('НОМЕР_ДОГОВОРА') or str(cid)
     suffix = f'_{tags.get("НОМЕР_АКТА") or aid}' if aid else ''
     out = os.path.join(folder, gd.safe_name(f'{prefix}{suffix}_{number.replace("/", "-")}').replace(' ', '_') + '.docx')
-    gd.render_docx(template_path(db, mod, kind), out, tags, normalize=norm_tag)
+    out = gd.render_file(template_path(db, mod, kind), out, tags, normalize=norm_tag)
     db.execute(f"INSERT OR REPLACE INTO {cfg(mod)['docs']}(scope,ref_id,kind,file_path,data_hash,generated_at,linked) VALUES(?,?,?,?,?,?,0)",
                (scope, ref_id, kind, out, data_hash(db, mod, cid, aid), datetime.now().isoformat(timespec='seconds')))
     return out
@@ -596,7 +743,8 @@ def remove_doc(db, mod, kind, ref_id, delete_file=False):
 def save_contract(db, mod, values, cid=None):
     """Сохраняет договор. Номер, не заданный вручную, назначается автоматически. Возвращает id."""
     c = cfg(mod)
-    fields = ['contract_number', 'contract_date', 'object_name', 'object_address', 'subject', 'start_date', 'end_date', 'amount', 'vat_included', 'vat_rate', 'signed', 'status', 'note']
+    fields = ['contract_number', 'contract_date', 'object_name', 'object_address', 'subject', 'start_date', 'end_date', 'amount', 'vat_included', 'vat_rate', 'signed', 'status', 'note',
+              'amount_from_acts', 'annual']
     fields += ['direction', 'client_id', 'source_type', 'source_id'] if mod == 'le' else ['party_type', 'person_id', 'legal_id', 'estimate_id']
     data = {k: values.get(k) for k in fields if k in values}
     if mod == 'le' and not data.get('client_id'):
@@ -624,6 +772,7 @@ def save_contract(db, mod, values, cid=None):
                     seq, year = int(m.group(1)), int(m.group(2))
             data.update(contract_number=number, seq_num=seq, year_num=year)
             cid = db.execute(f"INSERT INTO {c['contracts']}(" + ','.join(data) + ') VALUES(' + ','.join('?' for _ in data) + ')', tuple(data.values())).lastrowid
+        recalc_amount(db, mod, cid)
     return cid
 
 
@@ -636,7 +785,10 @@ def save_act(db, mod, values, aid=None):
     if day:
         date.fromisoformat(day)
     data = dict(contract_id=cid, act_number=str(values.get('act_number') or '').strip(), act_date=day, amount=float(values.get('amount') or 0),
-                description=str(values.get('description') or '').strip(), note=str(values.get('note') or '').strip(), signed=int(bool(values.get('signed'))))
+                description=str(values.get('description') or '').strip(), note=str(values.get('note') or '').strip(), signed=int(bool(values.get('signed'))),
+                vat_included=int(bool(values.get('vat_included'))), vat_rate=float(values.get('vat_rate') or 0))
+    if data['vat_rate'] < 0 or data['vat_rate'] > 100:
+        raise ValueError('Ставка НДС — от 0 до 100 %')
     if data['amount'] < 0:
         raise ValueError('Сумма акта не может быть отрицательной')
     if not data['act_number']:
@@ -644,10 +796,24 @@ def save_act(db, mod, values, aid=None):
         data['act_number'] = str(n)
     if data['signed'] and not day:
         raise ValueError('Для подписанного акта укажите дату')
-    if aid:
-        db.execute(f"UPDATE {c['acts']} SET " + ','.join(f'{k}=?' for k in data) + ' WHERE id=?', (*data.values(), aid))
-        return aid
-    return db.execute(f"INSERT INTO {c['acts']}(" + ','.join(data) + ') VALUES(' + ','.join('?' for _ in data) + ')', tuple(data.values())).lastrowid
+    with db.transaction():
+        if aid:
+            db.execute(f"UPDATE {c['acts']} SET " + ','.join(f'{k}=?' for k in data) + ' WHERE id=?', (*data.values(), aid))
+        else:
+            aid = db.execute(f"INSERT INTO {c['acts']}(" + ','.join(data) + ') VALUES(' + ','.join('?' for _ in data) + ')', tuple(data.values())).lastrowid
+        recalc_amount(db, mod, cid)
+    return aid
+
+
+def delete_act(db, mod, aid):
+    """Удаляет акт и пересчитывает сумму договора, если она считается по актам."""
+    c = cfg(mod)
+    row = db.fetchone(f"SELECT contract_id FROM {c['acts']} WHERE id=?", (aid,))
+    if not row:
+        return
+    with db.transaction():
+        db.execute(f"DELETE FROM {c['acts']} WHERE id=?", (aid,))
+        recalc_amount(db, mod, row[0])
 
 
 def contract_from_source(db, source_type, source_id):

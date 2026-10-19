@@ -5,7 +5,18 @@ import json
 
 SCALE=1000000
 CATEGORIES=('Ацетилен','Кислород','Сварочная проволока','Краска','Отрезные круги','Прочее')
-BASES=('стык','м','м²','шт','объект')
+BASES=('стык','м','м²','шт','объект','футляр')
+# Как расходуется материал: '' — по количеству стыков (ацетилен, кислород, проволока), 'объект' — нормой на объект строительства, 'футляр' — на каждый футляр
+PER_LABELS={'':'на стык','объект':'на объект','футляр':'на футляр'}
+JOINT_WORDS=('ацетилен','кислород','проволок')
+CASE_WORDS=('краск','асбест')
+
+def default_per(name):
+    """По стыкам списываются только ацетилен, кислород и проволока; краска и асбестовый шнур — по числу футляров; всё остальное (в том числе круги, штучно) — на объект."""
+    n=str(name or '').casefold()
+    if any(w in n for w in JOINT_WORDS):return ''
+    if any(w in n for w in CASE_WORDS):return 'футляр'
+    return 'объект'
 
 def decimal(value):
     try:d=Decimal(str(value).replace(',','.').strip())
@@ -46,6 +57,7 @@ def migrate(db):
     statements.append('CREATE INDEX IF NOT EXISTS idx_stock_orders_date ON stock_orders(order_date)')
     statements.append('CREATE INDEX IF NOT EXISTS idx_stock_transfers_date ON stock_transfers(transfer_date)')
     for sql in statements:db.execute(sql)
+    if 'per' not in [r[1] for r in db.fetchall('PRAGMA table_info(norm_items)')]:db.execute("ALTER TABLE norm_items ADD COLUMN per TEXT NOT NULL DEFAULT ''")
     for key,ddl in (('object_text',"TEXT DEFAULT ''"),('welder_text',"TEXT DEFAULT ''"),('status',"TEXT DEFAULT 'done'"),('work_time',"TEXT DEFAULT ''")):
         if key not in [r[1] for r in db.fetchall('PRAGMA table_info(welding_jobs)')]:db.execute(f"ALTER TABLE welding_jobs ADD COLUMN {key} {ddl}")
     # Expand old multi-day jobs into independently editable journal entries, retaining first ID.
@@ -66,6 +78,9 @@ def migrate(db):
             pid=db.execute('INSERT INTO norm_profiles(name,diameter,thickness,basis) VALUES(?,?,?,?)',(f'Газовая сварка Ду {dia} × {thick}',dia,thick,'стык')).lastrowid
             for mid in ids:db.execute('INSERT INTO norm_items(profile_id,material_id,rate) VALUES(?,?,NULL)',(pid,mid))
         db.set_setting('stock_schema','1')
+    if db.get_setting('norm_per_v1')!='1':
+        for iid,name in db.fetchall('SELECT i.id,m.name FROM norm_items i JOIN stock_materials m ON m.id=i.material_id'):db.execute('UPDATE norm_items SET per=? WHERE id=?',(default_per(name),iid))
+        db.set_setting('norm_per_v1','1')
 
 def material(db,mid):
     row=db.fetchone('SELECT name,category,unit FROM stock_materials WHERE id=?',(mid,))
@@ -104,33 +119,49 @@ def save_profile(db,values,items,pid=None):
         args=tuple(values.get(k,'') for k in ('name','diameter','thickness','basis','notes'))
         if pid:db.execute('UPDATE norm_profiles SET name=?,diameter=?,thickness=?,basis=?,notes=? WHERE id=?',(*args,pid));db.execute('DELETE FROM norm_items WHERE profile_id=?',(pid,))
         else:pid=db.execute('INSERT INTO norm_profiles(name,diameter,thickness,basis,notes) VALUES(?,?,?,?,?)',args).lastrowid
-        for mid,rate in items:
+        for entry in items:
+            mid,rate=entry[0],entry[1];per=entry[2] if len(entry)>2 else (default_per(material(db,mid)[0]) if values['basis']=='стык' else '')
+            if per not in PER_LABELS:raise ValueError('Неизвестный способ расчёта нормы')
             material(db,mid)
             if rate not in (None,''):
                 if decimal(rate)<0:raise ValueError('Норма не может быть отрицательной')
                 rate=str(decimal(rate))
             else:rate=None
-            db.execute('INSERT INTO norm_items(profile_id,material_id,rate) VALUES(?,?,?)',(pid,mid,rate))
+            db.execute('INSERT INTO norm_items(profile_id,material_id,rate,per) VALUES(?,?,?,?)',(pid,mid,rate,per))
     return pid
 
-def calculate(db,volumes):
-    totals={};snapshots=[]
+def calculate(db,volumes,cases=None):
+    """volumes: [(профиль, количество)]. Расход по стыкам (per='') — норма × количество строки; на объект — норма один раз (при нескольких нормах берётся наибольшая);
+    на футляр — норма × число футляров (cases; по умолчанию сумма строк с нормой «на футляр»)."""
+    totals={};snapshots=[];per_object={};per_case={}
+    if cases is None:
+        cases=Decimal(0)
+        for pid,amount in volumes:
+            p=db.fetchone('SELECT basis FROM norm_profiles WHERE id=?',(pid,))
+            if p and p[0]=='футляр':cases+=decimal(amount)
+    cases=decimal(cases)
     for pid,amount in volumes:
         count=decimal(amount)
         if count<=0:raise ValueError('Объём работ должен быть больше нуля')
         profile=db.fetchone('SELECT name,basis FROM norm_profiles WHERE id=?',(pid,))
         if not profile:raise ValueError('Выберите профиль нормы')
         if profile[1]=='стык' and count!=count.to_integral_value():raise ValueError('Количество стыков должно быть целым')
-        rows=db.fetchall('SELECT material_id,rate FROM norm_items WHERE profile_id=? ORDER BY id',(pid,))
+        rows=db.fetchall('SELECT material_id,rate,per FROM norm_items WHERE profile_id=? ORDER BY id',(pid,))
         if not rows:raise ValueError(f'{profile[0]}: добавьте материалы и нормы')
         details=[]
-        for mid,rate in rows:
+        for mid,rate,per in rows:
             name,cat,unit=material(db,mid)
             if rate is None:raise ValueError(f'{profile[0]}: не задана норма «{name}». Введите норму или явный 0, если материал не расходуется.')
-            value=decimal(rate)*count
-            totals[mid]=totals.get(mid,Decimal(0))+value
-            details.append(dict(material_id=mid,name=name,unit=unit,rate=rate,quantity=str(value)))
+            if per=='объект':
+                value=decimal(rate);per_object[mid]=max(per_object.get(mid,Decimal(0)),value)
+            elif per=='футляр':
+                value=decimal(rate)*cases;per_case[mid]=max(per_case.get(mid,Decimal(0)),value)
+            else:
+                value=decimal(rate)*count;totals[mid]=totals.get(mid,Decimal(0))+value
+            details.append(dict(material_id=mid,name=name,unit=unit,rate=rate,quantity=str(value),per=per))
         snapshots.append(dict(profile_id=pid,name=profile[0],basis=profile[1],volume=str(count),items=details))
+    for extra in (per_object,per_case):
+        for mid,value in extra.items():totals[mid]=totals.get(mid,Decimal(0))+value
     lines=[dict(material_id=mid,norm_qty=units(value),actual_qty=units(value),note='') for mid,value in totals.items() if value>0]
     return lines,snapshots
 

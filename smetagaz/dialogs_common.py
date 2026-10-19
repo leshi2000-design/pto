@@ -314,7 +314,7 @@ class CatalogPickerDialog(QDialog):
         self.counter.setText(f'Позиций: {len(rows)}' + (' (показаны первые 1500)' if len(rows) >= 1500 else ''))
 
     def build_selection(self, row):
-        return {'name': row[1], 'unit': row[2] or '', 'price': float(row[3] or 0), 'purchase_price': float(row[5] or 0)}
+        return {'id': row[0], 'name': row[1], 'unit': row[2] or '', 'price': float(row[3] or 0), 'purchase_price': float(row[5] or 0)}
 
     def pick(self, *_):
         r = self.table.currentRow()

@@ -7,6 +7,10 @@ from PyQt6.QtWidgets import (QWidget, QDialog, QVBoxLayout, QHBoxLayout, QGridLa
 from PyQt6.QtCore import Qt, QDate, pyqtSignal
 from PyQt6.QtGui import QColor
 
+from . import status_icons
+from . import volumes_domain as vd
+from .volumes_ui import VolumesTab
+
 from .database import db
 from . import contracts_core as cc
 from . import gsv_domain
@@ -18,6 +22,9 @@ from .pagebar import PageBar
 from .registry_tools import RegistryTools, search_clause
 from .gsv_project_domain import date_short
 from .edit_lock_ui import guarded
+
+
+VAT_MODS = ('le', 'smr', 'to', 'fl')       # разделы, где у актов выделяется НДС и сумма договора может считаться по актам (в «СМР (ИП)» всё остаётся как было)
 
 
 def money(value):
@@ -323,7 +330,27 @@ class ActDialog(QDialog):
         self.desc.setFixedHeight(90)
         self.signed = QCheckBox('Акт подписан')
         self.note = QLineEdit()
-        for label, w in (('№ акта', self.number), ('Дата акта', self.date), ('Сумма (итого)', self.amount), ('Описание работ', self.desc), ('', self.signed), ('Примечание', self.note)):
+        for label, w in (('№ акта', self.number), ('Дата акта', self.date), ('Сумма (итого)', self.amount)):
+            form.addRow(label, w)
+        self.vat_included = self.vat_rate = self.vat_info = None
+        if mod in VAT_MODS:
+            contract = cc.contract(db, mod, contract_id)
+            self.vat_included = QCheckBox('В сумму акта включён НДС')
+            self.vat_included.setChecked(bool(contract.get('vat_included')))
+            self.vat_rate = QDoubleSpinBox()
+            self.vat_rate.setRange(0, 100)
+            self.vat_rate.setSuffix(' %')
+            self.vat_rate.setValue(float(contract.get('vat_rate') or 20))
+            row = QHBoxLayout()
+            row.addWidget(self.vat_included)
+            row.addWidget(self.vat_rate)
+            form.addRow('НДС', row)
+            self.vat_info = QLabel('')
+            form.addRow('', self.vat_info)
+            for w in (self.amount, self.vat_rate):
+                w.valueChanged.connect(self.refresh_vat)
+            self.vat_included.toggled.connect(self.refresh_vat)
+        for label, w in (('Описание работ', self.desc), ('', self.signed), ('Примечание', self.note)):
             form.addRow(label, w)
         pull = QPushButton('Подставить остаток по договору')
         pull.clicked.connect(self.fill_rest)
@@ -340,9 +367,20 @@ class ActDialog(QDialog):
             self.desc.setPlainText(a['description'] or '')
             self.signed.setChecked(bool(a['signed']))
             self.note.setText(a['note'] or '')
+            if self.vat_included is not None:
+                self.vat_included.setChecked(bool(a.get('vat_included')))
+                self.vat_rate.setValue(float(a.get('vat_rate') or 0) or float(cc.contract(db, mod, contract_id).get('vat_rate') or 20))
         else:
             self.date.set_value(QDate.currentDate().toString('yyyy-MM-dd'))
             self.desc.setPlainText(cc.contract(db, mod, contract_id).get('subject') or '')
+        self.refresh_vat()
+
+    def refresh_vat(self, *_):
+        if self.vat_info is None:
+            return
+        net, vat, gross = cc.vat_parts(self.amount.value(), self.vat_included.isChecked(), self.vat_rate.value())
+        self.vat_rate.setEnabled(self.vat_included.isChecked())
+        self.vat_info.setText(f'Без НДС {money(net)} · НДС {money(vat)} · всего {money(gross)}' if self.vat_included.isChecked() else 'НДС в акте не выделяется')
 
     def fill_rest(self):
         total = float(cc.contract(db, self.mod, self.contract_id).get('amount') or 0)
@@ -352,7 +390,9 @@ class ActDialog(QDialog):
     def save(self):
         try:
             self.act_id = cc.save_act(db, self.mod, dict(contract_id=self.contract_id, act_number=self.number.text(), act_date=self.date.value(), amount=self.amount.value(),
-                                                         description=self.desc.toPlainText(), note=self.note.text(), signed=self.signed.isChecked()), self.act_id)
+                                                         description=self.desc.toPlainText(), note=self.note.text(), signed=self.signed.isChecked(),
+                                                         vat_included=bool(self.vat_included and self.vat_included.isChecked()),
+                                                         vat_rate=self.vat_rate.value() if self.vat_included is not None and self.vat_included.isChecked() else 0), self.act_id)
         except Exception as e:
             warn(self, str(e))
             return
@@ -376,6 +416,9 @@ class ContractDialog(QDialog):
         self.build_main()
         self.build_acts()
         self.build_docs()
+        if cc.cfg(mod)['contracts'] in vd.OWNERS:
+            self.volumes_tab = VolumesTab(cc.cfg(mod)['contracts'], self, lambda: self.refresh_estimate())
+            self.tabs.addTab(self.volumes_tab, 'Объёмы')
         self.status = QLabel('')
         layout.addWidget(self.status)
         bar = QHBoxLayout()
@@ -505,6 +548,23 @@ class ContractDialog(QDialog):
         g.addWidget(self.cmb_status, r, 1)
         g.addWidget(self.signed, r, 2, 1, 2)
         r += 1
+        self.amount_from_acts = QCheckBox('Сумма договора = сумма зарегистрированных актов')
+        self.annual = QCheckBox('Годовой договор')
+        if self.mod in VAT_MODS:
+            g.addWidget(self.amount_from_acts, r, 0, 1, 3)
+            g.addWidget(self.annual, r, 3)
+            r += 1
+            self.amount_from_acts.toggled.connect(self.refresh_vat)
+            self.status_badge = QLabel('')
+            g.addWidget(QLabel('Визуальный статус'), r, 0)
+            g.addWidget(self.status_badge, r, 1, 1, 3)
+            r += 1
+            for sig in (self.cmb_status.currentTextChanged, self.annual.toggled, self.start.dateChanged, self.end.dateChanged):
+                sig.connect(self.refresh_badge)
+            self.refresh_badge()
+        else:
+            self.amount_from_acts.hide()
+            self.annual.hide()
         self.note = QTextEdit()
         self.note.setFixedHeight(60)
         g.addWidget(QLabel('Примечание'), r, 0)
@@ -576,9 +636,29 @@ class ContractDialog(QDialog):
             self.party_info.setText('' if not row else f'{row["phone"] or "телефон не указан"} · {row["address"] or "адрес не указан"}')
 
     def refresh_vat(self, *_):
+        from_acts = self.mod in VAT_MODS and self.amount_from_acts.isChecked()
+        self.amount.setReadOnly(from_acts)
+        if from_acts and self.contract_id and not getattr(self, '_syncing', False):          # сумма договора считается по актам
+            self._syncing = True
+            try:
+                self.amount.setValue(cc.acts_total(db, self.mod, self.contract_id)[2])
+            finally:
+                self._syncing = False
         net, vat, gross = cc.vat_parts(self.amount.value(), self.vat_included.isChecked(), self.vat_rate.value())
+        if from_acts:
+            net, vat, gross = (cc.acts_total(db, self.mod, self.contract_id) if self.contract_id else (0, 0, 0))
+            self.vat_info.setText(f'Сумма по актам. Без НДС: {money(net)} · НДС: {money(vat)} · Всего: {money(gross)}')
+            self.vat_rate.setEnabled(self.vat_included.isChecked())
+            return
         self.vat_info.setText(f'Без НДС: {money(net)} · НДС: {money(vat)} · Всего: {money(gross)}' if vat else 'НДС в сумму не включён: в документах «НДС не облагается».')
         self.vat_rate.setEnabled(self.vat_included.isChecked())
+
+    def refresh_badge(self, *_):
+        if self.mod not in VAT_MODS or not hasattr(self, 'status_badge'):
+            return
+        key = cc.display_status(dict(status=self.cmb_status.currentText(), start_date=self.start.value(), end_date=self.end.value(), annual=self.annual.isChecked()))
+        self.status_badge.setText(f'<span style="color:{status_icons.color(key)}"><b>{status_icons.title(key)}</b></span>')
+        self.status_badge.setToolTip('Завершён — статус «Завершён»; Просрочен — срок окончания прошёл; Годовой — отмечен «Годовой договор» или срок от 360 дней; иначе — В работе.')
 
     def refresh_number(self):
         if self.contract_id or self.number.text().strip() and not getattr(self, 'auto_number', False):
@@ -591,7 +671,8 @@ class ContractDialog(QDialog):
         v = dict(contract_number=self.number.text(), contract_date=self.date.value(), object_name=self.obj.text().strip(), object_address=self.addr.text().strip(),
                  subject=self.subject.text().strip(), start_date=self.start.value(), end_date=self.end.value(), amount=self.amount.value(), vat_included=int(self.vat_included.isChecked()),
                  vat_rate=self.vat_rate.value() if self.vat_included.isChecked() else 0, signed=int(self.signed.isChecked()), status=self.cmb_status.currentText(),
-                 note=self.note.toPlainText().strip())
+                 note=self.note.toPlainText().strip(), amount_from_acts=int(self.amount_from_acts.isChecked()) if self.mod in VAT_MODS else 0,
+                 annual=int(self.annual.isChecked()) if self.mod in VAT_MODS else 0)
         if self.mod == 'le':
             v.update(direction=self.direction.currentText().strip() or DIRECTIONS[0], client_id=self.cmb_legal.currentData())
         else:
@@ -621,6 +702,8 @@ class ContractDialog(QDialog):
         self.vat_rate.setValue(float(c['vat_rate'] or 20))
         self.cmb_status.setCurrentText(c['status'] or cc.STATUSES[0])
         self.signed.setChecked(bool(c['signed']))
+        self.amount_from_acts.setChecked(bool(c.get('amount_from_acts')))
+        self.annual.setChecked(bool(c.get('annual')))
         self.note.setPlainText(c['note'] or '')
         self.refresh_party_info()
 
@@ -647,7 +730,8 @@ class ContractDialog(QDialog):
     def build_acts(self):
         page = QWidget()
         layout = QVBoxLayout(page)
-        self.acts_table = make_table(['№', 'Дата', 'Сумма', 'Подписан', 'Акт', 'Справка', 'Описание'], (60, 100, 130, 90, 190, 190))
+        self.acts_table = make_table(['№', 'Дата', 'Сумма', 'в т. ч. НДС', 'Подписан', 'Акт', 'Справка', 'Описание'] if self.mod in VAT_MODS else ['№', 'Дата', 'Сумма', 'Подписан', 'Акт', 'Справка', 'Описание'],
+                                     (60, 100, 130, 110, 90, 190, 190) if self.mod in VAT_MODS else (60, 100, 130, 90, 190, 190))
         self.acts_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.acts_table.doubleClicked.connect(self.edit_act)
         layout.addWidget(self.acts_table, 1)
@@ -658,6 +742,14 @@ class ContractDialog(QDialog):
             b.clicked.connect(fn)
             bar.addWidget(b)
         layout.addLayout(bar)
+        if self.mod in VAT_MODS:
+            bar2 = QHBoxLayout()
+            for text, fn in (('Привязать готовый акт…', lambda: self.link_doc('act')), ('Привязать готовую справку…', lambda: self.link_doc('statement'))):
+                b = QPushButton(text)
+                b.clicked.connect(fn)
+                bar2.addWidget(b)
+            bar2.addStretch()
+            layout.addLayout(bar2)
         self.acts_sum = QLabel('')
         layout.addWidget(self.acts_sum)
         self.tabs.addTab(page, 'Акты и справки')
@@ -665,17 +757,22 @@ class ContractDialog(QDialog):
     def refresh_acts(self):
         rows = cc.acts(db, self.mod, self.contract_id) if self.contract_id else []
         self.acts_table.setRowCount(len(rows))
+        contract_row = cc.contract(db, self.mod, self.contract_id) if rows else {}
+        shift = 1 if self.mod in VAT_MODS else 0
         for r, a in enumerate(rows):
             self.acts_table.setItem(r, 0, item(a['act_number'], a['id']))
             self.acts_table.setItem(r, 1, item(date_short(a['act_date']).rstrip('г.')))
             self.acts_table.setItem(r, 2, item(money(a['amount']), right=True))
-            self.acts_table.setItem(r, 3, item('да' if a['signed'] else 'нет'))
-            for c, kind in ((4, 'act'), (5, 'statement')):
+            if shift:
+                vat = cc.act_amounts(contract_row, a)[1]
+                self.acts_table.setItem(r, 3, item(money(vat) if vat else '—', right=True))
+            self.acts_table.setItem(r, 3 + shift, item('да' if a['signed'] else 'нет'))
+            for c, kind in ((4 + shift, 'act'), (5 + shift, 'statement')):
                 text, color = STATE_TEXT[cc.doc_state(db, self.mod, kind, a['id'])]
                 it = item(text)
                 it.setForeground(QColor(color))
                 self.acts_table.setItem(r, c, it)
-            self.acts_table.setItem(r, 6, item(a['description']))
+            self.acts_table.setItem(r, 6 + shift, item(a['description']))
         total = sum(float(a['amount'] or 0) for a in rows)
         self.acts_sum.setText(f'Актов: {len(rows)} · на сумму {money(total)} из {money(self.amount.value())}')
 
@@ -691,7 +788,7 @@ class ContractDialog(QDialog):
     def delete_act(self):
         aid = selected_data(self.acts_table)
         if aid and QMessageBox.question(self, 'Удаление', 'Удалить выбранный акт?') == QMessageBox.StandardButton.Yes:
-            db.execute(f"DELETE FROM {cc.cfg(self.mod)['acts']} WHERE id=?", (aid,))
+            cc.delete_act(db, self.mod, aid)
             self.refresh_all()
 
     # --- документы
@@ -788,6 +885,7 @@ class ContractDialog(QDialog):
     def link_doc(self, kind):
         ref = self.ref_for(kind)
         if not ref:
+            warn(self, 'Выберите акт в таблице.' if kind != 'contract' else 'Сначала сохраните договор.')
             return
         path, _ = QFileDialog.getOpenFileName(self, 'Готовый документ', '', 'Документы (*.docx *.doc *.pdf *.xlsx)')
         if path:
@@ -958,6 +1056,56 @@ class ContractDialog(QDialog):
 
 # --- Реестры -----------------------------------------------------------------------------------
 
+class MoveContractDialog(QDialog):
+    """Куда перенести договор юрлица и нужен ли новый номер."""
+    def __init__(self, mod, cid, parent=None):
+        super().__init__(parent)
+        self.mod = mod
+        self.setWindowTitle('Перенести договор в другой раздел')
+        self.resize(520, 260)
+        layout = QVBoxLayout(self)
+        c = cc.contract(db, mod, cid)
+        layout.addWidget(QLabel(f'Договор № {c.get("contract_number") or "без номера"} из раздела «{cc.cfg(mod)["title"]}».\nАкты, оплаты, документы, заметки и задачи переносятся вместе с договором.'))
+        form = QFormLayout()
+        self.combo = QComboBox()
+        for m in cc.MOVABLE:
+            if m != mod:
+                self.combo.addItem(cc.cfg(m)['title'], m)
+        form.addRow('Перенести в раздел', self.combo)
+        layout.addLayout(form)
+        self.renum = QCheckBox('Присвоить новый номер в этом разделе (прежний номер сохранится в примечании)')
+        self.renum.setChecked(True)
+        layout.addWidget(self.renum)
+        self.preview = QLabel('')
+        self.preview.setStyleSheet('color: #605E5C;')
+        layout.addWidget(self.preview)
+        self.combo.currentIndexChanged.connect(lambda *_: self.refresh(c))
+        self.renum.toggled.connect(lambda *_: self.refresh(c))
+        self.refresh(c)
+        bar = QHBoxLayout()
+        bar.addStretch()
+        cancel, ok = QPushButton('Отмена'), QPushButton('Перенести')
+        ok.setProperty('type', 'primary')
+        cancel.clicked.connect(self.reject)
+        ok.clicked.connect(self.accept)
+        bar.addWidget(cancel)
+        bar.addWidget(ok)
+        layout.addLayout(bar)
+
+    def refresh(self, c):
+        if self.renum.isChecked():
+            number = cc.next_number(db, self.target(), c.get('contract_date'))[2]
+            self.preview.setText(f'Новый номер: {number}')
+        else:
+            self.preview.setText(f'Номер сохранится: {c.get("contract_number") or "без номера"}')
+
+    def target(self):
+        return self.combo.currentData()
+
+    def renumber(self):
+        return self.renum.isChecked()
+
+
 class ContractsRegistry(QWidget):
     def __init__(self, mod):
         super().__init__()
@@ -965,9 +1113,16 @@ class ContractsRegistry(QWidget):
         layout = QVBoxLayout(self)
         bar = QHBoxLayout()
         self.cmb_status = QComboBox()
-        self.cmb_status.addItem('Все статусы', None)
-        for s in cc.STATUSES:
-            self.cmb_status.addItem(s, s)
+        self.visual = mod in VAT_MODS                              # визуальные статусы со значками (в «СМР (ИП)» остаются прежние)
+        if self.visual:
+            for key, text in cc.STATUS_FILTERS:
+                self.cmb_status.addItem(text if not key else text, key or None)
+                if key:
+                    self.cmb_status.setItemIcon(self.cmb_status.count() - 1, status_icons.icon(key))
+        else:
+            self.cmb_status.addItem('Все статусы', None)
+            for s in cc.STATUSES:
+                self.cmb_status.addItem(s, s)
         self.cmb_status.currentIndexChanged.connect(self.search_changed)
         bar.addWidget(self.cmb_status)
         self.cmb_signed = QComboBox()
@@ -980,8 +1135,11 @@ class ContractsRegistry(QWidget):
         self.search.setPlaceholderText('Номер, контрагент, объект, телефон, адрес…')
         self.search.textChanged.connect(self.search_changed)
         bar.addWidget(self.search, 1)
-        for text, fn, kind in (('Создать договор', self.add, 'primary'), ('Открыть', self.edit, ''), ('Оплаты', self.payments, ''), ('Ведомость актов за месяц…', self.statement, ''),
-                               ('Удалить', self.delete, 'danger')):
+        buttons = [('Создать договор', self.add, 'primary'), ('Открыть', self.edit, ''), ('Оплаты', self.payments, ''), ('Ведомость актов за месяц…', self.statement, '')]
+        if mod in cc.MOVABLE:
+            buttons.append(('Перенести в раздел…', self.move, ''))
+        buttons.append(('Удалить', self.delete, 'danger'))
+        for text, fn, kind in buttons:
             b = QPushButton(text)
             if kind:
                 b.setProperty('type', kind)
@@ -1015,8 +1173,13 @@ class ContractsRegistry(QWidget):
             where.append(clause)
             params.extend(found)
         if self.cmb_status.currentData():
-            where.append('c.status=?')
-            params.append(self.cmb_status.currentData())
+            if self.visual:
+                cond, extra = cc.status_condition(self.cmb_status.currentData())
+                where.append(cond)
+                params.extend(extra)
+            else:
+                where.append('c.status=?')
+                params.append(self.cmb_status.currentData())
         signed = self.cmb_signed.currentData()
         if signed is not None:
             where.append('coalesce(c.signed,0)=?')
@@ -1028,13 +1191,18 @@ class ContractsRegistry(QWidget):
                     "(c.estimate_id IS NULL AND p.estimate_id IS NULL AND p.owner_type=? AND p.owner_id=c.id))") if cc.cfg(self.mod)['estimate'] else \
                    "(SELECT coalesce(sum(p.amount),0) FROM payments p WHERE p.estimate_id IS NULL AND p.owner_type=? AND p.owner_id=c.id)"
         rows = db.fetchall(f"""SELECT c.id,c.contract_number,c.contract_date,{label},coalesce(nullif(c.object_address,''),c.object_name),c.amount,{paid_sql},
-            (SELECT count(*) FROM {c['acts']} WHERE contract_id=c.id),coalesce(c.signed,0),c.status
+            (SELECT count(*) FROM {c['acts']} WHERE contract_id=c.id),coalesce(c.signed,0),c.status,c.start_date,c.end_date,coalesce(c.annual,0)
             FROM {c['contracts']} c {join} WHERE {cond} ORDER BY coalesce(c.year_num,99) ASC, coalesce(c.seq_num,0) ASC, c.contract_number ASC, c.id ASC LIMIT ? OFFSET ?""", (c['contracts'], *params, self.pager.size, self.pager.offset))
         self.table.setRowCount(len(rows))
-        for r, (rid, number, day, who, obj, amount_c, paid, n_acts, signed_c, status) in enumerate(rows):
-            vals = [number or 'Б/Н', date_short(day).rstrip('г.'), who, obj, money(amount_c), money(paid), n_acts, 'да' if signed_c else 'нет', status]
+        for r, (rid, number, day, who, obj, amount_c, paid, n_acts, signed_c, status, start, end, annual) in enumerate(rows):
+            key = cc.display_status(dict(status=status, start_date=start, end_date=end, annual=annual)) if self.visual else ''
+            vals = [number or 'Б/Н', date_short(day).rstrip('г.'), who, obj, money(amount_c), money(paid), n_acts, 'да' if signed_c else 'нет', status_icons.title(key) if key else status]
             for col, v in enumerate(vals):
-                self.table.setItem(r, col, item(v, rid if col == 0 else None, right=col in (4, 5, 6)))
+                cell = item(v, rid if col == 0 else None, right=col in (4, 5, 6))
+                if col == 8 and key:
+                    cell.setIcon(status_icons.icon(key))
+                    cell.setForeground(QColor(status_icons.color(key)))
+                self.table.setItem(r, col, cell)
         self.total.setText(f'Найдено договоров: {total} · на сумму {money(amount)}')
 
     def add(self):
@@ -1057,6 +1225,34 @@ class ContractsRegistry(QWidget):
     def statement(self):
         from .acts_statement_view import ActsStatementDialog
         ActsStatementDialog(cc.cfg(self.mod)['contracts'], self).exec()
+
+    def move(self):
+        """Перенос выбранного договора юрлица в другой раздел договоров (СМР юрлиц, ТО юрлиц, Прочие)."""
+        cid = selected_data(self.table)
+        if not cid:
+            warn(self, 'Выберите договор в таблице.', 'Перенос')
+            return
+        dlg = MoveContractDialog(self.mod, cid, self)
+        if not dlg.exec():
+            return
+        try:
+            db.safety_backup('move_contract')
+        except Exception:
+            pass
+        try:
+            try:
+                new = cc.move_contract(db, self.mod, cid, dlg.target(), dlg.renumber())
+            except ValueError as e:
+                if 'смет' in str(e) and QMessageBox.question(self, 'Перенос', str(e) + '\n\nПеренести без сметы?') == QMessageBox.StandardButton.Yes:
+                    new = cc.move_contract(db, self.mod, cid, dlg.target(), dlg.renumber(), drop_estimate=True)
+                else:
+                    raise
+        except Exception as e:
+            warn(self, str(e), 'Перенос не выполнен')
+            return
+        number = db.fetchone(f"SELECT contract_number FROM {cc.cfg(dlg.target())['contracts']} WHERE id=?", (new,))[0]
+        QMessageBox.information(self, 'Перенос', f'Договор перенесён в раздел «{cc.cfg(dlg.target())["title"]}» (№ {number or "без номера"}). Акты, оплаты, документы, заметки и задачи перенесены вместе с ним.')
+        self.load_data()
 
     def delete(self):
         cid = selected_data(self.table)
@@ -1187,7 +1383,7 @@ class TemplatesTab(QWidget):
         kind = self.current_kind()
         if not kind:
             return
-        path, _ = QFileDialog.getOpenFileName(self, 'Шаблон документа', '', 'Шаблоны (*.docx)')
+        path, _ = QFileDialog.getOpenFileName(self, 'Шаблон документа', '', 'Шаблоны Word и Excel (*.docx *.xlsx)')
         if path:
             db.set_setting(cc.template_setting(self.mod, kind), path)
             self.tpl.item(self.tpl.currentRow(), 1).setText(path)

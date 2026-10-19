@@ -30,7 +30,7 @@ def test_quick_add_link_and_suggestions(db):
     lid = cc.save_legal(db, dict(name='ООО Ромашка'))
     cid = cc.save_contract(db, 'le', dict(client_id=lid, direction='Монтажные работы', contract_date='2026-09-01', amount=10))
     cc.save_act(db, 'le', dict(contract_id=cid, act_date='2026-09-20', amount=10))
-    assert bd.link_label(db, 'le_contracts', cid).startswith('Юрлица · 01-04/26')
+    assert bd.link_label(db, 'le_contracts', cid).startswith('Прочие (юр.лица) · 01-04/26')
     title, due = bd.default_task_for(db, 'le_contracts', cid, date(2026, 10, 8))
     assert title.startswith('Сдать акт по договору') and due == '2026-10-10'
     sug = bd.suggestions(db, date(2026, 10, 8))

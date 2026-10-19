@@ -62,7 +62,7 @@ def test_legal_dossier_and_widget(db, monkeypatch):
     nd.save_note(db, 'Согласовать скидку', '', '2026-03-03', ('le_contracts', c1))
     ed.create_estimate(db, 'Смета Ромашки', client=('legal', lid))
     d = dc.client_dossier(db, 'legal', lid)
-    assert {c['section'] for c in d['contracts']} == {'Юрлица (прочие)', 'СМР (юрлица)', 'Проекты ГСВ'}
+    assert {c['section'] for c in d['contracts']} == {'Прочие (юр.лица)', 'СМР (юрлица)', 'Проекты ГСВ'}
     assert d['totals']['amount'] == Decimal(1200 + 800 + 250) and d['totals']['paid'] == 200 and d['totals']['estimates'] == 1
     assert d['info']['lines'][0] == 'Общество' or 'УНП 123456789' in d['info']['lines']
     assert [n['title'] for n in d['notes']] == ['Согласовать скидку']

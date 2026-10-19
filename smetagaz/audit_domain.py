@@ -6,8 +6,8 @@ from datetime import datetime, timedelta
 # таблица -> (схема, название раздела для человека)
 AUDITED = {
     'contracts': ('main', 'Монтаж ГСВ · договор'), 'gsn_projects': ('main', 'Монтаж ГСН · договор'), 'gsv_projects': ('main', 'Проекты ГСВ'),
-    'le_contracts': ('main', 'Юрлица · договор'), 'le_acts': ('main', 'Юрлица · акт'), 'smr_contracts': ('main', 'СМР (юрлица) · договор'), 'smr_acts': ('main', 'СМР (юрлица) · акт'),
-    'to_contracts': ('main', 'ТО (юрлица) · договор'), 'to_acts': ('main', 'ТО (юрлица) · акт'), 'ip_contracts': ('main', 'СМР (ИП) · договор'), 'ip_acts': ('main', 'СМР (ИП) · акт'),
+    'le_contracts': ('main', 'Прочие (юр.лица) · договор'), 'le_acts': ('main', 'Прочие (юр.лица) · акт'), 'smr_contracts': ('main', 'СМР (юрлица) · договор'), 'smr_acts': ('main', 'СМР (юрлица) · акт'),
+    'to_contracts': ('main', 'ТО (юрлица) · договор'), 'to_acts': ('main', 'ТО (юрлица) · акт'), 'ip_contracts': ('main', 'СМР (ИП) · договор'), 'ip_acts': ('main', 'СМР (ИП) · акт'), 'fl_contracts': ('main', 'СМР (физлица) · договор'), 'fl_acts': ('main', 'СМР (физлица) · акт'),
     'estimates': ('main', 'Смета'), 'payments': ('main', 'Оплата'), 'le_clients': ('main', 'Юрлицо'), 'le_contacts': ('main', 'Юрлицо · контакт'),
     'notes': ('main', 'Заметка'), 'kanban_tasks': ('main', 'Задача'), 'welders': ('main', 'Сварщик'), 'writeoffs': ('main', 'Списание'),
     'contract_equipment': ('main', 'Договор · оборудование'), 'gsvm_equipment': ('main', 'Монтаж ГСВ · оборудование'),

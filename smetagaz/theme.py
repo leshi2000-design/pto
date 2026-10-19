@@ -110,13 +110,23 @@ def _install_filter(app, dark):
     fix = getattr(app, '_dark_text_fix', None)
     if fix is None:
         fix = _DarkTextFix(app)
-        app.installEventFilter(fix)
         app._dark_text_fix = fix
+        app._dark_fix_installed = False
+    was_dark = fix.dark
     fix.dark = dark
     install_russian(app)
     fix.russian = getattr(app, '_ru_loaded', False)
-    for w in app.allWidgets():       # уже созданные виджеты: подмена в тёмной теме, возврат исходного стиля в светлой
-        _fix_widget(w, dark)
+    # фильтр событий вызывается на каждое событие приложения — держим его только когда он нужен (тёмная тема или запасной перевод кнопок)
+    needed = dark or not fix.russian
+    if needed and not app._dark_fix_installed:
+        app.installEventFilter(fix)
+        app._dark_fix_installed = True
+    elif not needed and app._dark_fix_installed:
+        app.removeEventFilter(fix)
+        app._dark_fix_installed = False
+    if dark or was_dark:             # переход светлая → светлая (смена шрифта, акцента) не требует обхода всех виджетов
+        for w in app.allWidgets():   # уже созданные виджеты: подмена в тёмной теме, возврат исходного стиля в светлой
+            _fix_widget(w, dark)
 
 
 _ARROW_DIR = None
@@ -165,7 +175,9 @@ def apply(app, dark=False, family='Segoe UI', size=10, accent=''):
     from . import qt_cleanup
     qt_cleanup.install(app)
     c = colors(dark, accent)
-    app.setStyle('Fusion')
+    if not getattr(app, '_sg_fusion', False):
+        app.setStyle('Fusion')
+        app._sg_fusion = True
     font = QFont(family or FONT_FALLBACKS[0])
     font.setFamilies([f for f in dict.fromkeys([family or FONT_FALLBACKS[0], *FONT_FALLBACKS])])
     try:
@@ -189,7 +201,7 @@ def apply(app, dark=False, family='Segoe UI', size=10, accent=''):
     from .date_widgets import install_display_patch
     install_display_patch()
     arrows = _arrow_files(c['text2'])
-    app.setStyleSheet(f'''
+    sheet = f'''
     QWidget {{ color:{c['text']}; }}
     QMainWindow, QDialog {{ background:{c['bg']}; }}
     QToolTip {{ background:{c['text']}; color:{c['panel']}; border:0; border-radius:6px; padding:6px 10px; }}
@@ -303,4 +315,7 @@ def apply(app, dark=False, family='Segoe UI', size=10, accent=''):
     QCalendarWidget QToolButton:hover {{ background:{c['hover']}; }}
     QCalendarWidget QMenu {{ padding:4px; }}
     QCalendarWidget QSpinBox {{ min-width:70px; }}
-    ''')
+    '''
+    if getattr(app, '_sg_sheet', None) != sheet:     # тот же стиль повторно не применяется — это самая дорогая операция
+        app.setStyleSheet(sheet)
+        app._sg_sheet = sheet

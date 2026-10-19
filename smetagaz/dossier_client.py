@@ -4,15 +4,15 @@ from decimal import Decimal
 from . import board_domain as board
 from . import payments_domain
 
-SECTION_NAMES = {'contracts': 'Монтаж ГСВ', 'gsv_projects': 'Проекты ГСВ', 'gsn_projects': 'Монтаж ГСН', 'smr_contracts': 'СМР (юрлица)', 'to_contracts': 'ТО (юрлица)', 'ip_contracts': 'СМР (ИП)', 'le_contracts': 'Юрлица (прочие)'}
-AMOUNT_COLUMN = {'contracts': 'contract_amount', 'gsv_projects': 'cost', 'gsn_projects': 'contract_amount', 'smr_contracts': 'amount', 'to_contracts': 'amount', 'ip_contracts': 'amount', 'le_contracts': 'amount'}
-NUMBER_COLUMN = {'contracts': 'contract_number', 'gsv_projects': 'pd_number', 'gsn_projects': 'contract_number', 'smr_contracts': 'contract_number', 'to_contracts': 'contract_number', 'ip_contracts': 'contract_number', 'le_contracts': 'contract_number'}
+SECTION_NAMES = {'contracts': 'Монтаж ГСВ', 'gsv_projects': 'Проекты ГСВ', 'gsn_projects': 'Монтаж ГСН', 'smr_contracts': 'СМР (юрлица)', 'to_contracts': 'ТО (юрлица)', 'ip_contracts': 'СМР (ИП)', 'fl_contracts': 'СМР (физлица)', 'le_contracts': 'Прочие (юр.лица)'}
+AMOUNT_COLUMN = {'contracts': 'contract_amount', 'gsv_projects': 'cost', 'gsn_projects': 'contract_amount', 'smr_contracts': 'amount', 'to_contracts': 'amount', 'ip_contracts': 'amount', 'fl_contracts': 'amount', 'le_contracts': 'amount'}
+NUMBER_COLUMN = {'contracts': 'contract_number', 'gsv_projects': 'pd_number', 'gsn_projects': 'contract_number', 'smr_contracts': 'contract_number', 'to_contracts': 'contract_number', 'ip_contracts': 'contract_number', 'fl_contracts': 'contract_number', 'le_contracts': 'contract_number'}
 OBJECT_COLUMN = {'contracts': "coalesce(nullif(object_address,''),object_name)", 'gsv_projects': "coalesce(nullif(address,''),object_name)", 'gsn_projects': "coalesce(nullif(address,''),title)",
-                 'smr_contracts': "coalesce(nullif(object_address,''),object_name)", 'to_contracts': "coalesce(nullif(object_address,''),object_name)", 'ip_contracts': "coalesce(nullif(object_address,''),object_name)", 'le_contracts': "coalesce(nullif(object_address,''),object_name)"}
-DATE_COLUMN = {'contracts': 'contract_date', 'gsv_projects': 'contract_date', 'gsn_projects': 'contract_date', 'smr_contracts': 'contract_date', 'to_contracts': 'contract_date', 'ip_contracts': 'contract_date', 'le_contracts': 'contract_date'}
-SIGNED_COLUMN = {'contracts': 'contract_signed', 'gsv_projects': 'contract_signed', 'gsn_projects': '1', 'smr_contracts': 'signed', 'to_contracts': 'signed', 'ip_contracts': 'signed', 'le_contracts': 'signed'}
+                 'smr_contracts': "coalesce(nullif(object_address,''),object_name)", 'to_contracts': "coalesce(nullif(object_address,''),object_name)", 'ip_contracts': "coalesce(nullif(object_address,''),object_name)", 'fl_contracts': "coalesce(nullif(object_address,''),object_name)", 'le_contracts': "coalesce(nullif(object_address,''),object_name)"}
+DATE_COLUMN = {'contracts': 'contract_date', 'gsv_projects': 'contract_date', 'gsn_projects': 'contract_date', 'smr_contracts': 'contract_date', 'to_contracts': 'contract_date', 'ip_contracts': 'contract_date', 'fl_contracts': 'contract_date', 'le_contracts': 'contract_date'}
+SIGNED_COLUMN = {'contracts': 'contract_signed', 'gsv_projects': 'contract_signed', 'gsn_projects': '1', 'smr_contracts': 'signed', 'to_contracts': 'signed', 'ip_contracts': 'signed', 'fl_contracts': 'signed', 'le_contracts': 'signed'}
 OWNER_FILTER = {
-    'person': {'contracts': 'client_id', 'gsv_projects': 'client_id', 'gsn_projects': 'client_id', 'smr_contracts': 'person_id', 'ip_contracts': 'person_id'},
+    'person': {'contracts': 'client_id', 'gsv_projects': 'client_id', 'gsn_projects': 'client_id', 'smr_contracts': 'person_id', 'ip_contracts': 'person_id', 'fl_contracts': 'person_id'},
     'legal': {'contracts': 'le_client_id', 'gsv_projects': 'le_client_id', 'smr_contracts': 'legal_id', 'to_contracts': 'legal_id', 'le_contracts': 'client_id'},
 }
 
@@ -92,7 +92,7 @@ def client_dossier(db, kind, cid):
     contracts, payments = [], []
     for table, column in OWNER_FILTER[kind].items():
         number, obj, day, signed, amount_col = NUMBER_COLUMN[table], OBJECT_COLUMN[table], DATE_COLUMN[table], SIGNED_COLUMN[table], AMOUNT_COLUMN[table]
-        extra = ", coalesce(status,'')" if table in ('smr_contracts', 'to_contracts', 'ip_contracts', 'le_contracts') else ", ''"
+        extra = ", coalesce(status,'')" if table in ('smr_contracts', 'to_contracts', 'ip_contracts', 'fl_contracts', 'le_contracts') else ", ''"
         est = 'estimate_id' if table != 'le_contracts' else 'NULL'
         for rid, num, o, d, sg, amount, estimate_id, status in db.fetchall(
                 f"SELECT id,{number},{obj},{day},{signed},{amount_col},{est}{extra} FROM {table} WHERE {column}=? ORDER BY id DESC", (cid,)):

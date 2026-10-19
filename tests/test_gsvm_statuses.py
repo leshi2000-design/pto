@@ -64,5 +64,5 @@ def test_card_registry_statuses_and_id_transfer(db, monkeypatch):
     view = cr.ContractsRegistryView()
     view.load_data()
     headers = [view.table.horizontalHeaderItem(c).text() for c in range(view.table.columnCount())]
-    assert headers == ['№ договора', 'Дата заключения', 'Объект / Адрес', 'Клиент', 'Стоимость, BYN', 'Статусы', 'Примечание'] and not view.table.verticalHeader().isVisible()
-    assert view.table.item(0, 3).text() == 'Иванов Иван' and 'Договор подписан' in view.table.item(0, 5).text()
+    assert headers == ['№ договора', 'Дата заключения', 'Объект / Адрес', 'Клиент', 'Стоимость, BYN', 'Состояние', 'Статусы', 'Примечание'] and not view.table.verticalHeader().isVisible()
+    assert view.table.item(0, 3).text() == 'Иванов Иван' and 'Договор подписан' in view.table.item(0, 6).text()
