@@ -557,9 +557,15 @@ class ContractDialog(QDialog):
             self.amount_from_acts.toggled.connect(self.refresh_vat)
             self.status_badge = QLabel('')
             g.addWidget(QLabel('Визуальный статус'), r, 0)
-            g.addWidget(self.status_badge, r, 1, 1, 3)
+            g.addWidget(self.status_badge, r, 1)
+            self.manual_status = QComboBox()
+            self.manual_status.addItem('Определять автоматически', '')
+            for key in cc.VISUAL_KEYS:
+                self.manual_status.addItem(status_icons.icon(key), status_icons.title(key), key)
+            self.manual_status.setToolTip('Проставьте статус вручную, если автоматический не подходит; «Определять автоматически» возвращает расчёт по сроку и статусу договора')
+            g.addWidget(self.manual_status, r, 2, 1, 2)
             r += 1
-            for sig in (self.cmb_status.currentTextChanged, self.annual.toggled, self.start.dateChanged, self.end.dateChanged):
+            for sig in (self.cmb_status.currentTextChanged, self.annual.toggled, self.start.dateChanged, self.end.dateChanged, self.manual_status.currentIndexChanged):
                 sig.connect(self.refresh_badge)
             self.refresh_badge()
         else:
@@ -656,7 +662,8 @@ class ContractDialog(QDialog):
     def refresh_badge(self, *_):
         if self.mod not in VAT_MODS or not hasattr(self, 'status_badge'):
             return
-        key = cc.display_status(dict(status=self.cmb_status.currentText(), start_date=self.start.value(), end_date=self.end.value(), annual=self.annual.isChecked()))
+        key = cc.display_status(dict(status=self.cmb_status.currentText(), start_date=self.start.value(), end_date=self.end.value(), annual=self.annual.isChecked(),
+                                    status_manual=self.manual_status.currentData() or ''))
         self.status_badge.setText(f'<span style="color:{status_icons.color(key)}"><b>{status_icons.title(key)}</b></span>')
         self.status_badge.setToolTip('Завершён — статус «Завершён»; Просрочен — срок окончания прошёл; Годовой — отмечен «Годовой договор» или срок от 360 дней; иначе — В работе.')
 
@@ -672,7 +679,8 @@ class ContractDialog(QDialog):
                  subject=self.subject.text().strip(), start_date=self.start.value(), end_date=self.end.value(), amount=self.amount.value(), vat_included=int(self.vat_included.isChecked()),
                  vat_rate=self.vat_rate.value() if self.vat_included.isChecked() else 0, signed=int(self.signed.isChecked()), status=self.cmb_status.currentText(),
                  note=self.note.toPlainText().strip(), amount_from_acts=int(self.amount_from_acts.isChecked()) if self.mod in VAT_MODS else 0,
-                 annual=int(self.annual.isChecked()) if self.mod in VAT_MODS else 0)
+                 annual=int(self.annual.isChecked()) if self.mod in VAT_MODS else 0,
+                 status_manual=(self.manual_status.currentData() or '') if self.mod in VAT_MODS else '')
         if self.mod == 'le':
             v.update(direction=self.direction.currentText().strip() or DIRECTIONS[0], client_id=self.cmb_legal.currentData())
         else:
@@ -704,6 +712,8 @@ class ContractDialog(QDialog):
         self.signed.setChecked(bool(c['signed']))
         self.amount_from_acts.setChecked(bool(c.get('amount_from_acts')))
         self.annual.setChecked(bool(c.get('annual')))
+        if self.mod in VAT_MODS:
+            self.manual_status.setCurrentIndex(max(0, self.manual_status.findData(c.get('status_manual') or '')))
         self.note.setPlainText(c['note'] or '')
         self.refresh_party_info()
 
@@ -1145,6 +1155,17 @@ class ContractsRegistry(QWidget):
                 b.setProperty('type', kind)
             b.clicked.connect(fn)
             bar.addWidget(b)
+        if self.visual:
+            from PyQt6.QtWidgets import QMenu
+            status_btn = QPushButton('Статус…')
+            status_btn.setToolTip('Проставить визуальный статус выбранного договора вручную')
+            menu = QMenu(status_btn)
+            for key in cc.VISUAL_KEYS:
+                menu.addAction(status_icons.icon(key), status_icons.title(key)).triggered.connect(lambda _=False, k=key: self.set_status(k))
+            menu.addSeparator()
+            menu.addAction('Определять автоматически').triggered.connect(lambda: self.set_status(''))
+            status_btn.setMenu(menu)
+            bar.addWidget(status_btn)
         layout.addLayout(bar)
         self.table = make_table(['№ договора', 'Дата', 'Контрагент', 'Объект', 'Сумма', 'Оплачено', 'Актов', 'Подписан', 'Статус'], (110, 95, 230, 240, 120, 120, 60, 90))
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -1191,11 +1212,11 @@ class ContractsRegistry(QWidget):
                     "(c.estimate_id IS NULL AND p.estimate_id IS NULL AND p.owner_type=? AND p.owner_id=c.id))") if cc.cfg(self.mod)['estimate'] else \
                    "(SELECT coalesce(sum(p.amount),0) FROM payments p WHERE p.estimate_id IS NULL AND p.owner_type=? AND p.owner_id=c.id)"
         rows = db.fetchall(f"""SELECT c.id,c.contract_number,c.contract_date,{label},coalesce(nullif(c.object_address,''),c.object_name),c.amount,{paid_sql},
-            (SELECT count(*) FROM {c['acts']} WHERE contract_id=c.id),coalesce(c.signed,0),c.status,c.start_date,c.end_date,coalesce(c.annual,0)
+            (SELECT count(*) FROM {c['acts']} WHERE contract_id=c.id),coalesce(c.signed,0),c.status,c.start_date,c.end_date,coalesce(c.annual,0),coalesce(c.status_manual,'')
             FROM {c['contracts']} c {join} WHERE {cond} ORDER BY coalesce(c.year_num,99) ASC, coalesce(c.seq_num,0) ASC, c.contract_number ASC, c.id ASC LIMIT ? OFFSET ?""", (c['contracts'], *params, self.pager.size, self.pager.offset))
         self.table.setRowCount(len(rows))
-        for r, (rid, number, day, who, obj, amount_c, paid, n_acts, signed_c, status, start, end, annual) in enumerate(rows):
-            key = cc.display_status(dict(status=status, start_date=start, end_date=end, annual=annual)) if self.visual else ''
+        for r, (rid, number, day, who, obj, amount_c, paid, n_acts, signed_c, status, start, end, annual, manual) in enumerate(rows):
+            key = cc.display_status(dict(status=status, start_date=start, end_date=end, annual=annual, status_manual=manual)) if self.visual else ''
             vals = [number or 'Б/Н', date_short(day).rstrip('г.'), who, obj, money(amount_c), money(paid), n_acts, 'да' if signed_c else 'нет', status_icons.title(key) if key else status]
             for col, v in enumerate(vals):
                 cell = item(v, rid if col == 0 else None, right=col in (4, 5, 6))
@@ -1204,6 +1225,14 @@ class ContractsRegistry(QWidget):
                     cell.setForeground(QColor(status_icons.color(key)))
                 self.table.setItem(r, col, cell)
         self.total.setText(f'Найдено договоров: {total} · на сумму {money(amount)}')
+
+    def set_status(self, key):
+        cid = selected_data(self.table)
+        if not cid:
+            warn(self, 'Выберите договор в таблице.', 'Статус')
+            return
+        cc.set_visual_status(db, self.mod, cid, key)
+        self.load_data()
 
     def add(self):
         if ContractDialog(self.mod, parent=self).exec() is not None:

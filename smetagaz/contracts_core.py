@@ -93,7 +93,7 @@ def migrate(db):
         db.execute(f"""CREATE TRIGGER IF NOT EXISTS cleanup_act_docs_{c['acts']} AFTER DELETE ON {c['acts']} BEGIN
             DELETE FROM {c['docs']} WHERE scope='act' AND ref_id=old.id; END""")
     for c in MODS.values():                                            # НДС в актах, сумма договора по актам, признак годового договора
-        _add(db, c['contracts'], [('amount_from_acts', 'INTEGER DEFAULT 0'), ('annual', 'INTEGER DEFAULT 0')])
+        _add(db, c['contracts'], [('amount_from_acts', 'INTEGER DEFAULT 0'), ('annual', 'INTEGER DEFAULT 0'), ('status_manual', "TEXT DEFAULT ''")])
         _add(db, c['acts'], [('vat_rate', 'REAL DEFAULT 0')])
     _move_person_contracts_to_ip(db)
     if db.fetchone("SELECT 1 FROM sqlite_master WHERE type='table' AND name='notes'"):
@@ -380,12 +380,16 @@ def link_estimate(db, cid, eid, mod='smr'):
 # --- СТАТУСЫ ДОГОВОРОВ -------------------------------------------------------------------------
 
 STATUS_FILTERS = (('', 'Все статусы'), ('work', 'В работе'), ('overdue', 'Просрочен'), ('annual', 'Годовой'), ('done', 'Завершён'), ('cancelled', 'Расторгнут'))
+VISUAL_KEYS = ('work', 'overdue', 'annual', 'done', 'cancelled')
 ANNUAL_DAYS = 360                                  # договор на срок от 360 дней считается годовым, даже если признак не отмечен
 
 
 def display_status(row, today=None):
     """Ключ визуального статуса договора: 'done' (Завершён), 'cancelled' (Расторгнут), 'overdue' (срок окончания прошёл, а договор не завершён),
     'annual' (Годовой) или 'work' (В работе)."""
+    manual = row.get('status_manual') or ''
+    if manual in VISUAL_KEYS:                       # статус, проставленный вручную, сильнее автоматического
+        return manual
     status = row.get('status') or 'Действует'
     if status == 'Завершён':
         return 'done'
@@ -404,6 +408,12 @@ def status_condition(key, alias='c', today=None):
     """SQL-условие и параметры для фильтра реестра по визуальному статусу (как display_status)."""
     if not key:
         return '1=1', []
+    auto, params = _auto_status_condition(key, alias, today)
+    a = alias
+    return f"({a}.status_manual='{key}' OR (coalesce({a}.status_manual,'')='' AND {auto}))", params
+
+
+def _auto_status_condition(key, alias, today):
     a, day = alias, (today or date.today()).isoformat()
     active = f"coalesce({a}.status,'Действует') NOT IN ('Завершён','Расторгнут')"
     overdue = f"(coalesce({a}.end_date,'')<>'' AND {a}.end_date<?)"
@@ -744,7 +754,7 @@ def save_contract(db, mod, values, cid=None):
     """Сохраняет договор. Номер, не заданный вручную, назначается автоматически. Возвращает id."""
     c = cfg(mod)
     fields = ['contract_number', 'contract_date', 'object_name', 'object_address', 'subject', 'start_date', 'end_date', 'amount', 'vat_included', 'vat_rate', 'signed', 'status', 'note',
-              'amount_from_acts', 'annual']
+              'amount_from_acts', 'annual', 'status_manual']
     fields += ['direction', 'client_id', 'source_type', 'source_id'] if mod == 'le' else ['party_type', 'person_id', 'legal_id', 'estimate_id']
     data = {k: values.get(k) for k in fields if k in values}
     if mod == 'le' and not data.get('client_id'):
@@ -803,6 +813,13 @@ def save_act(db, mod, values, aid=None):
             aid = db.execute(f"INSERT INTO {c['acts']}(" + ','.join(data) + ') VALUES(' + ','.join('?' for _ in data) + ')', tuple(data.values())).lastrowid
         recalc_amount(db, mod, cid)
     return aid
+
+
+def set_visual_status(db, mod, cid, key):
+    """Проставляет визуальный статус вручную; пустой ключ возвращает автоматический расчёт."""
+    if key and key not in VISUAL_KEYS:
+        raise ValueError('Неизвестный статус')
+    db.execute(f"UPDATE {cfg(mod)['contracts']} SET status_manual=? WHERE id=?", (key or '', cid))
 
 
 def delete_act(db, mod, aid):

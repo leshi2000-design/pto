@@ -388,3 +388,56 @@ def test_volumes_tab_actions(db, monkeypatch):
     tab.make_estimate()
     assert vd.estimate_id(db, 'smr_contracts', d.contract_id)
     assert float(cc.contract(db, 'smr', d.contract_id)['amount']) == 60.0
+
+
+def test_date_typing_is_simple():
+    from PyQt6.QtCore import QDate, Qt
+    from PyQt6.QtTest import QTest
+    from smetagaz.date_widgets import DateEdit, parse_typed
+    from smetagaz.domain_widgets import OptionalDate
+    base = QDate(2026, 3, 5)
+    assert parse_typed('14102026', base) == QDate(2026, 10, 14)
+    assert parse_typed('141026', base) == QDate(2026, 10, 14)
+    assert parse_typed('14.10.26', base) == QDate(2026, 10, 14)
+    assert parse_typed('1.5', base) == QDate(2026, 5, 1)
+    assert parse_typed('31.02.2026', base) == QDate(2026, 2, 28)
+    assert parse_typed('2026-10-14', base) == QDate(2026, 10, 14)
+    assert parse_typed('45', base) is None and parse_typed('1413', base) is None
+    w = DateEdit(QDate(2026, 3, 5))
+    w.show()
+    w.setFocus()
+    QTest.keyClicks(w, '14102026')
+    assert w.date() == QDate(2026, 10, 14)
+    QTest.keyClicks(w, '.')                     # продолжение набора не ломает дату
+    w._reset_typing()
+    QTest.keyClicks(w, '7.8')
+    assert w.date() == QDate(2026, 8, 7)
+    o = OptionalDate()
+    o.show()
+    o.setFocus()
+    assert o.is_empty()
+    QTest.keyClicks(o, '01.02.27')
+    assert o.value() == '2027-02-01'
+    o._reset_typing()
+    QTest.keyClick(o, Qt.Key.Key_Delete)
+    assert o.is_empty()
+
+
+def test_manual_visual_status(db):
+    lid = make_legal(db)
+    cid = cc.save_contract(db, 'smr', dict(client_id=lid, party_type='legal', legal_id=lid, contract_date='2026-01-01', end_date='2026-02-01', amount=1))
+    row = lambda: cc.contract(db, 'smr', cid)
+    assert cc.display_status(row()) == 'overdue'
+    cc.set_visual_status(db, 'smr', cid, 'annual')
+    assert cc.display_status(row()) == 'annual'
+    cond, params = cc.status_condition('annual', 'c')
+    assert db.fetchone(f'SELECT count(*) FROM smr_contracts c WHERE {cond}', params)[0] == 1
+    cond, params = cc.status_condition('overdue', 'c')
+    assert db.fetchone(f'SELECT count(*) FROM smr_contracts c WHERE {cond}', params)[0] == 0
+    cc.save_contract(db, 'smr', dict(client_id=lid, party_type='legal', legal_id=lid, contract_date='2026-01-01', end_date='2026-02-01', amount=1, status_manual='done'), cid)
+    assert cc.display_status(row()) == 'done'
+    cc.set_visual_status(db, 'smr', cid, '')
+    assert cc.display_status(row()) == 'overdue'
+    import pytest
+    with pytest.raises(ValueError):
+        cc.set_visual_status(db, 'smr', cid, 'bogus')

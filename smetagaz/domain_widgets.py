@@ -14,7 +14,7 @@ class OptionalDate(DateEdit):
     def set_value(self,value):
         d=QDate.fromString(str(value or '')[:10],'yyyy-MM-dd');self.setDate(d if d.isValid() else self.minimumDate())
     def keyPressEvent(self,event):
-        if event.key() in (Qt.Key.Key_Delete,Qt.Key.Key_Backspace) and not self.lineEdit().hasSelectedText():self.setDate(self.minimumDate());return
+        if event.key() in (Qt.Key.Key_Delete,Qt.Key.Key_Backspace) and not getattr(self,'_typed',''):self.setDate(self.minimumDate());return
         super().keyPressEvent(event)
 
 class PhonesEditor(QWidget):
