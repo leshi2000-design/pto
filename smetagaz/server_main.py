@@ -77,12 +77,33 @@ def console(args):
     return 0
 
 
+def selftest():
+    """Проверка собранной программы: импортирует всё, что нужно окну сервера и расшифровке накладных. Пишет результат в selftest.txt (у exe без консоли нет вывода)."""
+    import importlib
+    import traceback
+    from pathlib import Path
+    report, ok = [], True
+    for name in ('PyQt6.QtCore', 'PyQt6.QtGui', 'PyQt6.QtWidgets', 'PyQt6.QtSvg', 'cryptography', 'openpyxl', 'docx', 'pypdf', 'pypdfium2', 'PIL', 'smetagaz.server_app', 'smetagaz.main_window'):
+        try:
+            importlib.import_module(name)
+            report.append(f'OK    {name}')
+        except Exception:
+            ok = False
+            report.append(f'FAIL  {name}\n{traceback.format_exc()}')
+    base = Path(sys.executable).parent if getattr(sys, 'frozen', False) else Path.cwd()
+    (base / 'selftest.txt').write_text(('ВСЁ В ПОРЯДКЕ\n' if ok else 'ЕСТЬ ОШИБКИ\n') + '\n'.join(report), encoding='utf-8')
+    return 0 if ok else 1
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description='ПТО Сервер')
     parser.add_argument('--console', action='store_true', help='без окна (для службы)')
     parser.add_argument('--port', type=int)
     parser.add_argument('--create-admin', nargs=2, metavar=('ЛОГИН', 'ПАРОЛЬ'))
+    parser.add_argument('--selftest', action='store_true', help='проверка сборки: все нужные модули на месте (результат в selftest.txt рядом с программой)')
     args = parser.parse_args(argv)
+    if args.selftest:
+        return selftest()
     if args.console:
         return console(args)
     from .server_app import run_window
