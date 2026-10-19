@@ -6,24 +6,17 @@ from datetime import date
 
 from PyQt6.QtCore import QDate, Qt, QTimer
 from PyQt6.QtGui import QAction, QColor, QKeySequence
-from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFileDialog,
-                             QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow,
-                             QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QSpinBox, QTableWidget,
-                             QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
+from PyQt6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFileDialog,
+                             QFormLayout, QFrame, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow,
+                             QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QSpinBox, QStackedWidget, QTableWidget,
+                             QTableWidgetItem, QVBoxLayout, QWidget)
 
 from . import __version__, exchange
 from .core import Finance, add_months, month_bounds, parse_date
 from .money import fmt
+from .theme import C, apply as apply_theme
 
-DARK = """
-QWidget{background:#1e1f24;color:#e6e6e6} QLineEdit,QComboBox,QDateEdit,QSpinBox,QPlainTextEdit,QTableWidget{background:#2a2c33;
-border:1px solid #3a3d46;border-radius:4px;padding:2px;gridline-color:#33363e}
-QHeaderView::section{background:#2f323b;color:#e6e6e6;padding:4px;border:0}
-QPushButton{background:#3b6fd4;color:white;border:0;border-radius:4px;padding:6px 12px}QPushButton:hover{background:#4a80e8}
-QTabBar::tab{padding:8px 16px;background:#26282e}QTabBar::tab:selected{background:#3b6fd4}
-QGroupBox{border:1px solid #3a3d46;margin-top:8px;padding-top:8px}QGroupBox::title{subcontrol-origin:margin;left:8px}
-"""
-RED, GREEN, AMBER = QColor("#d64545"), QColor("#2e9e5b"), QColor("#d9962b")
+RED, GREEN, AMBER = QColor(C["bad"]), QColor(C["good"]), QColor(C["warn"])
 
 
 def qd(d: date | str) -> QDate:
@@ -49,8 +42,7 @@ def make_table(headers: list[str]) -> QTableWidget:
     t.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
     t.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
     t.verticalHeader().setVisible(False)
-    t.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-    t.horizontalHeader().setStretchLastSection(True)
+    t.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
     t.setAlternatingRowColors(True)
     return t
 
@@ -67,7 +59,6 @@ def fill(t: QTableWidget, rows: list[list], ids: list | None = None, right: tupl
             if c == 0 and ids:
                 it.setData(Qt.ItemDataRole.UserRole, ids[r])
             t.setItem(r, c, it)
-    t.resizeColumnsToContents()
 
 
 def selected_id(t: QTableWidget):
@@ -203,7 +194,7 @@ class OverviewPage(Page):
             import pyqtgraph as pg
             self.chart = pg.PlotWidget()
             self.chart.setMinimumHeight(200)
-            self.chart.setBackground(None)
+            self.chart.setBackground(C["panel"])
             lay.addWidget(self.chart)
         except ImportError:
             self.chart = None
@@ -215,8 +206,8 @@ class OverviewPage(Page):
         inc, exp = self.fin.totals(a, b)
         self.summary.setText(
             f"<h2>Всего на счетах: {fmt(self.fin.total_balance(), cur)}</h2>"
-            f"<p>За {today:%m.%Y}: доходы <b style='color:#2e9e5b'>{fmt(inc, cur)}</b>, "
-            f"расходы <b style='color:#d64545'>{fmt(exp, cur)}</b>, итог <b>{fmt(inc - exp, cur)}</b></p>")
+            f"<p>За {today:%m.%Y}: доходы <b style='color:#15803D'>{fmt(inc, cur)}</b>, "
+            f"расходы <b style='color:#B91C1C'>{fmt(exp, cur)}</b>, итог <b>{fmt(inc - exp, cur)}</b></p>")
         rows, colors = [], {}
         for i, (bl, left) in enumerate(self.fin.reminders(today)):
             status = f"просрочен на {-left} дн." if left < 0 else ("сегодня" if left == 0 else f"через {left} дн.")
@@ -230,9 +221,9 @@ class OverviewPage(Page):
             data = self.fin.monthly(6)
             xs = list(range(len(data)))
             self.chart.addItem(pg.BarGraphItem(x=[x - 0.2 for x in xs], height=[d[1] / 100 for d in data], width=0.35,
-                                               brush="#2e9e5b"))
+                                               brush="#15803D"))
             self.chart.addItem(pg.BarGraphItem(x=[x + 0.2 for x in xs], height=[d[2] / 100 for d in data], width=0.35,
-                                               brush="#d64545"))
+                                               brush="#B91C1C"))
             self.chart.getAxis("bottom").setTicks([[(x, d[0]) for x, d in zip(xs, data)]])
             self.chart.setTitle("Доходы (зелёный) и расходы (красный) за 6 месяцев")
 
@@ -678,7 +669,7 @@ class BudgetPage(Page):
             pct = int(spent * 100 / limit) if limit else 0
             bar.setValue(min(pct, 100))
             bar.setFormat(f"{pct}%")
-            bar.setStyleSheet("QProgressBar::chunk{background:%s}" % ("#d64545" if pct >= 100 else "#d9962b" if pct >= 80 else "#2e9e5b"))
+            bar.setStyleSheet("QProgressBar::chunk{background:%s}" % ("#B91C1C" if pct >= 100 else "#B45309" if pct >= 80 else "#15803D"))
             self.table.setCellWidget(i, 4, bar)
 
     def set_limit(self):
@@ -710,7 +701,7 @@ class ReportsPage(Page):
         try:
             import pyqtgraph as pg
             self.chart = pg.PlotWidget()
-            self.chart.setBackground(None)
+            self.chart.setBackground(C["panel"])
             self.chart.setMinimumHeight(220)
             lay.addWidget(self.chart)
         except ImportError:
@@ -731,7 +722,7 @@ class ReportsPage(Page):
             data = self.fin.by_category(a, b, kind)[:12]
             xs = list(range(len(data)))
             self.chart.addItem(pg.BarGraphItem(x=xs, height=[d[1] / 100 for d in data], width=0.6,
-                                               brush="#2e9e5b" if kind == "income" else "#d64545"))
+                                               brush="#15803D" if kind == "income" else "#B91C1C"))
             self.chart.getAxis("bottom").setTicks([[(x, d[0][:10]) for x, d in zip(xs, data)]])
 
 
@@ -898,43 +889,111 @@ class SettingsPage(Page):
 
 # ===================================================================== окно
 class MainWindow(QMainWindow):
+    SUBTITLES = {"Обзор": "Остатки, напоминания и динамика за полгода",
+                 "Операции": "Доходы, расходы и переводы между счетами",
+                 "Коммунальные платежи": "Счета, показания счётчиков и тарифы",
+                 "Бюджет": "Месячные лимиты по категориям",
+                 "Отчёты": "Итоги и структура расходов за период",
+                 "Счета и настройки": "Счета, категории, регулярные операции, резервные копии"}
+
     def __init__(self, fin: Finance, backup_dir: str | None = None):
         super().__init__()
         self.fin, self.backup_dir = fin, backup_dir
         self.setWindowTitle(f"Домашняя бухгалтерия {__version__}")
-        self.resize(1100, 760)
-        self.tabs = QTabWidget()
-        self.setCentralWidget(self.tabs)
+        self.resize(1200, 780)
+        central = QWidget()
+        self.setCentralWidget(central)
+        root = QHBoxLayout(central)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        side = QFrame()
+        side.setObjectName("sidebar")
+        side.setFixedWidth(250)
+        sl = QVBoxLayout(side)
+        brand = QHBoxLayout()
+        brand.setContentsMargins(6, 4, 6, 4)
+        mark = QLabel("₽")
+        mark.setObjectName("logoMark")
+        mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        mark.setFixedSize(40, 40)
+        name = QLabel("Домашняя\nбухгалтерия")
+        name.setObjectName("brand")
+        brand.addWidget(mark)
+        brand.addWidget(name, 1)
+        sl.addLayout(brand)
+        add = QPushButton("Новая операция · Ctrl+N")
+        add.setProperty("type", "primary")
+        add.clicked.connect(lambda: self.pages[1][0].add())
+        sl.addWidget(add)
+        sl.addSpacing(12)
+
+        self.stack = QStackedWidget()
         self.pages = [(OverviewPage(self), "Обзор"), (TransactionsPage(self), "Операции"),
                       (UtilitiesPage(self), "Коммунальные платежи"), (BudgetPage(self), "Бюджет"),
                       (ReportsPage(self), "Отчёты"), (SettingsPage(self), "Счета и настройки")]
-        for p, title in self.pages:
-            self.tabs.addTab(p, title)
-        self.tabs.currentChanged.connect(lambda i: self.pages[i][0].refresh())
+        self.nav: list[QPushButton] = []
+        group = QButtonGroup(self)
+        for i, (page, title) in enumerate(self.pages):
+            if title in ("Операции", "Бюджет", "Счета и настройки"):
+                sec = QLabel({"Операции": "ДЕНЬГИ", "Бюджет": "АНАЛИТИКА", "Счета и настройки": "СИСТЕМА"}[title])
+                sec.setObjectName("navSection")
+                sl.addWidget(sec)
+            b = QPushButton(title)
+            b.setObjectName("navButton")
+            b.setCheckable(True)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.clicked.connect(lambda _=False, i=i: self.go(i))
+            group.addButton(b)
+            sl.addWidget(b)
+            self.nav.append(b)
+            self.stack.addWidget(page)
+        sl.addStretch(1)
+        root.addWidget(side)
+
+        content = QWidget()
+        cl = QVBoxLayout(content)
+        cl.setContentsMargins(0, 0, 0, 0)
+        cl.setSpacing(0)
+        header = QFrame()
+        header.setObjectName("pageHeader")
+        hl = QVBoxLayout(header)
+        hl.setContentsMargins(24, 17, 24, 8)
+        self.page_title = QLabel()
+        self.page_title.setObjectName("pageTitle")
+        self.page_subtitle = QLabel()
+        self.page_subtitle.setObjectName("pageSubtitle")
+        hl.addWidget(self.page_title)
+        hl.addWidget(self.page_subtitle)
+        cl.addWidget(header)
+        cl.addWidget(self.stack, 1)
+        root.addWidget(content, 1)
+        for p, _ in self.pages:
+            if p.layout():
+                p.layout().setContentsMargins(24, 8, 24, 16)
 
         act = QAction("Новая операция", self)
         act.setShortcut(QKeySequence("Ctrl+N"))
         act.triggered.connect(lambda: self.pages[1][0].add())
         self.addAction(act)
-        self.theme_dark = False
-        tm = self.menuBar().addMenu("Вид")
-        ta = QAction("Тёмная тема", self, checkable=True)
-        ta.toggled.connect(self.set_dark)
-        tm.addAction(ta)
-        self.statusBar().showMessage("Ctrl+N — новая операция")
         created = self.fin.run_recurring()
         if created:
             self.statusBar().showMessage(f"Создано регулярных операций: {created}", 8000)
-        self.refresh_all()
+        self.go(0)
         QTimer.singleShot(300, self.nag)
 
-    def set_dark(self, on):
-        QApplication.instance().setStyleSheet(DARK if on else "")
+    def go(self, i: int):
+        self.nav[i].setChecked(True)
+        self.stack.setCurrentIndex(i)
+        title = self.pages[i][1]
+        self.page_title.setText(title)
+        self.page_subtitle.setText(self.SUBTITLES.get(title, ""))
+        self.pages[i][0].refresh()
 
     def refresh_all(self):
-        self.pages[self.tabs.currentIndex()][0].refresh()
+        self.pages[self.stack.currentIndex()][0].refresh()
         # остальные обновятся при переключении; обзор — всегда актуален
-        if self.tabs.currentIndex() != 0:
+        if self.stack.currentIndex() != 0:
             self.pages[0][0].refresh()
 
     def nag(self):
@@ -957,6 +1016,7 @@ class MainWindow(QMainWindow):
 def main(argv=None):
     from .exchange import default_db_path
     app = QApplication(argv or sys.argv)
+    apply_theme(app)
     path = default_db_path()
     fin = Finance(path)
     win = MainWindow(fin, backup_dir=str(path.parent / "backups"))

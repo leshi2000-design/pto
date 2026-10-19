@@ -33,12 +33,21 @@ python run_homefin.py
 - Резервная копия и восстановление из копии, тёмная тема (меню «Вид»), Ctrl+N — новая операция.
 - Деньги хранятся в копейках (целые числа), без ошибок округления.
 
+## Сборка .exe (Windows)
+
+Запустите `build_exe_windows.bat` — получится один файл `dist\HomeFinance.exe`, Python на целевом компьютере не нужен.
+
+## Оформление
+
+Светлая тема в стиле ПТО: боковое меню, белые карточки, акцент `#1B6B62` (`theme.py`).
+
 ## Структура
 
 - `core.py` — база и вся логика (без GUI, покрыта тестами `tests/test_homefin_core.py`)
 - `exchange.py` — CSV/Excel, текстовый отчёт
 - `gui.py` — интерфейс
 - `money.py` — работа с суммами
+- `theme.py` — светлое оформление
 
 Тесты: `QT_QPA_PLATFORM=offscreen python -m pytest tests/test_homefin_*.py --noconftest`
 (`--noconftest` нужен, потому что общий `tests/conftest.py` относится к другому проекту в этом репозитории).
