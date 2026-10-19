@@ -16,15 +16,19 @@ hidden = (collect_submodules('smetagaz') + collect_submodules('pyqtgraph') + col
           ['pandas', 'bs4', 'lxml', 'lxml.etree', 'requests', 'docx', 'reportlab', 'cryptography', 'PyQt6', 'PyQt6.sip', 'PyQt6.QtCore', 'PyQt6.QtGui', 'PyQt6.QtWidgets', 'PyQt6.QtSvg', 'PyQt6.QtPrintSupport', 'pypdfium2', 'PIL'])
 datas = [('smetagaz/assets', 'smetagaz/assets')] + collect_data_files('PyQt6', includes=['Qt6/translations/qt_ru.qm', 'Qt6/translations/qtbase_ru.qm']) + collect_data_files('docx') + collect_data_files('reportlab') + collect_data_files('pyqtgraph') + collect_data_files('pypdfium2')
 
-# Один общий анализ для обоих исполняемых файлов: ПТО и ПТО Сервер получают одинаковый набор модулей и библиотек (PyQt6 и др.).
-# Раньше сервер собирался отдельным анализом, и в нём могли не оказаться модули PyQt6 («No module named PyQt6»).
-a = Analysis(['run.py', 'run_server.py'], pathex=['.'], datas=datas, hiddenimports=hidden, excludes=['tkinter', 'matplotlib', 'scipy', 'pytest'])
+# По умолчанию собирается только программа (PTO.exe). ПТО Сервер добавляется переменной окружения PTO_WITH_SERVER=1 (build_windows.bat server).
+# Оба файла собираются одним анализом, чтобы набор модулей (в том числе PyQt6) был одинаковым.
+with_server = os.environ.get('PTO_WITH_SERVER') == '1'
+a = Analysis(['run.py'] + (['run_server.py'] if with_server else []), pathex=['.'], datas=datas, hiddenimports=hidden, excludes=['tkinter', 'matplotlib', 'scipy', 'pytest'])
 icon = 'smetagaz/assets/icon.ico' if os.path.exists('smetagaz/assets/icon.ico') else None
 pyz = PYZ(a.pure)
 hooks = [s for s in a.scripts if s[0].startswith('pyi_rth')]            # служебные скрипты PyInstaller нужны обоим файлам
 script_main = [s for s in a.scripts if s[0] == 'run']
-script_server = [s for s in a.scripts if s[0] == 'run_server']
-assert script_main and script_server, 'в сборке нет run.py или run_server.py'
+assert script_main, 'в сборке нет run.py'
 exe = EXE(pyz, hooks + script_main, [], exclude_binaries=True, name='PTO', console=False, icon=icon)
-exe_server = EXE(pyz, hooks + script_server, [], exclude_binaries=True, name='PTO_Server', console=False, icon=icon)
-coll = COLLECT(exe, exe_server, a.binaries, a.datas, name='ПТО')
+exes = [exe]
+if with_server:
+    script_server = [s for s in a.scripts if s[0] == 'run_server']
+    assert script_server, 'в сборке нет run_server.py'
+    exes.append(EXE(pyz, hooks + script_server, [], exclude_binaries=True, name='PTO_Server', console=False, icon=icon))
+coll = COLLECT(*exes, a.binaries, a.datas, name='ПТО')
