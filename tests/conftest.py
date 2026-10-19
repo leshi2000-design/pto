@@ -32,7 +32,8 @@ def wait_job(owner, timeout=15):
         time.sleep(0.01)
 
 
-SKIP_IN_REMOTE = {'test_close_hides_window_at_once_and_backs_up_in_background': 'в сетевом клиенте копии при закрытии не делаются',
+SKIP_IN_REMOTE = {'test_volumes_tab_in_cards': 'карточки создаются без закрытия и держат блокировки при подмене базы в сетевом режиме',
+                  'test_close_hides_window_at_once_and_backs_up_in_background': 'в сетевом клиенте копии при закрытии не делаются',
                   'test_two_clients_isolation_and_audit_user': 'сервер внутри сервера: имя в журнале ставят оба и перебивают друг друга',
                   'test_local_mode_next_to_server_signs_its_changes': 'проверяет саму локальную базу рядом с сервером',
                   'test_local_side_by_side_poll_changes': 'проверяет саму локальную базу рядом с сервером',
