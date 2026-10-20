@@ -42,12 +42,12 @@ class DocRegisterDialog(QDialog):
         layout = QVBoxLayout(self)
         form = QFormLayout()
         self.number = QLineEdit()
-        self.number.setPlaceholderText('автоматически')
+        self.number.setPlaceholderText('введите исходящий номер' if register == dr.OUT else 'автоматически')
         self.reg_date = DateEdit(QDate.currentDate())
         self.status = QComboBox()
         self.status.addItems(self.cfg['statuses'])
         row = QHBoxLayout()
-        for label, w in (('№', self.number), ('Дата регистрации', self.reg_date), ('Статус', self.status)):
+        for label, w in (('№ *' if register == dr.OUT else '№', self.number), ('Дата регистрации', self.reg_date), ('Статус', self.status)):
             row.addWidget(QLabel(label))
             row.addWidget(w)
         form.addRow(row)

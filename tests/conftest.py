@@ -32,7 +32,8 @@ def wait_job(owner, timeout=15):
         time.sleep(0.01)
 
 
-SKIP_IN_REMOTE = {'test_documents_view_and_menu': 'подменяет базу в модулях — несовместимо с сетевым режимом',
+SKIP_IN_REMOTE = {'test_manual_contract_number_is_not_overwritten': 'подменяет базу в модулях — несовместимо с сетевым режимом',
+                  'test_documents_view_and_menu': 'подменяет базу в модулях — несовместимо с сетевым режимом',
                   'test_orders_ui_flow': 'подменяет базу в модулях — несовместимо с сетевым режимом',
                   'test_menu_section_workers': 'подменяет базу в модулях — несовместимо с сетевым режимом',
                   'test_volumes_tab_actions': 'подменяет базу в модулях — несовместимо с сетевым режимом',

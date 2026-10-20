@@ -164,19 +164,21 @@ def test_document_registers(db):
     from smetagaz import docs_register_domain as dr
     from datetime import date
     out = dict(register='out', reg_date='2026-10-01', correspondent='Горгаз', subject='Запрос технических условий', due_date='2026-10-10')
-    o1 = dr.save_doc(db, out)
-    o2 = dr.save_doc(db, dict(out, subject='Второе письмо'))
+    with pytest.raises(ValueError, match='номер'):
+        dr.save_doc(db, out)                                          # номер исходящего вводится вручную
+    o1 = dr.save_doc(db, dict(out, reg_number='Исх-01/26'))
+    o2 = dr.save_doc(db, dict(out, reg_number='125-А', subject='Второе письмо'))
     p1 = dr.save_doc(db, dict(register='order', reg_date='2026-10-02', subject='О назначении ответственного за газовое хозяйство', executor='Иванов', due_date='2026-10-05'))
     d1 = dr.save_doc(db, dict(register='other', reg_date='2026-10-02', correspondent='Госпромнадзор', subject='Лицензия на монтаж', kind='Лицензия / разрешение', due_date='2026-11-01'))
     d2 = dr.save_doc(db, dict(register='other', reg_date='2026-10-02', subject='Страховой полис', kind='Страховой полис', due_date='2026-09-01'))
     nums = [dr.get_doc(db, i)['reg_number'] for i in (o1, o2, p1, d1, d2)]
-    assert nums == ['Исх-01/26', 'Исх-02/26', 'Пр-01/26', 'Д-01/26', 'Д-02/26']
+    assert nums == ['Исх-01/26', '125-А', 'Пр-01/26', 'Д-01/26', 'Д-02/26']
     with pytest.raises(ValueError):
         dr.save_doc(db, dict(out, reg_number='Исх-01/26'))
     with pytest.raises(ValueError, match='кому'):
-        dr.save_doc(db, dict(out, correspondent=''))
+        dr.save_doc(db, dict(out, reg_number='5', correspondent=''))
     with pytest.raises(ValueError):
-        dr.save_doc(db, dict(out, due_date='2026-09-01'))
+        dr.save_doc(db, dict(out, reg_number='6', due_date='2026-09-01'))
     with pytest.raises(ValueError):
         dr.save_doc(db, dict(register='order', reg_date='2026-10-02', subject='x', status='Отправлен'))        # статус чужого журнала
     today = date(2026, 10, 20)
@@ -192,7 +194,7 @@ def test_document_registers(db):
     # прежний журнал исходящих юрлиц попадает в «Регистрацию исходящих»
     db.execute("INSERT INTO le_outgoing(reg_number, reg_date, recipient, subject) VALUES('7','2026-02-01','ООО Ромашка','Письмо о сроках')")
     assert dr.import_outgoing(db) == 1 and dr.import_outgoing(db) == 0
-    assert dr.listing(db, 'out', search='ромашка')[1][0]['reg_number'] == 'Исх-07/26'
+    assert dr.listing(db, 'out', search='ромашка')[1][0]['reg_number'] == '7'                 # прежний номер сохраняется как есть
 
 
 def test_migrate_from_4_7_journal(db):
@@ -223,6 +225,7 @@ def test_documents_view_and_menu(db, monkeypatch):
     for reg in (dr.OUT, dr.ORDER, dr.OTHER):
         d = dv.DocRegisterDialog(reg)
         d.subject.setPlainText('Тест')
+        d.number.setText('77')
         d.correspondent.setText('Кто-то')
         assert d.values()['register'] == reg
         d.save()

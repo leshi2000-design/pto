@@ -468,3 +468,26 @@ def test_manual_visual_status(db):
     import pytest
     with pytest.raises(ValueError):
         cc.set_visual_status(db, 'smr', cid, 'bogus')
+
+
+def test_manual_contract_number_is_not_overwritten(db, monkeypatch):
+    import sys
+    for name, mod in list(sys.modules.items()):
+        if name.startswith('smetagaz') and getattr(mod, 'db', None) is not None and mod.db.__class__.__name__ == 'DatabaseManager':
+            monkeypatch.setattr(mod, 'db', db, raising=False)
+    from PyQt6.QtCore import QDate
+    from PyQt6.QtTest import QTest
+    from smetagaz import counterparty_ui as cu
+    for mod in ('smr', 'ip', 'fl', 'to'):
+        d = cu.ContractDialog(mod)
+        auto = d.number.text()
+        assert auto
+        d.number.clear()
+        QTest.keyClicks(d.number, 'MY-17')                  # ввод вручную
+        d.date.setDate(QDate(2026, 5, 5))                    # переход в другую графу меняет дату — номер остаётся
+        d.date.setDate(QDate(2027, 1, 2))
+        assert d.number.text() == 'MY-17', mod
+        d.number.clear()
+        d.number.textEdited.emit('')                         # пустой номер снова назначается автоматически
+        d.date.setDate(QDate(2026, 6, 6))
+        assert d.number.text() and d.number.text() != 'MY-17'

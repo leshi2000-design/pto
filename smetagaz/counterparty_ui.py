@@ -456,6 +456,7 @@ class ContractDialog(QDialog):
         r = 0
         self.number = QLineEdit()
         self.number.setPlaceholderText('назначается автоматически')
+        self.number.textEdited.connect(self.number_typed)
         self.date = OptionalDate()
         self.date.dateChanged.connect(lambda *_: self.refresh_number())
         g.addWidget(QLabel('Номер договора'), r, 0)
@@ -667,9 +668,13 @@ class ContractDialog(QDialog):
         self.status_badge.setText(f'<span style="color:{status_icons.color(key)}"><b>{status_icons.title(key)}</b></span>')
         self.status_badge.setToolTip('Завершён — статус «Завершён»; Просрочен — срок окончания прошёл; Годовой — отмечен «Годовой договор» или срок от 360 дней; иначе — В работе.')
 
+    def number_typed(self, text):
+        """Пользователь ввёл номер сам: автоматическая подстановка по дате больше его не трогает (пустое поле возвращает автоматику)."""
+        self.auto_number = not text.strip()
+
     def refresh_number(self):
-        if self.contract_id or self.number.text().strip() and not getattr(self, 'auto_number', False):
-            return
+        if self.contract_id or (self.number.text().strip() and not getattr(self, 'auto_number', False)):
+            return                              # номер, введённый вручную, больше не подменяется
         _s, _y, number = cc.next_number(db, self.mod, self.date.value())
         self.number.setText(number)
         self.auto_number = True

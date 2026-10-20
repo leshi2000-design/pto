@@ -64,6 +64,8 @@ def save_doc(db, values, did=None):
     party = str(values.get('correspondent') or '').strip()
     if register == OUT and not party:
         raise ValueError('Укажите, кому адресован документ')
+    if register == OUT and not str(values.get('reg_number') or '').strip():
+        raise ValueError('Введите исходящий номер: номера исходящих вы присваиваете сами')
     if not str(values.get('subject') or '').strip():
         raise ValueError('Укажите содержание документа')
     due = values.get('due_date') or ''
@@ -166,13 +168,9 @@ def import_outgoing(db):
                 continue
             day = day[:10] if _day(day) else date.today().isoformat()
             yy = _day(day).year
-            if number.isdigit():
-                seq = int(number)
-                cand = f'{REGISTERS[OUT]["prefix"]}-{seq:02d}/{yy % 100:02d}'
-                if db.fetchone("SELECT 1 FROM doc_register WHERE reg_number=? AND year_num=? AND register='out'", (cand, yy)):
-                    seq, yy, cand = next_number(db, OUT, day)
-            else:
-                seq, yy, cand = next_number(db, OUT, day)
+            seq, cand = None, number.strip() or '—'
+            if db.fetchone("SELECT 1 FROM doc_register WHERE reg_number=? AND year_num=? AND register='out'", (cand, yy)):
+                cand = f'{cand} (дубль {oid})'          # прежний номер сохраняется как есть; повтор помечается
             db.execute('INSERT INTO doc_register(register,direction,seq_num,year_num,reg_number,reg_date,kind,correspondent,client_id,subject,note,status,legacy_outgoing_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
                        (OUT, 'Исходящий', seq, yy, cand, day, 'Письмо', recipient or '—', client_id, subject or '—', note, 'Отправлен', oid))
             n += 1
