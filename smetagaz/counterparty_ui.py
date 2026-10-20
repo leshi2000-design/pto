@@ -1536,18 +1536,16 @@ SmrView = CounterpartyView
 
 
 class LegalDirectoryView(QWidget):
-    """Справочник юрлиц: реквизиты, досье (договоры и оплаты) по двойному щелчку, реестр банков, журнал исходящей документации."""
+    """Справочник юрлиц: реквизиты, досье (договоры и оплаты) по двойному щелчку, реестр банков (исходящая документация — в модуле «Документы»)."""
     def __init__(self):
         super().__init__()
         from .banks_view import BanksRegistry
-        from .legal_entities_view import OutgoingLogRegistry
         layout = QVBoxLayout(self)
         self.tabs = QTabWidget()
         self.directory = LegalClientsRegistry()
         self.banks = BanksRegistry()
         self.tabs.addTab(self.directory, 'Справочник юрлиц')
         self.tabs.addTab(self.banks, 'Реестр банков')
-        self.tabs.addTab(OutgoingLogRegistry(), 'Исходящая документация')
         layout.addWidget(self.tabs)
         self.tabs.currentChanged.connect(lambda *_: self.load_data())
 

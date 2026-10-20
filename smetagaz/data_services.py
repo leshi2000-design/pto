@@ -30,6 +30,7 @@ SOURCES = {
  'smr_acts': ('Акт СМР','act_number',['act_number','description','note']),
  'notes': ('Заметка','title',['title','body']),
  'le_outgoing': ('Исходящий документ','reg_number',['reg_number','recipient','subject','note']),
+ 'doc_register': ('Документ журнала','reg_number',['reg_number','doc_number','correspondent','subject','executor','note']),
 }
 
 def initialize(db):
@@ -112,6 +113,10 @@ def initialize(db):
         numbering_migrate(db)
         from .staff_domain import migrate as staff_migrate
         staff_migrate(db)
+        from .orders_domain import migrate as orders_migrate
+        orders_migrate(db)
+        from .docs_register_domain import migrate as docs_register_migrate
+        docs_register_migrate(db)
         from .incoming_domain import migrate as incoming_migrate
         incoming_migrate(db)
         from .secret_store import migrate as secret_migrate

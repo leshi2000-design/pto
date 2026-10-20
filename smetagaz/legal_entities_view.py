@@ -810,6 +810,5 @@ class LegalEntitiesView(QWidget):
         tabs.addTab(ContractsRegistry('le'), "Договоры")
         tabs.addTab(ActsRegistry('le'), "Акты")
         tabs.addTab(Directory(), "Справочник юрлиц")
-        tabs.addTab(OutgoingLogRegistry(), "Исходящая документация")
         tabs.addTab(TemplatesTab('le'), "Шаблоны и теги")
         layout.addWidget(tabs)

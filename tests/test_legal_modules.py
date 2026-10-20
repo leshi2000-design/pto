@@ -1,5 +1,6 @@
 """СМР (физлица), Прочие (юр.лица) и перенос договоров юрлиц между разделами."""
 import sys
+from smetagaz import main_window, orders_view, docs_view, counterparty_ui, contract_card, gsn_card, volumes_ui, legal_entities_view  # noqa: F401  (до подмены базы в тестах)
 
 import pytest
 

@@ -173,8 +173,8 @@ def test_sidebar_sections_notes_and_gsn_catalog(env, monkeypatch):
     assert not hasattr(w, 'nav_groups') and not hasattr(w, 'toggle_group')            # сворачиваемых деревьев нет
     from PyQt6.QtWidgets import QLabel, QFrame
     headers = [l.text() for l in w.findChildren(QLabel, 'navSection')]
-    assert headers == ['УСЛУГИ', 'СМЕТЫ', 'ЮРЛИЦА', 'ДОПОЛНИТЕЛЬНО', 'СПРАВОЧНИКИ']
-    assert len(w.findChildren(QFrame, 'navDivider')) == 7                              # линия перед каждым разделом, кроме первого
+    assert headers == ['УСЛУГИ', 'СМЕТЫ', 'ЮРЛИЦА', 'РАБОТНИКИ', 'ДОПОЛНИТЕЛЬНО', 'СПРАВОЧНИКИ']
+    assert len(w.findChildren(QFrame, 'navDivider')) == 9                              # линия перед каждым разделом, кроме первого
     for i, b in enumerate(w.tabs_buttons):
         w.switch_tab(i, b)
     # заметки в «Сегодня»

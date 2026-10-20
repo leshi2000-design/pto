@@ -32,7 +32,10 @@ def wait_job(owner, timeout=15):
         time.sleep(0.01)
 
 
-SKIP_IN_REMOTE = {'test_volumes_tab_actions': 'подменяет базу в модулях — несовместимо с сетевым режимом',
+SKIP_IN_REMOTE = {'test_documents_view_and_menu': 'подменяет базу в модулях — несовместимо с сетевым режимом',
+                  'test_orders_ui_flow': 'подменяет базу в модулях — несовместимо с сетевым режимом',
+                  'test_menu_section_workers': 'подменяет базу в модулях — несовместимо с сетевым режимом',
+                  'test_volumes_tab_actions': 'подменяет базу в модулях — несовместимо с сетевым режимом',
                   'test_theme_toggle_releases_hidden_views': 'подменяет базу в модулях — несовместимо с сетевым режимом',
                   'test_volumes_tab_in_cards': 'карточки создаются без закрытия и держат блокировки при подмене базы в сетевом режиме',
                   'test_close_hides_window_at_once_and_backs_up_in_background': 'в сетевом клиенте копии при закрытии не делаются',

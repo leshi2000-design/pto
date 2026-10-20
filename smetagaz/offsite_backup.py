@@ -20,7 +20,7 @@ PREFIX = 'smetagaz_'
 DEFAULT_KEEP = 12
 DEFAULT_INTERVAL_H = 24
 VERIFY_DAYS = 30
-KEY_TABLES = ('estimates', 'contracts', 'gsv_projects', 'le_contracts', 'smr_contracts', 'to_contracts', 'ip_contracts', 'fl_contracts', 'payments', 'notes', 'settings')
+KEY_TABLES = ('estimates', 'work_orders', 'contracts', 'gsv_projects', 'le_contracts', 'smr_contracts', 'to_contracts', 'ip_contracts', 'fl_contracts', 'payments', 'notes', 'settings')
 
 
 def settings(db):

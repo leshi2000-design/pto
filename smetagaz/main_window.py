@@ -42,6 +42,8 @@ from .audit_view import AuditView
 from .error_view import ErrorLogView
 from .staff_view import StaffView
 from .counterparty_ui import CounterpartyView, LegalDirectoryView
+from .orders_view import OrdersView
+from .docs_view import DocumentsView
 from .ip_view import IpView
 from .incoming_view import IncomingView, process_files
 from . import error_log
@@ -91,14 +93,16 @@ NAV_SECTIONS = [
     ('Сметы', ['estimates']),
     ('Клиенты', ['clients']),
     ('Юрлица', ['legal_entities', 'smr', 'to', 'le_other']),
-    ('Дополнительно', ['welders', 'writeoff', 'calculators', 'stats', 'exec', 'workspace', 'staff', 'incoming', 'audit', 'errors']),
+    ('Работники', ['orders', 'welders', 'staff']),
+    ('Документы', ['docs']),
+    ('Дополнительно', ['writeoff', 'calculators', 'stats', 'exec', 'workspace', 'incoming', 'audit', 'errors']),
     ('Справочники', ['gsv_catalog', 'gsn_catalog', 'materials']),
     ('Настройки', ['settings']),
 ]
 KNOWN_TABS = [
     ("tasks", "Сегодня"), ("gsv", "Проекты ГСВ"), ("contracts", "Монтаж ГСВ"), ("gsn", "Монтаж ГСН"), ("ip", "СМР (ИП)"), ("fl", "СМР (физлица)"), ("le_other", "Прочие (юр.лица)"),
     ("clients", "Клиенты"), ("legal_entities", "Справочник юрлиц"), ("smr", "СМР (юрлица)"), ("to", "ТО (юрлица)"),
-    ("welders", "Сварщики"), ("writeoff", "Списание"), ("calculators", "Калькуляторы"), ("stats", "Статистика"),
+    ("orders", "Наряды"), ("docs", "Документы"), ("welders", "Сварщики"), ("writeoff", "Списание"), ("calculators", "Калькуляторы"), ("stats", "Статистика"),
     ("estimates", "Реестр смет"), ("exec", "Исполнительная док."), ("workspace", "Все реестры · быстрый обзор"), ("audit", "Журнал и корзина"), ("errors", "Журнал ошибок"), ("staff", "Сотрудники и бригады"), ("incoming", "Входящие документы"),
     ("gsv_catalog", "Справочники ГСВ"), ("gsn_catalog", "Справочник ГСН"), ("materials", "Справочник"),
     ("settings", "Настройки"),
@@ -179,6 +183,8 @@ class MainWindow(QMainWindow):
             "ip": IpView,
             "fl": lambda: CounterpartyView("fl"),
             "le_other": lambda: CounterpartyView("le"),
+            "orders": OrdersView,
+            "docs": DocumentsView,
             "exec": ExecutiveDocsView,
             "materials": MaterialsView,
             "welders": WeldersView,
