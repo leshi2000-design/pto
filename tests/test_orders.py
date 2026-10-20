@@ -160,27 +160,54 @@ def test_permit_requires_fields_and_has_own_numbering(db, tmp_path):
     assert 'НАРЯД-ДОПУСК № Д-01/26' in text and 'Газоопасные работы' in text and 'Петров' in text and 'Колодец ГРП' in text and 'с 02.10.2026 09:00' in text
 
 
-def test_document_register(db):
+def test_document_registers(db):
     from smetagaz import docs_register_domain as dr
-    vals = dict(direction='Входящий', reg_date='2026-10-01', correspondent='Горгаз', subject='Запрос технических условий', due_date='2026-10-10')
-    d1 = dr.save_doc(db, vals)
-    d2 = dr.save_doc(db, dict(vals, direction='Исходящий', subject='Ответ'))
-    d3 = dr.save_doc(db, dict(vals, subject='Ещё одно'))
-    assert [dr.get_doc(db, i)['reg_number'] for i in (d1, d2, d3)] == ['Вх-01/26', 'Исх-01/26', 'Вх-02/26']
-    with pytest.raises(ValueError):
-        dr.save_doc(db, dict(vals, reg_number='Вх-01/26'))
-    with pytest.raises(ValueError):
-        dr.save_doc(db, dict(vals, due_date='2026-09-01'))
     from datetime import date
-    total, rows = dr.listing(db, overdue_only=True, today=date(2026, 10, 20))
-    assert total == 3 and all(r['overdue'] for r in rows)
-    dr.set_status(db, d1, 'Исполнен')
-    assert dr.listing(db, overdue_only=True, today=date(2026, 10, 20))[0] == 2
-    assert dr.listing(db, search='ответ')[0] == 1 and dr.listing(db, direction='Входящий')[0] == 2
-    # прежний журнал исходящих юрлиц
+    out = dict(register='out', reg_date='2026-10-01', correspondent='Горгаз', subject='Запрос технических условий', due_date='2026-10-10')
+    o1 = dr.save_doc(db, out)
+    o2 = dr.save_doc(db, dict(out, subject='Второе письмо'))
+    p1 = dr.save_doc(db, dict(register='order', reg_date='2026-10-02', subject='О назначении ответственного за газовое хозяйство', executor='Иванов', due_date='2026-10-05'))
+    d1 = dr.save_doc(db, dict(register='other', reg_date='2026-10-02', correspondent='Госпромнадзор', subject='Лицензия на монтаж', kind='Лицензия / разрешение', due_date='2026-11-01'))
+    d2 = dr.save_doc(db, dict(register='other', reg_date='2026-10-02', subject='Страховой полис', kind='Страховой полис', due_date='2026-09-01'))
+    nums = [dr.get_doc(db, i)['reg_number'] for i in (o1, o2, p1, d1, d2)]
+    assert nums == ['Исх-01/26', 'Исх-02/26', 'Пр-01/26', 'Д-01/26', 'Д-02/26']
+    with pytest.raises(ValueError):
+        dr.save_doc(db, dict(out, reg_number='Исх-01/26'))
+    with pytest.raises(ValueError, match='кому'):
+        dr.save_doc(db, dict(out, correspondent=''))
+    with pytest.raises(ValueError):
+        dr.save_doc(db, dict(out, due_date='2026-09-01'))
+    with pytest.raises(ValueError):
+        dr.save_doc(db, dict(register='order', reg_date='2026-10-02', subject='x', status='Отправлен'))        # статус чужого журнала
+    today = date(2026, 10, 20)
+    assert dr.listing(db, 'out', today=today)[0] == 2 and dr.listing(db, 'order')[0] == 1 and dr.listing(db, 'other')[0] == 2
+    assert dr.problems(db, 'out', today) == 2 and dr.problems(db, 'order', today) == 1 and dr.problems(db, 'other', today) == 1       # полис истёк
+    rows = {r['id']: r for r in dr.listing(db, 'other', today=today)[1]}
+    assert rows[d1]['state'] == 'soon' and rows[d2]['state'] == 'overdue'                                                             # лицензия истекает в течение 30 дней
+    dr.set_status(db, o1, 'Получен ответ')
+    assert dr.problems(db, 'out', today) == 1
+    with pytest.raises(ValueError):
+        dr.set_status(db, p1, 'Отправлен')
+    assert dr.listing(db, 'out', search='второе')[0] == 1
+    # прежний журнал исходящих юрлиц попадает в «Регистрацию исходящих»
     db.execute("INSERT INTO le_outgoing(reg_number, reg_date, recipient, subject) VALUES('7','2026-02-01','ООО Ромашка','Письмо о сроках')")
     assert dr.import_outgoing(db) == 1 and dr.import_outgoing(db) == 0
-    assert dr.listing(db, search='ромашка')[1][0]['reg_number'] == 'Исх-07/26'
+    assert dr.listing(db, 'out', search='ромашка')[1][0]['reg_number'] == 'Исх-07/26'
+
+
+def test_migrate_from_4_7_journal(db):
+    """Записи журнала версии 4.7.0 (без колонки register) раскладываются по новым журналам."""
+    db.execute('DROP TABLE doc_register')
+    db.execute("""CREATE TABLE doc_register(id INTEGER PRIMARY KEY, direction TEXT NOT NULL DEFAULT 'Входящий', seq_num INTEGER, year_num INTEGER, reg_number TEXT NOT NULL, reg_date TEXT NOT NULL,
+        kind TEXT DEFAULT 'Письмо', doc_number TEXT DEFAULT '', doc_date TEXT DEFAULT '', correspondent TEXT NOT NULL DEFAULT '', client_id INTEGER, subject TEXT DEFAULT '',
+        executor TEXT DEFAULT '', due_date TEXT DEFAULT '', status TEXT NOT NULL DEFAULT 'Зарегистрирован', answer_ref TEXT DEFAULT '', file_path TEXT DEFAULT '', note TEXT DEFAULT '',
+        legacy_outgoing_id INTEGER UNIQUE)""")
+    db.execute("INSERT INTO doc_register(direction,seq_num,year_num,reg_number,reg_date,correspondent,subject) VALUES('Исходящий',1,2026,'Исх-01/26','2026-10-01','А','x')")
+    db.execute("INSERT INTO doc_register(direction,seq_num,year_num,reg_number,reg_date,correspondent,subject,status) VALUES('Входящий',1,2026,'Вх-01/26','2026-10-01','Б','y','На исполнении')")
+    from smetagaz import docs_register_domain as dr
+    dr.migrate(db)
+    assert db.fetchone("SELECT register FROM doc_register WHERE reg_number='Исх-01/26'")[0] == 'out'
+    assert db.fetchone("SELECT register,status FROM doc_register WHERE reg_number='Вх-01/26'") == ('other', 'Действует')
 
 
 def test_documents_view_and_menu(db, monkeypatch):
@@ -188,7 +215,18 @@ def test_documents_view_and_menu(db, monkeypatch):
     from smetagaz import docs_view as dv, main_window as mw, counterparty_ui as cu
     v = dv.DocumentsView()
     names = [v.tabs.tabText(i) for i in range(v.tabs.count())]
-    assert names == ['Регистрация документов', 'Исходящие юрлицам']
-    v.load_data()
+    assert names == ['Регистрация исходящих', 'Регистрация приказов', 'Прочие документы по организации']
+    for i in range(v.tabs.count()):
+        v.tabs.setCurrentIndex(i)
+        v.load_data()
+    from smetagaz import docs_register_domain as dr
+    for reg in (dr.OUT, dr.ORDER, dr.OTHER):
+        d = dv.DocRegisterDialog(reg)
+        d.subject.setPlainText('Тест')
+        d.correspondent.setText('Кто-то')
+        assert d.values()['register'] == reg
+        d.save()
+        assert d.doc_id
+        dv.DocRegisterDialog(reg, d.doc_id)
     assert 'Исходящая документация' not in [cu.LegalDirectoryView().tabs.tabText(i) for i in range(cu.LegalDirectoryView().tabs.count())]
     assert dict(mw.NAV_SECTIONS)['Документы'] == ['docs']

@@ -1,6 +1,4 @@
-"""Модуль «Документы»: журнал регистрации входящих, исходящих и внутренних документов и журнал исходящих писем юрлицам."""
-from datetime import date
-
+"""Модуль «Документы»: регистрация исходящих, регистрация приказов, прочие документы по организации."""
 from PyQt6.QtCore import Qt, QDate
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton,
@@ -13,7 +11,21 @@ from .dates import display_date
 from .domain_widgets import OptionalDate
 from .pagebar import PageBar
 
-STATUS_COLORS = {'Зарегистрирован': '#0284C7', 'На исполнении': '#D97706', 'Исполнен': '#15803D', 'В архиве': '#8A8886'}
+STATUS_COLORS = {'Зарегистрирован': '#0284C7', 'Отправлен': '#D97706', 'Получен ответ': '#15803D', 'Действует': '#15803D', 'Исполнен': '#0284C7', 'Отменён': '#8A8886', 'В архиве': '#8A8886'}
+# подписи полей и видимость по журналам: (подпись, показывать)
+FIELDS = {
+    dr.OUT: dict(party='Кому адресован', client=True, doc_number=None, doc_date=None, executor='Подготовил', due='Срок ответа', answer='Ответ получен (№, дата)', problem='ответ не получен в срок',
+                 title='Исходящий документ', new='Зарегистрировать исходящий'),
+    dr.ORDER: dict(party=None, client=False, doc_number=None, doc_date='Вступает в силу', executor='Ответственный за исполнение', due='Срок исполнения', answer='С приказом ознакомлены',
+                   problem='срок исполнения прошёл', title='Приказ', new='Зарегистрировать приказ'),
+    dr.OTHER: dict(party='Организация / орган', client=True, doc_number='Номер документа', doc_date='Дата документа', executor='Ответственный за хранение', due='Действует до', answer=None,
+                   problem='срок действия истёк', title='Документ организации', new='Зарегистрировать документ'),
+}
+COLUMNS = {
+    dr.OUT: ['Рег. №', 'Дата', 'Вид', 'Кому', 'Содержание', 'Подготовил', 'Срок ответа', 'Статус', 'Файл'],
+    dr.ORDER: ['Рег. №', 'Дата', 'Вид приказа', 'Содержание', 'Ответственный', 'Срок', 'Статус', 'Файл'],
+    dr.OTHER: ['Рег. №', 'Дата рег.', 'Вид', 'Организация / орган', 'Содержание', 'Номер, дата документа', 'Действует до', 'Статус', 'Файл'],
+}
 
 
 def _iso(d):
@@ -21,65 +33,63 @@ def _iso(d):
 
 
 class DocRegisterDialog(QDialog):
-    def __init__(self, doc_id=None, parent=None, direction='Входящий'):
+    def __init__(self, register, doc_id=None, parent=None):
         super().__init__(parent)
-        self.doc_id = doc_id
-        self.setWindowTitle('Документ журнала регистрации')
-        self.resize(640, 640)
+        self.register, self.doc_id = register, doc_id
+        self.cfg, self.f = dr.REGISTERS[register], FIELDS[register]
+        self.setWindowTitle(self.f['title'])
+        self.resize(640, 560)
         layout = QVBoxLayout(self)
         form = QFormLayout()
-        self.direction = QComboBox()
-        self.direction.addItems(dr.DIRECTIONS)
-        self.direction.setCurrentText(direction)
         self.number = QLineEdit()
         self.number.setPlaceholderText('автоматически')
         self.reg_date = DateEdit(QDate.currentDate())
+        self.status = QComboBox()
+        self.status.addItems(self.cfg['statuses'])
         row = QHBoxLayout()
-        for label, w in (('Направление', self.direction), ('№', self.number), ('Дата регистрации', self.reg_date)):
+        for label, w in (('№', self.number), ('Дата регистрации', self.reg_date), ('Статус', self.status)):
             row.addWidget(QLabel(label))
             row.addWidget(w)
         form.addRow(row)
         self.kind = QComboBox()
         self.kind.setEditable(True)
-        self.kind.addItems(dr.KINDS)
-        self.doc_number = QLineEdit()
-        self.doc_number.setPlaceholderText('номер документа у корреспондента')
-        self.doc_date = OptionalDate()
-        row = QHBoxLayout()
-        for label, w in (('Вид', self.kind), ('Номер документа', self.doc_number), ('Дата документа', self.doc_date)):
-            row.addWidget(QLabel(label))
-            row.addWidget(w)
-        form.addRow(row)
+        self.kind.addItems(self.cfg['kinds'])
+        form.addRow('Вид', self.kind)
         self.correspondent = QLineEdit()
-        self.correspondent.setPlaceholderText('От кого получен / кому адресован')
-        form.addRow('Корреспондент', self.correspondent)
-        from .legal_entities_view import populate_client_combo
+        self.doc_number = QLineEdit()
+        self.doc_date = OptionalDate()
         self.client = QComboBox()
+        from .legal_entities_view import populate_client_combo
         populate_client_combo(self.client)
-        form.addRow('Юрлицо (из справочника)', self.client)
+        if self.f['party']:
+            form.addRow(self.f['party'], self.correspondent)
+        if self.f['client']:
+            form.addRow('Юрлицо из справочника', self.client)
+        if self.f['doc_number']:
+            row = QHBoxLayout()
+            row.addWidget(self.doc_number, 1)
+            row.addWidget(QLabel(self.f['doc_date']))
+            row.addWidget(self.doc_date)
+            form.addRow(self.f['doc_number'], row)
+        elif self.f['doc_date']:
+            form.addRow(self.f['doc_date'], self.doc_date)
         self.subject = QTextEdit()
-        self.subject.setFixedHeight(80)
+        self.subject.setFixedHeight(90)
         form.addRow('Содержание', self.subject)
         self.executor = QLineEdit()
-        self.executor.setPlaceholderText('Ответственный исполнитель')
+        form.addRow(self.f['executor'], self.executor)
         self.due = OptionalDate()
-        self.status = QComboBox()
-        self.status.addItems(dr.STATUSES)
-        row = QHBoxLayout()
-        for label, w in (('Исполнитель', self.executor), ('Срок исполнения', self.due), ('Статус', self.status)):
-            row.addWidget(QLabel(label))
-            row.addWidget(w)
-        form.addRow(row)
+        form.addRow(self.f['due'], self.due)
         self.answer = QLineEdit()
-        self.answer.setPlaceholderText('Номер ответного документа / ссылка на связанный документ')
-        form.addRow('Ответ / связь', self.answer)
+        if self.f['answer']:
+            form.addRow(self.f['answer'], self.answer)
         self.file = QLineEdit()
         pick = QPushButton('Выбрать файл…')
         pick.clicked.connect(self.pick_file)
         row = QHBoxLayout()
         row.addWidget(self.file, 1)
         row.addWidget(pick)
-        form.addRow('Файл', row)
+        form.addRow('Файл / скан', row)
         self.note = QLineEdit()
         form.addRow('Примечание', self.note)
         layout.addLayout(form)
@@ -102,61 +112,69 @@ class DocRegisterDialog(QDialog):
             self.file.setText(path)
 
     def fill(self, d):
-        self.direction.setCurrentText(d['direction'])
         self.number.setText(d['reg_number'])
         self.reg_date.setDate(QDate.fromString(d['reg_date'], 'yyyy-MM-dd'))
+        self.status.setCurrentText(d['status'])
         self.kind.setCurrentText(d['kind'] or '')
+        self.correspondent.setText(d['correspondent'])
         self.doc_number.setText(d['doc_number'] or '')
         self.doc_date.set_value(d['doc_date'])
-        self.correspondent.setText(d['correspondent'])
         from .legal_entities_view import populate_client_combo
         populate_client_combo(self.client, d['client_id'])
         self.subject.setPlainText(d['subject'] or '')
         self.executor.setText(d['executor'] or '')
         self.due.set_value(d['due_date'])
-        self.status.setCurrentText(d['status'])
         self.answer.setText(d['answer_ref'] or '')
         self.file.setText(d['file_path'] or '')
         self.note.setText(d['note'] or '')
 
     def values(self):
-        return dict(direction=self.direction.currentText(), reg_number=self.number.text().strip(), reg_date=_iso(self.reg_date.date()), kind=self.kind.currentText().strip(),
-                    doc_number=self.doc_number.text(), doc_date=self.doc_date.value(), correspondent=self.correspondent.text(), client_id=self.client.currentData(),
-                    subject=self.subject.toPlainText(), executor=self.executor.text(), due_date=self.due.value(), status=self.status.currentText(), answer_ref=self.answer.text(),
-                    file_path=self.file.text(), note=self.note.text())
+        party = self.correspondent.text().strip()
+        if not party and self.client.currentData() and self.client.currentText():
+            party = self.client.currentText()
+        return dict(register=self.register, reg_number=self.number.text().strip(), reg_date=_iso(self.reg_date.date()), status=self.status.currentText(), kind=self.kind.currentText().strip(),
+                    correspondent=party, client_id=self.client.currentData() if self.f['client'] else None, doc_number=self.doc_number.text(), doc_date=self.doc_date.value(),
+                    subject=self.subject.toPlainText(), executor=self.executor.text(), due_date=self.due.value(), answer_ref=self.answer.text(), file_path=self.file.text(), note=self.note.text())
 
     def save(self):
         try:
             self.doc_id = dr.save_doc(db, self.values(), self.doc_id)
         except Exception as e:
-            QMessageBox.warning(self, 'Регистрация документа', str(e))
+            QMessageBox.warning(self, self.f['title'], str(e))
             return
         self.accept()
 
 
-class DocRegisterTab(QWidget):
-    def __init__(self):
+class RegisterTab(QWidget):
+    def __init__(self, register):
         super().__init__()
+        self.register = register
+        self.cfg, self.f = dr.REGISTERS[register], FIELDS[register]
         layout = QVBoxLayout(self)
         bar = QHBoxLayout()
         self.search = QLineEdit()
-        self.search.setPlaceholderText('Номер, корреспондент, содержание, исполнитель…')
-        self.direction = QComboBox()
-        self.direction.addItem('Все документы', '')
-        for d in dr.DIRECTIONS:
-            self.direction.addItem(d, d)
+        self.search.setPlaceholderText('Номер, вид, содержание, исполнитель…')
         self.status = QComboBox()
         self.status.addItem('Все статусы', '')
-        for s in dr.STATUSES:
+        for s in self.cfg['statuses']:
             self.status.addItem(s, s)
-        self.overdue = QCheckBox('Просроченные')
+        self.problems = QCheckBox('Просроченные' if register != dr.OTHER else 'Истёкшие')
         bar.addWidget(self.search, 1)
-        for w in (self.direction, self.status, self.overdue):
-            bar.addWidget(w)
+        bar.addWidget(self.status)
+        bar.addWidget(self.problems)
         layout.addLayout(bar)
         bar = QHBoxLayout()
-        for text, fn, kind in (('Зарегистрировать', self.add, 'primary'), ('Изменить', self.edit, ''), ('Исполнен', self.done, ''), ('Открыть файл', self.open_file, ''),
-                               ('Подтянуть исходящие юрлиц', self.import_outgoing, ''), ('Удалить', self.delete, 'danger')):
+        buttons = [(self.f['new'], self.add, 'primary'), ('Изменить', self.edit, ''), ('Открыть файл', self.open_file, '')]
+        if register == dr.OUT:
+            buttons.append(('Получен ответ', lambda: self.mark('Получен ответ'), ''))
+        elif register == dr.ORDER:
+            buttons.append(('Исполнен', lambda: self.mark('Исполнен'), ''))
+            buttons.append(('Отменить приказ', lambda: self.mark('Отменён'), ''))
+        buttons.append(('В архив', lambda: self.mark('В архиве'), ''))
+        if register == dr.OUT:
+            buttons.append(('Подтянуть исходящие юрлиц', self.import_outgoing, ''))
+        buttons.append(('Удалить', self.delete, 'danger'))
+        for text, fn, kind in buttons:
             b = QPushButton(text)
             if kind:
                 b.setProperty('type', kind)
@@ -164,14 +182,16 @@ class DocRegisterTab(QWidget):
             bar.addWidget(b)
         bar.addStretch()
         layout.addLayout(bar)
-        self.table = QTableWidget(0, 9)
-        self.table.setHorizontalHeaderLabels(['Рег. №', 'Дата', 'Вид', 'Корреспондент', 'Содержание', 'Исполнитель', 'Срок', 'Статус', 'Файл'])
+        headers = COLUMNS[register]
+        self.table = QTableWidget(0, len(headers))
+        self.table.setHorizontalHeaderLabels(headers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
-        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
-        for col, width in ((0, 100), (1, 95), (2, 120), (3, 190), (5, 140), (6, 95), (7, 120), (8, 60)):
-            self.table.setColumnWidth(col, width)
+        self.table.horizontalHeader().setSectionResizeMode(headers.index('Содержание'), QHeaderView.ResizeMode.Stretch)
+        for col in range(len(headers)):
+            if col != headers.index('Содержание'):
+                self.table.setColumnWidth(col, 60 if headers[col] == 'Файл' else 120 if headers[col] in ('Рег. №', 'Статус') else 150)
         self.table.doubleClicked.connect(self.edit)
         layout.addWidget(self.table, 1)
         self.pager = PageBar(100)
@@ -180,35 +200,43 @@ class DocRegisterTab(QWidget):
         self.info = QLabel('')
         layout.addWidget(self.info)
         self.search.textChanged.connect(self.filter_changed)
-        self.direction.currentIndexChanged.connect(self.filter_changed)
         self.status.currentIndexChanged.connect(self.filter_changed)
-        self.overdue.toggled.connect(self.filter_changed)
+        self.problems.toggled.connect(self.filter_changed)
 
     def filter_changed(self, *_):
         self.pager.reset()
         self.load_data()
 
+    def row_values(self, d):
+        subject = (d['subject'] or '').replace('\n', ' ')
+        short = subject[:140] + ('…' if len(subject) > 140 else '')
+        file = '●' if d['file_path'] else ''
+        who = d['client_name'] or d['correspondent']
+        if self.register == dr.OUT:
+            return [d['reg_number'], display_date(d['reg_date']), d['kind'], who, short, d['executor'], display_date(d['due_date']), d['status'], file], 6, 7
+        if self.register == dr.ORDER:
+            return [d['reg_number'], display_date(d['reg_date']), d['kind'], short, d['executor'], display_date(d['due_date']), d['status'], file], 5, 6
+        doc = ' '.join(x for x in (d['doc_number'], display_date(d['doc_date']) if d['doc_date'] else '') if x)
+        return [d['reg_number'], display_date(d['reg_date']), d['kind'], who, short, doc, display_date(d['due_date']), d['status'], file], 6, 7
+
     def load_data(self, *_):
-        total, rows = dr.listing(db, self.search.text().strip(), self.direction.currentData() or '', self.status.currentData() or '', self.overdue.isChecked(),
-                                 self.pager.size, self.pager.offset)
+        total, rows = dr.listing(db, self.register, self.search.text().strip(), self.status.currentData() or '', self.problems.isChecked(), self.pager.size, self.pager.offset)
         self.pager.set_total(total)
         self.table.setRowCount(len(rows))
         for r, d in enumerate(rows):
-            subject = (d['subject'] or '').replace('\n', ' ')
-            vals = [d['reg_number'], display_date(d['reg_date']), f'{d["direction"]} · {d["kind"]}' if d['kind'] else d['direction'], d['client_name'] or d['correspondent'],
-                    subject[:140] + ('…' if len(subject) > 140 else ''), d['executor'], display_date(d['due_date']), d['status'], '●' if d['file_path'] else '']
+            vals, due_col, status_col = self.row_values(d)
             for c, v in enumerate(vals):
                 it = QTableWidgetItem(str(v))
                 if c == 0:
                     it.setData(Qt.ItemDataRole.UserRole, d['id'])
-                if c == 7:
+                if c == status_col:
                     it.setForeground(QColor(STATUS_COLORS.get(d['status'], '#605E5C')))
-                if c == 6 and d['overdue']:
-                    it.setForeground(QColor('#DC2626'))
-                    it.setToolTip('Срок исполнения прошёл')
+                if c == due_col and d['state']:
+                    it.setForeground(QColor('#DC2626' if d['state'] == 'overdue' else '#D97706'))
+                    it.setToolTip(self.f['problem'] if d['state'] == 'overdue' else 'Срок действия истекает в течение 30 дней')
                 self.table.setItem(r, c, it)
-        overdue = dr.listing(db, overdue_only=True, limit=1)[0]
-        self.info.setText(f'Документов: {total}' + (f' · просрочено исполнением: {overdue}' if overdue else ''))
+        bad = dr.problems(db, self.register)
+        self.info.setText(f'Записей: {total}' + (f' · {self.f["problem"]}: {bad}' if bad else ''))
 
     def selected(self):
         r = self.table.currentRow()
@@ -216,18 +244,18 @@ class DocRegisterTab(QWidget):
         return it.data(Qt.ItemDataRole.UserRole) if it else None
 
     def add(self):
-        if DocRegisterDialog(parent=self, direction=self.direction.currentData() or 'Входящий').exec():
+        if DocRegisterDialog(self.register, parent=self).exec():
             self.load_data()
 
     def edit(self, *_):
         did = self.selected()
-        if did and DocRegisterDialog(did, self).exec():
+        if did and DocRegisterDialog(self.register, did, self).exec():
             self.load_data()
 
-    def done(self):
+    def mark(self, status):
         did = self.selected()
         if did:
-            dr.set_status(db, did, 'Исполнен')
+            dr.set_status(db, did, status)
             self.load_data()
 
     def delete(self):
@@ -240,7 +268,7 @@ class DocRegisterTab(QWidget):
         did = self.selected()
         d = dr.get_doc(db, did) if did else None
         if not d or not d['file_path']:
-            QMessageBox.information(self, 'Файл', 'У выбранного документа нет прикреплённого файла.')
+            QMessageBox.information(self, 'Файл', 'У выбранной записи нет прикреплённого файла.')
             return
         from .gsvm_tabs import open_file
         open_file(self, d['file_path'])
@@ -254,14 +282,17 @@ class DocRegisterTab(QWidget):
 class DocumentsView(QWidget):
     def __init__(self):
         super().__init__()
-        from .legal_entities_view import OutgoingLogRegistry
+        if db.get_setting('docs_outgoing_imported', '') != '1':      # журнал исходящих юрлиц переносится сюда один раз
+            try:
+                dr.import_outgoing(db)
+                db.set_setting('docs_outgoing_imported', '1')
+            except Exception:
+                pass
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.tabs = QTabWidget()
-        self.register = DocRegisterTab()
-        self.outgoing = OutgoingLogRegistry()
-        self.tabs.addTab(self.register, 'Регистрация документов')
-        self.tabs.addTab(self.outgoing, 'Исходящие юрлицам')
+        for register in (dr.OUT, dr.ORDER, dr.OTHER):
+            self.tabs.addTab(RegisterTab(register), dr.REGISTERS[register]['title'])
         layout.addWidget(self.tabs)
         self.tabs.currentChanged.connect(lambda *_: self.load_data())
 

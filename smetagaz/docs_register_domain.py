@@ -1,12 +1,23 @@
-"""Журнал регистрации документов: входящие, исходящие и внутренние документы с номером, сроком исполнения, исполнителем и статусом."""
-from datetime import date, datetime
+"""Модуль «Документы»: три журнала регистрации — исходящие, приказы и прочие документы по организации. У каждого свой номер, набор видов и статусов."""
+from datetime import date, datetime, timedelta
 
-DIRECTIONS = ('Входящий', 'Исходящий', 'Внутренний')
-PREFIX = {'Входящий': 'Вх', 'Исходящий': 'Исх', 'Внутренний': 'Вн'}
-KINDS = ('Письмо', 'Договор', 'Акт', 'Заявление', 'Приказ', 'Претензия', 'Счёт', 'Справка', 'Разрешение / допуск', 'Другое')
-STATUSES = ('Зарегистрирован', 'На исполнении', 'Исполнен', 'В архиве')
-OPEN = ('Зарегистрирован', 'На исполнении')
+OUT, ORDER, OTHER = 'out', 'order', 'other'
+REGISTERS = {
+    OUT: dict(title='Регистрация исходящих', prefix='Исх', direction='Исходящий',
+              kinds=('Письмо', 'Ответ на обращение', 'Претензия', 'Коммерческое предложение', 'Заявка', 'Акт сверки', 'Уведомление', 'Другое'),
+              statuses=('Зарегистрирован', 'Отправлен', 'Получен ответ', 'В архиве'), open=('Зарегистрирован', 'Отправлен')),
+    ORDER: dict(title='Регистрация приказов', prefix='Пр', direction='Внутренний',
+                kinds=('По основной деятельности', 'По личному составу', 'Об охране труда', 'О назначении ответственных', 'О командировке', 'Об отпуске', 'Другой'),
+                statuses=('Действует', 'Исполнен', 'Отменён', 'В архиве'), open=('Действует',)),
+    OTHER: dict(title='Прочие документы по организации', prefix='Д', direction='Внутренний',
+                kinds=('Устав / учредительные', 'Свидетельство о регистрации', 'Лицензия / разрешение', 'Аттестат / допуск организации', 'Протокол', 'Доверенность', 'Страховой полис',
+                       'Договор аренды', 'Справка / выписка', 'Другое'),
+                statuses=('Действует', 'В архиве'), open=('Действует',)),
+}
+WARN_DAYS = 30
 ISO = '%Y-%m-%d'
+# совместимость с версией 4.7.0
+DIRECTIONS = ('Входящий', 'Исходящий', 'Внутренний')
 
 
 def migrate(db):
@@ -14,8 +25,13 @@ def migrate(db):
         reg_number TEXT NOT NULL, reg_date TEXT NOT NULL, kind TEXT DEFAULT 'Письмо', doc_number TEXT DEFAULT '', doc_date TEXT DEFAULT '', correspondent TEXT NOT NULL DEFAULT '',
         client_id INTEGER REFERENCES le_clients(id) ON DELETE SET NULL, subject TEXT DEFAULT '', executor TEXT DEFAULT '', due_date TEXT DEFAULT '',
         status TEXT NOT NULL DEFAULT 'Зарегистрирован', answer_ref TEXT DEFAULT '', file_path TEXT DEFAULT '', note TEXT DEFAULT '', legacy_outgoing_id INTEGER UNIQUE)""")
+    if 'register' not in {r[1] for r in db.fetchall('PRAGMA table_info(doc_register)')}:
+        db.execute("ALTER TABLE doc_register ADD COLUMN register TEXT NOT NULL DEFAULT 'other'")
+        db.execute("UPDATE doc_register SET register='out' WHERE direction='Исходящий'")
+        db.execute("UPDATE doc_register SET status='Действует' WHERE register='other' AND status IN ('Зарегистрирован','На исполнении','Исполнен')")
     db.execute('CREATE INDEX IF NOT EXISTS idx_doc_register_date ON doc_register(reg_date)')
     db.execute('CREATE INDEX IF NOT EXISTS idx_doc_register_due ON doc_register(due_date)')
+    db.execute('CREATE INDEX IF NOT EXISTS idx_doc_register_reg ON doc_register(register,year_num)')
 
 
 def _day(value):
@@ -25,52 +41,59 @@ def _day(value):
         return None
 
 
-def next_number(db, direction, reg_date=None):
-    """Номер в пределах направления и года: «Вх-12/26», «Исх-05/26», «Вн-03/26»."""
-    if direction not in DIRECTIONS:
-        raise ValueError('Неизвестное направление документа')
+def _cfg(register):
+    if register not in REGISTERS:
+        raise ValueError('Неизвестный журнал')
+    return REGISTERS[register]
+
+
+def next_number(db, register, reg_date=None):
+    """Номер в пределах журнала и года: исходящие «Исх-05/26», приказы «Пр-03/26», прочие «Д-02/26»."""
+    cfg = _cfg(register)
     yy = (_day(reg_date) or date.today()).year
-    seq = (db.fetchone('SELECT coalesce(max(seq_num),0) FROM doc_register WHERE direction=? AND year_num=?', (direction, yy))[0] or 0) + 1
-    return seq, yy, f'{PREFIX[direction]}-{seq:02d}/{yy % 100:02d}'
+    seq = (db.fetchone('SELECT coalesce(max(seq_num),0) FROM doc_register WHERE register=? AND year_num=?', (register, yy))[0] or 0) + 1
+    return seq, yy, f'{cfg["prefix"]}-{seq:02d}/{yy % 100:02d}'
 
 
 def save_doc(db, values, did=None):
-    direction = values.get('direction') or 'Входящий'
-    if direction not in DIRECTIONS:
-        raise ValueError('Неизвестное направление документа')
+    register = values.get('register') or OUT
+    cfg = _cfg(register)
     reg = _day(values.get('reg_date'))
     if not reg:
         raise ValueError('Укажите дату регистрации')
-    if not str(values.get('correspondent') or '').strip():
-        raise ValueError('Укажите корреспондента: от кого получен или кому адресован документ')
+    party = str(values.get('correspondent') or '').strip()
+    if register == OUT and not party:
+        raise ValueError('Укажите, кому адресован документ')
     if not str(values.get('subject') or '').strip():
         raise ValueError('Укажите содержание документа')
     due = values.get('due_date') or ''
-    if due and (not _day(due) or _day(due) < reg):
+    if due and not _day(due):
+        raise ValueError('Неверный срок')
+    if due and register != OTHER and _day(due) < reg:
         raise ValueError('Срок исполнения раньше даты регистрации')
-    status = values.get('status') or 'Зарегистрирован'
-    if status not in STATUSES:
+    status = values.get('status') or cfg['statuses'][0]
+    if status not in cfg['statuses']:
         raise ValueError('Неизвестный статус')
     number = str(values.get('reg_number') or '').strip()
     with db.transaction():
         seq = None
         if not number:
-            seq, yy, number = next_number(db, direction, values['reg_date'])
+            seq, yy, number = next_number(db, register, values['reg_date'])
         else:
             yy = reg.year
-        if db.fetchone('SELECT id FROM doc_register WHERE reg_number=? AND year_num=? AND id<>?', (number, yy, did or 0)):
+        if db.fetchone('SELECT id FROM doc_register WHERE reg_number=? AND year_num=? AND register=? AND id<>?', (number, yy, register, did or 0)):
             raise ValueError(f'Номер {number} за {yy} год уже занят')
-        row = (direction, seq, yy, number, values['reg_date'], values.get('kind') or 'Письмо', str(values.get('doc_number') or '').strip(), values.get('doc_date') or '',
-               str(values['correspondent']).strip(), values.get('client_id') or None, str(values['subject']).strip(), str(values.get('executor') or '').strip(), due, status,
+        row = (register, cfg['direction'], seq, yy, number, values['reg_date'], values.get('kind') or cfg['kinds'][0], str(values.get('doc_number') or '').strip(),
+               values.get('doc_date') or '', party, values.get('client_id') or None, str(values['subject']).strip(), str(values.get('executor') or '').strip(), due, status,
                str(values.get('answer_ref') or '').strip(), str(values.get('file_path') or '').strip(), str(values.get('note') or '').strip())
-        cols = 'direction,seq_num,year_num,reg_number,reg_date,kind,doc_number,doc_date,correspondent,client_id,subject,executor,due_date,status,answer_ref,file_path,note'
+        cols = 'register,direction,seq_num,year_num,reg_number,reg_date,kind,doc_number,doc_date,correspondent,client_id,subject,executor,due_date,status,answer_ref,file_path,note'
         if did:
             old = db.fetchone('SELECT seq_num FROM doc_register WHERE id=?', (did,))
             if seq is None and old:
-                row = (row[0], old[0], *row[2:])
+                row = (*row[:2], old[0], *row[3:])
             db.execute('UPDATE doc_register SET ' + ','.join(f'{c}=?' for c in cols.split(',')) + ' WHERE id=?', (*row, did))
             return did
-        return db.execute(f'INSERT INTO doc_register({cols}) VALUES({",".join("?" * 17)})', row).lastrowid
+        return db.execute(f'INSERT INTO doc_register({cols}) VALUES({",".join("?" * 18)})', row).lastrowid
 
 
 def get_doc(db, did):
@@ -84,43 +107,57 @@ def delete_doc(db, did):
 
 
 def set_status(db, did, status):
-    if status not in STATUSES:
+    d = get_doc(db, did)
+    if not d or status not in _cfg(d['register'])['statuses']:
         raise ValueError('Неизвестный статус')
     db.execute('UPDATE doc_register SET status=? WHERE id=?', (status, did))
 
 
-def is_overdue(status, due_date, today=None):
+def state(register, status, due_date, today=None):
+    """'overdue' — срок прошёл (для «Прочих» — документ истёк), 'soon' — срок действия «Прочих» истекает в течение 30 дней, иначе ''."""
     d = _day(due_date)
-    return bool(d) and status in OPEN and d < (today or date.today())
+    if not d or status not in _cfg(register)['open']:
+        return ''
+    today = today or date.today()
+    if d < today:
+        return 'overdue'
+    if register == OTHER and d <= today + timedelta(days=WARN_DAYS):
+        return 'soon'
+    return ''
 
 
-def listing(db, search='', direction='', status='', overdue_only=False, limit=100, offset=0, today=None):
-    """(всего, строки) — строки словарями; поиск по номеру, корреспонденту, содержанию, исполнителю."""
-    where, params = ['1=1'], []
+def listing(db, register, search='', status='', problems_only=False, limit=100, offset=0, today=None):
+    """(всего, строки словарями) журнала; problems_only — только просроченные / истёкшие."""
+    cfg = _cfg(register)
+    where, params = ['d.register=?'], [register]
     if search:
-        where.append("LOWER(coalesce(d.reg_number,'')||' '||coalesce(d.doc_number,'')||' '||coalesce(d.correspondent,'')||' '||coalesce(d.subject,'')||' '||coalesce(d.executor,'')) LIKE ?")
+        where.append("LOWER(coalesce(d.reg_number,'')||' '||coalesce(d.doc_number,'')||' '||coalesce(d.correspondent,'')||' '||coalesce(d.subject,'')||' '||coalesce(d.executor,'')||' '||coalesce(d.kind,'')) LIKE ?")
         params.append(f'%{search.casefold()}%')
-    if direction:
-        where.append('d.direction=?')
-        params.append(direction)
     if status:
         where.append('d.status=?')
         params.append(status)
-    if overdue_only:
-        where.append("d.status IN ('Зарегистрирован','На исполнении') AND coalesce(d.due_date,'')<>'' AND d.due_date<?")
-        params.append((today or date.today()).isoformat())
+    if problems_only:
+        marks = ','.join('?' for _ in cfg['open'])
+        where.append(f"d.status IN ({marks}) AND coalesce(d.due_date,'')<>'' AND d.due_date<?")
+        params += [*cfg['open'], (today or date.today()).isoformat()]
     cond = ' AND '.join(where)
     total = db.fetchone(f'SELECT count(*) FROM doc_register d WHERE {cond}', params)[0]
     cur = db.execute(f"""SELECT d.*,coalesce(c.name,'') AS client_name FROM doc_register d LEFT JOIN le_clients c ON c.id=d.client_id WHERE {cond}
-        ORDER BY coalesce(d.year_num,0) DESC, d.direction, coalesce(d.seq_num,0) DESC, d.id DESC LIMIT ? OFFSET ?""", (*params, limit, offset))
+        ORDER BY coalesce(d.year_num,0) DESC, coalesce(d.seq_num,0) DESC, d.id DESC LIMIT ? OFFSET ?""", (*params, limit, offset))
     rows = [dict(zip([c[0] for c in cur.description], r)) for r in cur.fetchall()]
     for r in rows:
-        r['overdue'] = is_overdue(r['status'], r['due_date'], today)
+        r['state'] = state(register, r['status'], r['due_date'], today)
     return total, rows
 
 
+def problems(db, register, today=None):
+    return listing(db, register, problems_only=True, limit=1, today=today)[0]
+
+
 def import_outgoing(db):
-    """Исходящие юрлиц (прежний журнал) попадают в общий журнал; повторный вызов добавляет только новые. Возвращает число добавленных."""
+    """Прежний журнал исходящих юрлиц (le_outgoing) попадает в «Регистрацию исходящих»; повторный вызов добавляет только новые. Возвращает число добавленных."""
+    if not db.fetchone("SELECT 1 FROM sqlite_master WHERE type='table' AND name='le_outgoing'"):
+        return 0
     n = 0
     with db.transaction():
         for oid, number, day, recipient, subject, client_id, note in db.fetchall(
@@ -129,16 +166,14 @@ def import_outgoing(db):
                 continue
             day = day[:10] if _day(day) else date.today().isoformat()
             yy = _day(day).year
-            number = number or ''
-            # прежний номер «7» превращается в «Исх-07/26»; занятый номер получает следующий свободный
             if number.isdigit():
                 seq = int(number)
-                cand = f'{PREFIX["Исходящий"]}-{seq:02d}/{yy % 100:02d}'
-                if db.fetchone('SELECT 1 FROM doc_register WHERE reg_number=? AND year_num=?', (cand, yy)):
-                    seq, yy, cand = next_number(db, 'Исходящий', day)
+                cand = f'{REGISTERS[OUT]["prefix"]}-{seq:02d}/{yy % 100:02d}'
+                if db.fetchone("SELECT 1 FROM doc_register WHERE reg_number=? AND year_num=? AND register='out'", (cand, yy)):
+                    seq, yy, cand = next_number(db, OUT, day)
             else:
-                seq, yy, cand = next_number(db, 'Исходящий', day)
-            db.execute('INSERT INTO doc_register(direction,seq_num,year_num,reg_number,reg_date,kind,correspondent,client_id,subject,note,status,legacy_outgoing_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
-                       ('Исходящий', seq, yy, cand, day, 'Письмо', recipient or '—', client_id, subject or '—', note, 'Исполнен', oid))
+                seq, yy, cand = next_number(db, OUT, day)
+            db.execute('INSERT INTO doc_register(register,direction,seq_num,year_num,reg_number,reg_date,kind,correspondent,client_id,subject,note,status,legacy_outgoing_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                       (OUT, 'Исходящий', seq, yy, cand, day, 'Письмо', recipient or '—', client_id, subject or '—', note, 'Отправлен', oid))
             n += 1
     return n
