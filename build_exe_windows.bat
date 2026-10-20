@@ -9,6 +9,7 @@ call .venv-build\Scripts\activate.bat
 python -m pip install --upgrade pip
 pip install -r requirements-homefin.txt pyinstaller || (echo Не удалось установить зависимости & pause & exit /b 1)
 pyinstaller --noconfirm --clean --onefile --windowed --name HomeFinance ^
+  --icon homefin\assets\icon.ico --add-data "homefin\assets;homefin\assets" ^
   --hidden-import PyQt6.QtSvg --hidden-import openpyxl ^
   run_homefin.py || (echo Сборка не удалась & pause & exit /b 1)
 echo.

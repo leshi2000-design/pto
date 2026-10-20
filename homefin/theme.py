@@ -129,3 +129,17 @@ def apply(app) -> None:
     QCalendarWidget QToolButton {{ background:transparent; border:0; border-radius:6px; padding:4px 8px; min-width:28px; }}
     QCalendarWidget QToolButton:hover {{ background:{c['hover']}; }}
     ''')
+
+
+ASSETS = Path(__file__).parent / "assets"
+
+
+def app_icon():
+    from PyQt6.QtGui import QIcon
+    return QIcon(str(ASSETS / "icon.png"))
+
+
+def logo_pixmap(size: int):
+    from PyQt6.QtGui import QPixmap
+    return QPixmap(str(ASSETS / "icon.png")).scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio,
+                                                    Qt.TransformationMode.SmoothTransformation)

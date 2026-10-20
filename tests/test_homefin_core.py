@@ -147,3 +147,75 @@ def test_restore_file_db(tmp_path):
     f.add_transaction("02.10.2026", "income", "7", cash(f))
     f.restore(bk)
     assert f.total_balance() == 500
+
+
+def test_goal_deposit_withdraw_keeps_totals(fin):
+    a = cash(fin)
+    fin.add_transaction("01.10.2026", "income", "1000", a)
+    g = fin.add_goal("Отпуск", "600", "31.12.2026")
+    assert [x["name"] for x in fin.accounts()] == ["Наличные"]  # копилка не в обычных счетах
+    fin.deposit_to_goal(g, a, "150", "05.10.2026")
+    assert fin.balance(g) == 15000 and fin.balance(a) == 85000 and fin.total_balance() == 100000
+    assert fin.totals("2026-10-01", "2026-10-31") == (100000, 0)  # перевод не расход
+    pr = fin.goal_progress(fin.goals()[0], date(2026, 10, 20))
+    assert pr["pct"] == 25 and pr["left"] == 45000 and pr["monthly"] == 22500 and not pr["done"]  # до 31.12 — 2 месяца: 450 / 2
+    with pytest.raises(ValueError):
+        fin.withdraw_from_goal(g, a, "200")
+    fin.withdraw_from_goal(g, a, "50", "06.10.2026")
+    assert fin.balance(g) == 10000
+    fin.deposit_to_goal(g, a, "500")
+    assert fin.goal_progress(fin.goals()[0])["done"]
+    with pytest.raises(ValueError):
+        fin.add_goal("X", "0")
+
+
+def test_old_database_is_migrated(tmp_path):
+    import sqlite3
+    p = tmp_path / "old.db"
+    con = sqlite3.connect(p)
+    con.execute("CREATE TABLE accounts(id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, kind TEXT NOT NULL DEFAULT 'card',"
+                " initial_cents INTEGER NOT NULL DEFAULT 0, archived INTEGER NOT NULL DEFAULT 0)")
+    con.execute("INSERT INTO accounts(name) VALUES('Старый')")
+    con.commit()
+    con.close()
+    f = Finance(p)
+    assert f.goals() == [] and f.add_goal("Цель", "10")
+    assert f.accounts()[0]["name"] == "Старый"
+
+
+def test_password(fin):
+    assert not fin.has_password() and fin.check_password("что угодно")
+    with pytest.raises(ValueError):
+        fin.set_password("abc")
+    fin.set_password("секрет1")
+    assert fin.has_password() and fin.check_password("секрет1") and not fin.check_password("секрет")
+    assert "секрет1" not in str(fin.db.execute("SELECT * FROM settings").fetchall())  # пароль не хранится открыто
+    with pytest.raises(ValueError):
+        fin.set_password("новый-пароль", "не тот")
+    fin.set_password("новый-пароль", "секрет1")
+    assert fin.check_password("новый-пароль") and not fin.check_password("секрет1")
+    with pytest.raises(ValueError):
+        fin.remove_password("не тот")
+    fin.remove_password("новый-пароль")
+    assert not fin.has_password()
+
+
+def test_calendar_events(fin):
+    a = cash(fin)
+    fin.add_transaction("2026-10-03", "income", "500", a, None, "Аванс")
+    fin.add_transaction("2026-10-05", "expense", "20", a, fin.category_id("Продукты"))
+    fin.add_transaction("2026-10-06", "transfer", "5", a, to_account_id=fin.add_account("Карта"))
+    gas = next(s["id"] for s in fin.services() if s["name"] == "Газ")
+    fin.create_bill(gas, "2026-09", amount="14", due_date="2026-10-25")
+    paid = fin.create_bill(next(s["id"] for s in fin.services() if s["name"] == "Домофон"), "2026-09", amount="3",
+                           due_date="2026-10-10")
+    fin.pay_bill(paid, a, "2026-10-09")
+    fin.add_recurring("Аренда", "expense", "300", a, None, 28, "2026-01-01")
+    ev = fin.calendar_events("2026-10", date(2026, 10, 20))
+    assert [e["type"] for e in ev["2026-10-03"]] == ["income"] and ev["2026-10-03"][0]["title"] == "Аванс"
+    assert ev["2026-10-05"][0]["type"] == "expense" and "2026-10-06" not in ev  # переводы не показываем
+    assert ev["2026-10-25"][0]["type"] == "bill" and ev["2026-10-25"][0]["bill_id"]
+    assert "2026-10-10" not in ev  # оплаченный счёт не дублируется как «к оплате»
+    assert ev["2026-10-09"][0]["type"] == "expense"
+    assert ev["2026-10-28"][0]["type"] == "planned"
+    assert "2026-10-28" not in fin.calendar_events("2026-10", date(2026, 10, 30))  # прошло — стало фактом/пропущено

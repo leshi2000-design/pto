@@ -67,7 +67,7 @@ def import_csv(fin: Finance, path) -> tuple[int, list[str]]:
     """Импорт в формате экспорта. Счета и категории создаются при необходимости.
     Возвращает (число импортированных, список ошибок по строкам)."""
     ok, errors = 0, []
-    accounts = {a["name"]: a["id"] for a in fin.accounts(True)}
+    accounts = {a["name"]: a["id"] for a in fin.accounts(True, True)}
     with open(path, newline="", encoding="utf-8-sig") as f:
         sample = f.read(2048)
         f.seek(0)

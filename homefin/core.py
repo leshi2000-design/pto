@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import calendar
+import hashlib
+import hmac
+import os
 import shutil
 import sqlite3
 from datetime import date, datetime, timedelta
@@ -13,7 +16,8 @@ from .money import dec, to_cents
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS accounts(
     id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, kind TEXT NOT NULL DEFAULT 'card',
-    initial_cents INTEGER NOT NULL DEFAULT 0, archived INTEGER NOT NULL DEFAULT 0);
+    initial_cents INTEGER NOT NULL DEFAULT 0, archived INTEGER NOT NULL DEFAULT 0,
+    target_cents INTEGER NOT NULL DEFAULT 0, deadline TEXT);
 CREATE TABLE IF NOT EXISTS categories(
     id INTEGER PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN('income','expense')),
     archived INTEGER NOT NULL DEFAULT 0, UNIQUE(name, kind));
@@ -91,6 +95,10 @@ def month_bounds(period: str) -> tuple[str, str]:
     return f"{y:04d}-{m:02d}-01", f"{y:04d}-{m:02d}-{calendar.monthrange(y, m)[1]:02d}"
 
 
+def exchange_kind(kind: str) -> str:
+    return {"income": "Доход", "expense": "Расход"}.get(kind, kind)
+
+
 def _q(x: Decimal, places="0.001") -> Decimal:
     return x.quantize(Decimal(places), rounding=ROUND_HALF_UP)
 
@@ -102,10 +110,20 @@ class Finance:
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.executescript(SCHEMA)
+        self._migrate()
         if not self.db.execute("SELECT 1 FROM accounts").fetchone():
             self._seed()
 
     # ---------------------------------------------------------------- базовое
+    def _migrate(self):
+        """Базы первой версии не имели полей копилки."""
+        cols = {r["name"] for r in self.db.execute("PRAGMA table_info(accounts)")}
+        with self.db:
+            if "target_cents" not in cols:
+                self.db.execute("ALTER TABLE accounts ADD COLUMN target_cents INTEGER NOT NULL DEFAULT 0")
+            if "deadline" not in cols:
+                self.db.execute("ALTER TABLE accounts ADD COLUMN deadline TEXT")
+
     def _seed(self):
         with self.db:
             self.db.execute("INSERT INTO accounts(name,kind) VALUES(?,?)", (CASH_ACCOUNT, "cash"))
@@ -154,9 +172,14 @@ class Finance:
         self.__init__(self.path)
 
     # ---------------------------------------------------------------- счета
-    def accounts(self, include_archived=False):
-        sql = "SELECT * FROM accounts" + ("" if include_archived else " WHERE archived=0") + " ORDER BY name"
-        return self.db.execute(sql).fetchall()
+    def accounts(self, include_archived=False, include_goals=False):
+        """Счета; копилки (kind='goal') по умолчанию не входят — ими управляет вкладка «Копилка»."""
+        sql = "SELECT * FROM accounts WHERE 1=1"
+        if not include_archived:
+            sql += " AND archived=0"
+        if not include_goals:
+            sql += " AND kind!='goal'"
+        return self.db.execute(sql + " ORDER BY name").fetchall()
 
     def add_account(self, name, kind="card", initial="0") -> int:
         name = name.strip()
@@ -189,10 +212,123 @@ class Finance:
                 + total("transfer", "to_account_id"))
 
     def balances(self):
-        return [(a, self.balance(a["id"])) for a in self.accounts()]
+        return [(a, self.balance(a["id"])) for a in self.accounts(include_goals=True)]
 
     def total_balance(self) -> int:
         return sum(b for _, b in self.balances())
+
+    # ---------------------------------------------------------------- копилки
+    # Копилка — особый счёт (kind='goal') с целевой суммой. Пополнение — перевод со счёта,
+    # поэтому общий остаток не меняется, а доходы и расходы в отчётах не искажаются.
+    def add_goal(self, name, target, deadline=None) -> int:
+        name = name.strip()
+        cents = to_cents(target)
+        if not name:
+            raise ValueError("Укажите название копилки")
+        if cents <= 0:
+            raise ValueError("Цель должна быть больше нуля")
+        with self.db:
+            return self.db.execute("INSERT INTO accounts(name,kind,target_cents,deadline) VALUES(?,'goal',?,?)",
+                                   (name, cents, iso(parse_date(deadline)) if deadline else None)).lastrowid
+
+    def update_goal(self, goal_id, name, target, deadline=None):
+        cents = to_cents(target)
+        if cents <= 0:
+            raise ValueError("Цель должна быть больше нуля")
+        with self.db:
+            self.db.execute("UPDATE accounts SET name=?,target_cents=?,deadline=? WHERE id=? AND kind='goal'",
+                            (name.strip(), cents, iso(parse_date(deadline)) if deadline else None, goal_id))
+
+    def goals(self, include_archived=False):
+        sql = "SELECT * FROM accounts WHERE kind='goal'" + ("" if include_archived else " AND archived=0")
+        return self.db.execute(sql + " ORDER BY name").fetchall()
+
+    def goal_progress(self, goal, today: date | None = None) -> dict:
+        today = today or date.today()
+        saved, target = self.balance(goal["id"]), goal["target_cents"]
+        left = max(target - saved, 0)
+        monthly = None
+        if goal["deadline"] and left:
+            d = parse_date(goal["deadline"])
+            months = max((d.year - today.year) * 12 + d.month - today.month, 0) or (1 if d >= today else 0)
+            monthly = -(-left // months) if months else left  # округление вверх; срок прошёл — нужна вся сумма
+        return dict(saved=saved, target=target, left=left, pct=min(100, saved * 100 // target) if target else 0,
+                    done=saved >= target, monthly=monthly)
+
+    def deposit_to_goal(self, goal_id, from_account_id, amount, d=None) -> int:
+        g = self._goal(goal_id)
+        return self.add_transaction(d or date.today(), "transfer", amount, from_account_id,
+                                    note=f"В копилку «{g['name']}»", to_account_id=goal_id)
+
+    def withdraw_from_goal(self, goal_id, to_account_id, amount, d=None) -> int:
+        g = self._goal(goal_id)
+        if to_cents(amount) > self.balance(goal_id):
+            raise ValueError("В копилке нет столько денег")
+        return self.add_transaction(d or date.today(), "transfer", amount, goal_id,
+                                    note=f"Из копилки «{g['name']}»", to_account_id=to_account_id)
+
+    def _goal(self, goal_id):
+        g = self.db.execute("SELECT * FROM accounts WHERE id=? AND kind='goal'", (goal_id,)).fetchone()
+        if not g:
+            raise ValueError("Копилка не найдена")
+        return g
+
+    # ---------------------------------------------------------------- пароль
+    PBKDF2_ROUNDS = 200_000
+
+    def has_password(self) -> bool:
+        return bool(self.get_setting("pw_hash"))
+
+    def _hash(self, password: str, salt: bytes, rounds: int) -> str:
+        return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, rounds).hex()
+
+    def check_password(self, password: str) -> bool:
+        if not self.has_password():
+            return True
+        salt = bytes.fromhex(self.get_setting("pw_salt"))
+        rounds = int(self.get_setting("pw_rounds", str(self.PBKDF2_ROUNDS)))
+        return hmac.compare_digest(self._hash(password, salt, rounds), self.get_setting("pw_hash"))
+
+    def set_password(self, new: str, current: str | None = None):
+        if self.has_password() and not self.check_password(current or ""):
+            raise ValueError("Текущий пароль неверный")
+        if len(new) < 4:
+            raise ValueError("Пароль должен быть не короче 4 символов")
+        salt = os.urandom(16)
+        self.set_setting("pw_salt", salt.hex())
+        self.set_setting("pw_rounds", self.PBKDF2_ROUNDS)
+        self.set_setting("pw_hash", self._hash(new, salt, self.PBKDF2_ROUNDS))
+
+    def remove_password(self, current: str):
+        if not self.check_password(current):
+            raise ValueError("Пароль неверный")
+        with self.db:
+            self.db.execute("DELETE FROM settings WHERE key IN ('pw_salt','pw_rounds','pw_hash')")
+
+    # ---------------------------------------------------------------- календарь
+    def calendar_events(self, period: str, today: date | None = None) -> dict[str, list[dict]]:
+        """События месяца по дням: факт (income/expense), счета к оплате (bill), плановые регулярные (planned)."""
+        today = today or date.today()
+        a, b = month_bounds(period)
+        out: dict[str, list[dict]] = {}
+
+        def put(d, **ev):
+            out.setdefault(d, []).append(ev)
+
+        for t in self.transactions(a, b):
+            if t["kind"] != "transfer":
+                put(t["date"], type=t["kind"], title=t["note"] or t["category"] or exchange_kind(t["kind"]),
+                    cents=t["amount_cents"], category=t["category"] or "")
+        for bl in self.bills("unpaid"):
+            if bl["due_date"] and a <= bl["due_date"] <= b:
+                put(bl["due_date"], type="bill", title=f"{bl['service']} за {bl['period']}", cents=bl["amount_cents"],
+                    bill_id=bl["id"])
+        y, m = map(int, period.split("-"))
+        for r in self.db.execute("SELECT * FROM recurring WHERE active=1").fetchall():
+            d = date(y, m, min(r["day"], calendar.monthrange(y, m)[1]))
+            if d > today and d >= parse_date(r["start_date"]) and not (r["end_date"] and d > parse_date(r["end_date"])):
+                put(iso(d), type="planned", title=f"{r['name']} (план)", cents=r["amount_cents"], kind=r["kind"])
+        return out
 
     # ---------------------------------------------------------------- категории
     def categories(self, kind=None, include_archived=False):

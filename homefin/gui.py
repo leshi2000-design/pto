@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import sys
+import time
 from datetime import date
 
-from PyQt6.QtCore import QDate, Qt, QTimer
+from PyQt6.QtCore import QDate, QEvent, Qt, QTimer
 from PyQt6.QtGui import QAction, QColor, QKeySequence
 from PyQt6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFileDialog,
                              QFormLayout, QFrame, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow,
@@ -14,7 +15,7 @@ from PyQt6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, Q
 from . import __version__, exchange
 from .core import Finance, add_months, month_bounds, parse_date
 from .money import fmt
-from .theme import C, apply as apply_theme
+from .theme import C, app_icon, apply as apply_theme, logo_pixmap
 
 RED, GREEN, AMBER = QColor(C["bad"]), QColor(C["good"]), QColor(C["warn"])
 
@@ -86,12 +87,12 @@ def guard(parent, fn, *a, **kw):
 
 # ===================================================================== диалоги
 class TxDialog(QDialog):
-    def __init__(self, fin: Finance, parent=None, tx=None):
+    def __init__(self, fin: Finance, parent=None, tx=None, day: str | None = None):
         super().__init__(parent)
         self.fin, self.tx = fin, tx
         self.setWindowTitle("Операция")
         self.kind = combo([("Расход", "expense"), ("Доход", "income"), ("Перевод", "transfer")])
-        self.date = make_date()
+        self.date = make_date(day)
         self.amount = QLineEdit()
         self.amount.setPlaceholderText("0,00")
         self.account = combo([(a["name"], a["id"]) for a in fin.accounts()])
@@ -773,6 +774,17 @@ class SettingsPage(Page):
                                                        self.changed()))
         row.addWidget(QLabel("Валюта:"))
         row.addWidget(self.currency)
+        pw = QPushButton("Пароль…")
+        pw.clicked.connect(self.password)
+        row.addWidget(pw)
+        row.addWidget(QLabel("Автоблокировка, мин:"))
+        self.autolock = QSpinBox()
+        self.autolock.setRange(0, 240)
+        self.autolock.setSpecialValueText("выкл.")
+        self.autolock.setValue(int(self.fin.get_setting("autolock_min", "10")))
+        self.autolock.setToolTip("Через сколько минут бездействия запросить пароль (работает, если пароль задан)")
+        self.autolock.valueChanged.connect(lambda v: self.fin.set_setting("autolock_min", v))
+        row.addWidget(self.autolock)
         for text, fn in (("Резервная копия…", self.backup), ("Восстановить из копии…", self.restore)):
             b = QPushButton(text)
             b.clicked.connect(fn)
@@ -872,6 +884,11 @@ class SettingsPage(Page):
             self.fin.delete_recurring(rid)
             self.changed()
 
+    def password(self):
+        from .gui_extra import PasswordDialog
+        PasswordDialog(self.fin, self).exec()
+        self.changed()
+
     def backup(self):
         folder = QFileDialog.getExistingDirectory(self, "Куда сохранить копию")
         if folder:
@@ -891,7 +908,9 @@ class SettingsPage(Page):
 class MainWindow(QMainWindow):
     SUBTITLES = {"Обзор": "Остатки, напоминания и динамика за полгода",
                  "Операции": "Доходы, расходы и переводы между счетами",
+                 "Календарь": "Все платежи, поступления и сроки оплаты по дням",
                  "Коммунальные платежи": "Счета, показания счётчиков и тарифы",
+                 "Копилка": "Накопления на цели: отпуск, ремонт, подушка безопасности",
                  "Бюджет": "Месячные лимиты по категориям",
                  "Отчёты": "Итоги и структура расходов за период",
                  "Счета и настройки": "Счета, категории, регулярные операции, резервные копии"}
@@ -913,9 +932,8 @@ class MainWindow(QMainWindow):
         sl = QVBoxLayout(side)
         brand = QHBoxLayout()
         brand.setContentsMargins(6, 4, 6, 4)
-        mark = QLabel("₽")
-        mark.setObjectName("logoMark")
-        mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        mark = QLabel()
+        mark.setPixmap(logo_pixmap(40))
         mark.setFixedSize(40, 40)
         name = QLabel("Домашняя\nбухгалтерия")
         name.setObjectName("brand")
@@ -929,8 +947,10 @@ class MainWindow(QMainWindow):
         sl.addSpacing(12)
 
         self.stack = QStackedWidget()
+        from .gui_extra import CalendarPage, GoalsPage
         self.pages = [(OverviewPage(self), "Обзор"), (TransactionsPage(self), "Операции"),
-                      (UtilitiesPage(self), "Коммунальные платежи"), (BudgetPage(self), "Бюджет"),
+                      (CalendarPage(self), "Календарь"), (UtilitiesPage(self), "Коммунальные платежи"),
+                      (GoalsPage(self), "Копилка"), (BudgetPage(self), "Бюджет"),
                       (ReportsPage(self), "Отчёты"), (SettingsPage(self), "Счета и настройки")]
         self.nav: list[QPushButton] = []
         group = QButtonGroup(self)
@@ -949,6 +969,9 @@ class MainWindow(QMainWindow):
             self.nav.append(b)
             self.stack.addWidget(page)
         sl.addStretch(1)
+        self.lock_btn = QPushButton("🔒 Заблокировать · Ctrl+L")
+        self.lock_btn.clicked.connect(self.lock)
+        sl.addWidget(self.lock_btn)
         root.addWidget(side)
 
         content = QWidget()
@@ -976,6 +999,16 @@ class MainWindow(QMainWindow):
         act.setShortcut(QKeySequence("Ctrl+N"))
         act.triggered.connect(lambda: self.pages[1][0].add())
         self.addAction(act)
+        lock_act = QAction("Заблокировать", self)
+        lock_act.setShortcut(QKeySequence("Ctrl+L"))
+        lock_act.triggered.connect(self.lock)
+        self.addAction(lock_act)
+        self.setWindowIcon(app_icon())
+        self._locked, self._last_activity = False, time.monotonic()
+        QApplication.instance().installEventFilter(self)
+        self._idle_timer = QTimer(self)
+        self._idle_timer.timeout.connect(self._check_idle)
+        self._idle_timer.start(10_000)
         created = self.fin.run_recurring()
         if created:
             self.statusBar().showMessage(f"Создано регулярных операций: {created}", 8000)
@@ -990,7 +1023,31 @@ class MainWindow(QMainWindow):
         self.page_subtitle.setText(self.SUBTITLES.get(title, ""))
         self.pages[i][0].refresh()
 
+    # ---- блокировка паролем
+    def eventFilter(self, obj, ev):
+        if ev.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.KeyPress, QEvent.Type.MouseMove, QEvent.Type.Wheel):
+            self._last_activity = time.monotonic()
+        return False
+
+    def _check_idle(self):
+        minutes = int(self.fin.get_setting("autolock_min", "10") or 0)
+        if minutes and time.monotonic() - self._last_activity > minutes * 60:
+            self.lock()
+
+    def lock(self):
+        from .gui_extra import LockDialog
+        if self._locked or not self.fin.has_password():
+            return
+        self._locked = True
+        self.centralWidget().setVisible(False)  # за окном пароля содержимое не видно
+        ok = LockDialog(self.fin, self).exec() == QDialog.DialogCode.Accepted
+        self.centralWidget().setVisible(True)
+        self._locked, self._last_activity = False, time.monotonic()
+        if not ok:
+            self.close()
+
     def refresh_all(self):
+        self.lock_btn.setVisible(self.fin.has_password())
         self.pages[self.stack.currentIndex()][0].refresh()
         # остальные обновятся при переключении; обзор — всегда актуален
         if self.stack.currentIndex() != 0:
@@ -1017,8 +1074,12 @@ def main(argv=None):
     from .exchange import default_db_path
     app = QApplication(argv or sys.argv)
     apply_theme(app)
+    app.setWindowIcon(app_icon())
     path = default_db_path()
     fin = Finance(path)
+    from .gui_extra import ask_password
+    if not ask_password(fin):
+        return 0
     win = MainWindow(fin, backup_dir=str(path.parent / "backups"))
     win.show()
     return app.exec()
