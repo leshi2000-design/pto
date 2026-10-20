@@ -393,7 +393,7 @@ def test_volumes_tab_actions(db, monkeypatch):
 def test_date_typing_is_simple():
     from PyQt6.QtCore import QDate, Qt
     from PyQt6.QtTest import QTest
-    from smetagaz.date_widgets import DateEdit, parse_typed
+    from smetagaz.date_widgets import DateEdit, parse_typed, parse_month
     from smetagaz.domain_widgets import OptionalDate
     base = QDate(2026, 3, 5)
     assert parse_typed('14102026', base) == QDate(2026, 10, 14)
@@ -403,24 +403,50 @@ def test_date_typing_is_simple():
     assert parse_typed('31.02.2026', base) == QDate(2026, 2, 28)
     assert parse_typed('2026-10-14', base) == QDate(2026, 10, 14)
     assert parse_typed('45', base) is None and parse_typed('1413', base) is None
+    assert parse_month('10.2026', base) == QDate(2026, 10, 1) and parse_month('1026', base) == QDate(2026, 10, 1)
+
+    def type_in(w, text):
+        w.setFocus()
+        w.selectAll()
+        QTest.keyClicks(w, text)
+
     w = DateEdit(QDate(2026, 3, 5))
     w.show()
-    w.setFocus()
-    QTest.keyClicks(w, '14102026')
-    assert w.date() == QDate(2026, 10, 14)
-    QTest.keyClicks(w, '.')                     # продолжение набора не ломает дату
-    w._reset_typing()
-    QTest.keyClicks(w, '7.8')
-    assert w.date() == QDate(2026, 8, 7)
+    seen = []
+    w.dateChanged.connect(seen.append)
+    type_in(w, '1410')
+    assert w.text() == '14.10'                       # точка поставилась сама, поле не блокируется
+    QTest.keyClicks(w, '2026')
+    assert w.text() == '14.10.2026'
+    assert w.date() == QDate(2026, 10, 14) and seen[-1] == QDate(2026, 10, 14)
+    type_in(w, '7.8')
+    assert w.date() == QDate(2026, 8, 7) and w.text() == '07.08.2026'
+    type_in(w, '31.12.27')
+    assert w.date() == QDate(2027, 12, 31)
+    type_in(w, '99.99.9999')                          # неверный ввод — прежняя дата
+    assert w.date() == QDate(2027, 12, 31) and w.text() == '31.12.2027'
+    type_in(w, '010203')
+    QTest.keyClick(w, Qt.Key.Key_Return)
+    assert w.text() == '01.02.2003'
+    QTest.keyClick(w, Qt.Key.Key_Up)
+    assert w.date() == QDate(2003, 2, 2)
+    QTest.keyClick(w, Qt.Key.Key_PageDown)
+    assert w.date() == QDate(2003, 1, 2)
+    # дата берётся, даже если поле не покидали (сразу нажали «Сохранить»)
+    type_in(w, '05052030')
+    assert w.date() == QDate(2030, 5, 5)
     o = OptionalDate()
     o.show()
-    o.setFocus()
-    assert o.is_empty()
-    QTest.keyClicks(o, '01.02.27')
-    assert o.value() == '2027-02-01'
-    o._reset_typing()
-    QTest.keyClick(o, Qt.Key.Key_Delete)
-    assert o.is_empty()
+    assert o.is_empty() and o.text() == '' and o.placeholderText() == 'Не указана'
+    type_in(o, '01.02.27')
+    assert o.value() == '2027-02-01' and not o.is_empty()
+    type_in(o, '')
+    QTest.keyClick(o, Qt.Key.Key_Backspace)
+    assert o.value() == '' and o.is_empty()
+    m = DateEdit(QDate(2026, 3, 5))
+    m.setDisplayFormat('MMMM yyyy')
+    type_in(m, '112027')
+    assert m.date() == QDate(2027, 11, 1)
 
 
 def test_manual_visual_status(db):
