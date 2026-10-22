@@ -281,6 +281,12 @@ def events_between(db, start, end, today=None):
             out.append(_event(day, kind, title, detail, ref))
     except Exception:
         pass
+    try:
+        from . import weld_register_domain
+        for day, kind, title, detail, ref in weld_register_domain.agenda_events(db, start, end, today):
+            out.append(_event(day, kind, title, detail, ref))
+    except Exception:
+        pass
     # --- заметки (независимые и привязанные к договорам, клиентам) ---
     from . import notes_domain
     for nid, day, title, body, ltable, lid in db.fetchall("SELECT id,note_date,title,body,link_table,link_id FROM notes WHERE note_date BETWEEN ? AND ?", (s, e)):

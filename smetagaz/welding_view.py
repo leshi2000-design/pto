@@ -206,9 +206,11 @@ class ScheduleView(QWidget):
                 open_record(row[0],row[1],self);self.load_data()
             else:QMessageBox.information(self,'Объект','Эта запись введена вручную и не связана с договором.')
 
+from .weld_register_view import WeldRegisterTab
+
 class WeldersView(QWidget):
     def __init__(self):
         super().__init__();layout=QVBoxLayout(self);self.tabs=QTabWidget();layout.addWidget(self.tabs,1)
-        for view,label in [(ScheduleView(),'График производства работ'),(WeldersRegistry(),'Сварщики'),(DocumentsView('attestation'),'Аттестация'),(DocumentsView('contract_act'),'Договоры и акты')]:self.tabs.addTab(view,label)
+        for view,label in [(ScheduleView(),'График производства работ'),(WeldersRegistry(),'Сварщики'),(DocumentsView('attestation'),'Аттестация'),(DocumentsView('contract_act'),'Договоры и акты'),(WeldRegisterTab(),'Заявки, письма, протоколы')]:self.tabs.addTab(view,label)
         self.tabs.currentChanged.connect(lambda _:self.load_data())
     def load_data(self):self.tabs.currentWidget().load_data()
