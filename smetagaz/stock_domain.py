@@ -57,6 +57,12 @@ def migrate(db):
     statements.append('CREATE INDEX IF NOT EXISTS idx_stock_orders_date ON stock_orders(order_date)')
     statements.append('CREATE INDEX IF NOT EXISTS idx_stock_transfers_date ON stock_transfers(transfer_date)')
     for sql in statements:db.execute(sql)
+    for table,cols in (('stock_transfer_lines',(('new_unit',"TEXT DEFAULT ''"),('new_quantity',"TEXT DEFAULT ''"),('cost','REAL'),('old_price','REAL'),('new_price','REAL'),('new_material_id','INTEGER'),
+                                                ('cat_id','INTEGER'),('cat_prev_purchase','REAL'),('cat_prev_price','REAL'),('cat_created','INTEGER DEFAULT 0'))),
+                       ('stock_transfers',(('posted','INTEGER NOT NULL DEFAULT 0'),)),('stock_moves',(('transfer_id','INTEGER'),))):
+        have={r[1] for r in db.fetchall(f'PRAGMA table_info({table})')}
+        for name,ddl in cols:
+            if name not in have:db.execute(f'ALTER TABLE {table} ADD COLUMN {name} {ddl}')
     if 'per' not in [r[1] for r in db.fetchall('PRAGMA table_info(norm_items)')]:db.execute("ALTER TABLE norm_items ADD COLUMN per TEXT NOT NULL DEFAULT ''")
     for key,ddl in (('object_text',"TEXT DEFAULT ''"),('welder_text',"TEXT DEFAULT ''"),('status',"TEXT DEFAULT 'done'"),('work_time',"TEXT DEFAULT ''")):
         if key not in [r[1] for r in db.fetchall('PRAGMA table_info(welding_jobs)')]:db.execute(f"ALTER TABLE welding_jobs ADD COLUMN {key} {ddl}")
@@ -314,7 +320,7 @@ def delete_material(db,mid,archive_if_used=False):
         db.execute('DELETE FROM stock_materials WHERE id=?',(mid,))
         return 'deleted'
 
-MOVE_KINDS={'receipt':'Поступление','correction':'Корректировка','writeoff':'Списание','reversal':'Отмена списания'}
+MOVE_KINDS={'receipt':'Поступление','correction':'Корректировка','writeoff':'Списание','reversal':'Отмена списания','transfer_out':'Перевод: было','transfer_in':'Перевод: стало','transfer_reversal':'Отмена перевода'}
 
 def material_history(db,mid):
     """Все поступления и списания материала с нарастающим остатком: [dict(date, kind, qty, act, object, note, balance)]."""

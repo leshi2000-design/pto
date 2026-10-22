@@ -1,7 +1,7 @@
 """Writeoff workspace: documents, defects, rate profiles, material ledger and balances."""
 import json
 from datetime import date
-from PyQt6.QtWidgets import (QWidget,QDialog,QVBoxLayout,QHBoxLayout,QFormLayout,QLineEdit,QLabel,QPushButton,QComboBox,QTableWidget,QTableWidgetItem,QAbstractItemView,QDialogButtonBox,QMessageBox,QTabWidget,QScrollArea,QTextEdit)
+from PyQt6.QtWidgets import (QWidget,QDialog,QVBoxLayout,QHBoxLayout,QFormLayout,QLineEdit,QLabel,QPushButton,QComboBox,QTableWidget,QTableWidgetItem,QAbstractItemView,QDialogButtonBox,QMessageBox,QTabWidget,QScrollArea,QTextEdit,QCheckBox)
 from PyQt6.QtCore import Qt,QTimer
 from .database import db
 from .domain_widgets import OptionalDate,ObjectField
@@ -299,7 +299,7 @@ class Registry(QWidget):
         elif mode in ('materials','balances'):
             query='SELECT m.id,m.name,m.category,m.unit,coalesce(b.qty,0)/1000000.0 balance,m.notes FROM stock_materials m LEFT JOIN (SELECT material_id,sum(qty) qty FROM stock_moves GROUP BY material_id) b ON b.material_id=m.id WHERE coalesce(m.active,1)=1';headers=['Материал','Категория','Ед.','Остаток','Примечание'];fields=['name','category','notes'];datecol=None
         else:
-            query="SELECT v.id,v.move_date,m.name,m.category,m.unit,v.qty/1000000.0 qty,CASE v.kind WHEN 'receipt' THEN 'Поступление' WHEN 'correction' THEN 'Корректировка' WHEN 'writeoff' THEN 'Списание' ELSE 'Отмена' END kind,coalesce(a.number,'') number,coalesce(a.object_name,'') object_name,v.note FROM stock_moves v JOIN stock_materials m ON m.id=v.material_id LEFT JOIN stock_acts a ON a.id=v.act_id";headers=['Дата','Материал','Категория','Ед.','Количество','Операция','Акт','Объект','Примечание'];fields=['name','object_name','number','note'];datecol='move_date'
+            query="SELECT v.id,v.move_date,m.name,m.category,m.unit,v.qty/1000000.0 qty,CASE v.kind WHEN 'receipt' THEN 'Поступление' WHEN 'correction' THEN 'Корректировка' WHEN 'writeoff' THEN 'Списание' WHEN 'transfer_out' THEN 'Перевод: было' WHEN 'transfer_in' THEN 'Перевод: стало' WHEN 'transfer_reversal' THEN 'Отмена перевода' ELSE 'Отмена' END kind,coalesce(a.number,'') number,coalesce(a.object_name,'') object_name,v.note FROM stock_moves v JOIN stock_materials m ON m.id=v.material_id LEFT JOIN stock_acts a ON a.id=v.act_id";headers=['Дата','Материал','Категория','Ед.','Количество','Операция','Акт','Объект','Примечание'];fields=['name','object_name','number','note'];datecol='move_date'
         where=[];params=[]
         if self.search.text():where.append('('+' OR '.join('LOWER('+f+') LIKE ?' for f in fields)+')');params.extend(['%'+self.search.text().casefold()+'%']*len(fields))
         if datecol:
@@ -504,53 +504,112 @@ class OrderDialog(QDialog):
 
 
 class TransferDialog(QDialog):
-    """Акт перевода (передачи) материалов: откуда, куда, материалы и количества, основание, комиссия, файл."""
+    """Акт перевода материалов: меняет единицу измерения и количество, стоимость партии сохраняется, цена за новую единицу пересчитывается
+    (было 1 шт за 120 → стало 5,05 м³ → 23,7624 за м³). При проведении меняются остатки склада и цена в справочнике."""
+    COLS=['Материал','Было, ед.','Было, кол-во','Стало, ед.','Стало, кол-во','Стоимость партии, BYN','Цена за ед. было','Цена за ед. стало','Примечание']
     def __init__(self,tid=None,parent=None):
-        super().__init__(parent);self.tid=tid;self.setWindowTitle('Акт перевода материалов');self.resize(980,720);l=QVBoxLayout(self);f=QFormLayout();l.addLayout(f)
+        super().__init__(parent);self.tid=tid;self.setWindowTitle('Акт перевода материалов');self.resize(1180,720);l=QVBoxLayout(self);f=QFormLayout();l.addLayout(f)
         from . import stock_registers as reg
         self.number=QLineEdit();self.day=OptionalDate();self.day.set_value(date.today().isoformat())
-        self.from_place=self.place_box('Откуда: склад, объект, ответственное лицо');self.to_place=self.place_box('Куда: склад, объект, ответственное лицо')
+        self.from_place=self.place_box('Склад, объект, ответственное лицо (необязательно)');self.to_place=self.place_box('Склад, объект, ответственное лицо (необязательно)')
         self.reason=QLineEdit();self.approved_by=QLineEdit();self.commission=QLineEdit();self.notes=QLineEdit()
         self.file=QLineEdit();self.file.setReadOnly(True);fb=QHBoxLayout();fb.addWidget(self.file,1);button(fb,'Прикрепить…',lambda:_pick_file(self,self.file,'Файл акта (скан, Word, PDF)'));button(fb,'Открыть',lambda:_open_file(self,self.file.text()));button(fb,'Убрать',self.file.clear)
         defaults=domain.get_defaults(db)
-        for label,w in [('Номер *',self.number),('Дата *',self.day),('Откуда *',self.from_place),('Куда *',self.to_place),('Основание / причина',self.reason),('Утверждает',self.approved_by),('Комиссия / ответственные',self.commission),('Примечание',self.notes)]:f.addRow(label,w)
+        for label,w in [('Номер *',self.number),('Дата *',self.day),('Откуда',self.from_place),('Куда',self.to_place),('Основание / причина',self.reason),('Утверждает',self.approved_by),('Комиссия / ответственные',self.commission),('Примечание',self.notes)]:f.addRow(label,w)
         f.addRow('Файл акта',fb)
-        self.lines=table(['Материал','Ед.','Количество','Примечание'],True);self.lines.setColumnWidth(0,380);l.addWidget(self.lines,1)
-        bar=QHBoxLayout();button(bar,'Добавить материал',self.add_line);button(bar,'Удалить строку',lambda:self.lines.removeRow(self.lines.currentRow()));bar.addStretch();l.addLayout(bar)
-        l.addWidget(QLabel('Акт только фиксирует перевод: остатки склада он не меняет. Материал можно выбрать из списка или вписать свой.'))
+        self._busy=False
+        self.lines=table(self.COLS,True);self.lines.setColumnWidth(0,300);l.addWidget(self.lines,1)
+        bar=QHBoxLayout();button(bar,'Добавить материал',self.add_line);button(bar,'Удалить строку',lambda:self.lines.removeRow(self.lines.currentRow()));bar.addStretch()
+        self.update_catalog=QCheckBox('При проведении обновить цену в справочнике');self.update_catalog.setChecked(True);bar.addWidget(self.update_catalog);l.addLayout(bar)
+        self.hint=QLabel('Перевод единиц: укажите «Стало, ед.» и «Стало, кол-во» — цена за новую единицу = стоимость партии / новое количество. Стоимость подставляется из справочника цен (цена × количество), её можно исправить. '
+                         'Остатки склада и справочник меняются только при проведении акта.');self.hint.setWordWrap(True);l.addWidget(self.hint)
+        self.status=QLabel('');l.addWidget(self.status)
         if tid:
             d=record('stock_transfers',tid);self.number.setText(d['number']);self.day.set_value(d['transfer_date']);self.from_place.setEditText(d['from_place']);self.to_place.setEditText(d['to_place']);self.reason.setText(d['reason'] or '');self.approved_by.setText(d['approved_by'] or '');self.commission.setText(d['commission'] or '');self.notes.setText(d['notes'] or '');self.file.setText(d['file_path'] or '')
-            for mid,name,unit,qty,note in reg.transfer_lines(db,tid):self.add_line(mid,name,unit,qty,note)
+            for ln in reg.transfer_conversions(db,tid):self.add_line(ln['material_id'],ln['material_name'],ln['unit'],ln['quantity'],ln['note'],ln['new_unit'] or '',ln['new_quantity'] or '',ln['cost'])
         else:
             self.number.setText(reg.next_transfer_number(db));self.approved_by.setText(defaults.get('approved_by',''));self.commission.setText(defaults.get('commission',''));self.add_line()
-        bb=QHBoxLayout();button(bb,'Сохранить',self.save);button(bb,'Закрыть',self.reject);l.addLayout(bb)
+        self.lines.cellChanged.connect(self.recalc)
+        bb=QHBoxLayout();self.save_btn=button(bb,'Сохранить',self.save);self.post_btn=button(bb,'Провести перевод',self.post);self.reverse_btn=button(bb,'Отменить проведение',self.reverse);button(bb,'Закрыть',self.reject);l.addLayout(bb)
+        self.refresh_state()
     def place_box(self,hint):
         box=QComboBox();box.setEditable(True);box.setInsertPolicy(QComboBox.InsertPolicy.NoInsert);box.lineEdit().setPlaceholderText(hint);box.addItem('')
         for _id,name,*_ in domain.objects(db):box.addItem(name)
         box.setCurrentIndex(0);return box
-    def add_line(self,mid=None,name='',unit='',qty='',note=''):
+    def add_line(self,mid=None,name='',unit='',qty='',note='',new_unit='',new_qty='',cost=None):
         if isinstance(mid,bool):mid=None
+        self._busy=True
         r=self.lines.rowCount();self.lines.insertRow(r);combo=QComboBox();combo.setEditable(True);combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert);combo.addItem('',None)
-        for rid,mname,munit in db.fetchall('SELECT id,name,unit FROM stock_materials WHERE coalesce(active,1)=1 ORDER BY name'):combo.addItem(mname,(rid,munit))
+        for rid,mname,munit in db.fetchall('SELECT id,name,unit FROM stock_materials WHERE coalesce(active,1)=1 ORDER BY name'):combo.addItem(f'{mname}, {munit}',(rid,munit,mname))
         combo.setCurrentIndex(0)
-        if mid and combo.findData((mid,unit))>=0:combo.setCurrentIndex(combo.findData((mid,unit)))
+        found=-1
+        for k in range(combo.count()):
+            d=combo.itemData(k)
+            if d and d[0]==mid:found=k
+        if found>=0:combo.setCurrentIndex(found)
         else:combo.setEditText(name)
-        self.lines.setCellWidget(r,0,combo);item(self.lines,r,1,unit);item(self.lines,r,2,qty);item(self.lines,r,3,note)
+        self.lines.setCellWidget(r,0,combo);item(self.lines,r,1,unit,False);item(self.lines,r,2,qty);item(self.lines,r,3,new_unit);item(self.lines,r,4,new_qty);item(self.lines,r,5,'' if cost is None else ('%g'%cost));item(self.lines,r,6,'',False);item(self.lines,r,7,'',False);item(self.lines,r,8,note)
+        self._busy=False
         def changed():
             data=combo.currentData()
-            if data and combo.currentText()==combo.itemText(combo.currentIndex()):
-                for row in range(self.lines.rowCount()):
-                    if self.lines.cellWidget(row,0) is combo and not text(self.lines,row,1):item(self.lines,row,1,data[1])
-        combo.currentIndexChanged.connect(changed)
+            for row in range(self.lines.rowCount()):
+                if self.lines.cellWidget(row,0) is combo:
+                    self._busy=True;item(self.lines,row,1,data[1] if data else '',False);self._busy=False;self.recalc(row,2)
+        combo.currentIndexChanged.connect(changed);self.recalc(r,2)
+    def _material(self,row):
+        combo=self.lines.cellWidget(row,0);data=combo.currentData() if combo.currentIndex()>=0 and combo.currentText()==combo.itemText(combo.currentIndex()) else None
+        return data
+    def recalc(self,row,col):
+        if self._busy:return
+        from . import stock_registers as reg
+        self._busy=True
+        try:
+            data=self._material(row);qty=text(self.lines,row,2);new_qty=text(self.lines,row,4);cost_text=text(self.lines,row,5)
+            def num(v):
+                try:return float(v.replace(',','.').replace(' ',''))
+                except ValueError:return None
+            q,nq,cost=num(qty),num(new_qty),num(cost_text)
+            if col in (2,) and data and q and not cost_text:                      # стоимость партии из справочника цен
+                c=reg.default_cost(db,data[2],data[1],q)
+                if c is not None:item(self.lines,row,5,'%g'%c);cost=c
+            if col==0 and data and q and not cost_text:
+                c=reg.default_cost(db,data[2],data[1],q)
+                if c is not None:item(self.lines,row,5,'%g'%c);cost=c
+            old_p,new_p=reg.unit_prices(cost,q,nq) if cost is not None and q and nq else (reg.unit_prices(cost,q,None) if cost is not None and q else (None,None))
+            item(self.lines,row,6,'' if old_p is None else ('%.4f'%old_p).rstrip('0').rstrip('.'),False);item(self.lines,row,7,'' if new_p is None else ('%.4f'%new_p).rstrip('0').rstrip('.'),False)
+        finally:self._busy=False
+    def rows(self):
+        rows=[]
+        for r in range(self.lines.rowCount()):
+            combo=self.lines.cellWidget(r,0);data=self._material(r)
+            rows.append(dict(material_id=data[0] if data else None,material_name=data[2] if data else combo.currentText(),unit=text(self.lines,r,1),quantity=text(self.lines,r,2),new_unit=text(self.lines,r,3),new_quantity=text(self.lines,r,4),cost=text(self.lines,r,5),note=text(self.lines,r,8)))
+        return rows
+    def header(self):
+        return dict(number=self.number.text(),transfer_date=self.day.value(),from_place=self.from_place.currentText(),to_place=self.to_place.currentText(),reason=self.reason.text(),approved_by=self.approved_by.text(),commission=self.commission.text(),file_path=self.file.text(),notes=self.notes.text())
     def save(self):
         from . import stock_registers as reg
         try:
-            rows=[]
-            for r in range(self.lines.rowCount()):
-                combo=self.lines.cellWidget(r,0);data=combo.currentData() if combo.currentText()==combo.itemText(combo.currentIndex()) else None
-                rows.append(dict(material_id=data[0] if data else None,material_name=combo.currentText(),unit=text(self.lines,r,1),quantity=text(self.lines,r,2),note=text(self.lines,r,3)))
-            self.tid=reg.save_transfer(db,dict(number=self.number.text(),transfer_date=self.day.value(),from_place=self.from_place.currentText(),to_place=self.to_place.currentText(),reason=self.reason.text(),approved_by=self.approved_by.text(),commission=self.commission.text(),file_path=self.file.text(),notes=self.notes.text()),rows,self.tid);self.accept()
-        except Exception as e:error(self,e)
+            self.tid=reg.save_transfer(db,self.header(),self.rows(),self.tid);self.status.setText('Акт сохранён.');self.refresh_state();return True
+        except Exception as e:error(self,e);return False
+    def post(self):
+        from . import stock_registers as reg
+        if not self.save():return
+        try:
+            n=reg.post_transfer(db,self.tid,self.update_catalog.isChecked())
+        except Exception as e:error(self,e);return
+        self.status.setText(f'Акт проведён: переведено позиций — {n}. Остатки склада'+(' и цены справочника' if self.update_catalog.isChecked() else '')+' обновлены.');self.refresh_state()
+    def reverse(self):
+        from . import stock_registers as reg
+        if self.tid and QMessageBox.question(self,'Отмена проведения','Отменить проведение акта? Остатки склада и цены справочника вернутся к прежним значениям.')==QMessageBox.StandardButton.Yes:
+            try:reg.reverse_transfer(db,self.tid)
+            except Exception as e:error(self,e);return
+            self.status.setText('Проведение отменено.');self.refresh_state()
+    def refresh_state(self):
+        from . import stock_registers as reg
+        posted=bool(self.tid) and reg.is_posted(db,self.tid)
+        self.post_btn.setEnabled(not posted);self.reverse_btn.setEnabled(posted);self.save_btn.setEnabled(not posted)
+        self.lines.setEnabled(not posted)
+        self.setWindowTitle('Акт перевода материалов'+(' — ПРОВЕДЁН' if posted else ''))
 
 
 class RegisterView(QWidget):
@@ -572,7 +631,7 @@ class RegisterView(QWidget):
         if orders:
             headers=['Дата','№','О чём приказ','Кто издал','Действует до','Файл','Примечание'];base="SELECT id,order_date,number,title,issued_by,valid_until,CASE WHEN coalesce(file_path,'')<>'' THEN 'есть' ELSE '' END,notes,order_date dt,number||' '||title||' '||coalesce(content,'')||' '||coalesce(issued_by,'')||' '||coalesce(notes,'') hay FROM stock_orders"
         else:
-            headers=['Дата','№','Откуда','Куда','Материалы','Основание','Файл'];base="SELECT t.id,t.transfer_date,t.number,t.from_place,t.to_place,coalesce((SELECT group_concat(material_name||' — '||quantity||' '||unit,'; ') FROM stock_transfer_lines l WHERE l.transfer_id=t.id),'') materials,t.reason,CASE WHEN coalesce(t.file_path,'')<>'' THEN 'есть' ELSE '' END,t.transfer_date dt,t.number||' '||t.from_place||' '||t.to_place||' '||coalesce(t.reason,'')||' '||coalesce(t.notes,'')||' '||coalesce((SELECT group_concat(material_name,' ') FROM stock_transfer_lines l WHERE l.transfer_id=t.id),'') hay FROM stock_transfers t"
+            headers=['Дата','№','Откуда','Куда','Материалы','Основание','Статус','Файл'];base="SELECT t.id,t.transfer_date,t.number,t.from_place,t.to_place,coalesce((SELECT group_concat(material_name||': '||quantity||' '||unit||CASE WHEN coalesce(new_quantity,'')<>'' THEN ' → '||new_quantity||' '||new_unit||CASE WHEN new_price IS NOT NULL THEN ' ('||round(new_price,2)||' за '||new_unit||')' ELSE '' END ELSE '' END,'; ') FROM stock_transfer_lines l WHERE l.transfer_id=t.id),'') materials,t.reason,CASE WHEN t.posted=1 THEN 'Проведён' ELSE 'Черновик' END,CASE WHEN coalesce(t.file_path,'')<>'' THEN 'есть' ELSE '' END,t.transfer_date dt,t.number||' '||t.from_place||' '||t.to_place||' '||coalesce(t.reason,'')||' '||coalesce(t.notes,'')||' '||coalesce((SELECT group_concat(material_name,' ') FROM stock_transfer_lines l WHERE l.transfer_id=t.id),'') hay FROM stock_transfers t"
         for w in words:where.append('LOWER(hay) LIKE ?');params.append('%'+w+'%')
         if self.date_from.value():where.append('dt>=?');params.append(self.date_from.value())
         if self.date_to.value():where.append('dt<=?');params.append(self.date_to.value())
