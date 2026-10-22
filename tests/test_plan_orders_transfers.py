@@ -116,7 +116,7 @@ def test_register_views(ui):
     orders = sv.RegisterView('orders')
     assert orders.table.rowCount() == 1 and orders.table.item(0, 1).text() == '5/26' and orders.table.item(0, 0).text() == '01.03.2026'
     transfers = sv.RegisterView('transfers')
-    assert transfers.table.rowCount() == 1 and 'Труба — 3 м' in transfers.table.item(0, 4).text()
+    assert transfers.table.rowCount() == 1 and 'Труба: 3 м' in transfers.table.item(0, 4).text()
     transfers.search.setText('труба'); assert transfers.table.rowCount() == 1
     transfers.search.setText('нет такого'); assert transfers.table.rowCount() == 0
     transfers.search.clear(); transfers.table.selectRow(0); transfers.delete()
