@@ -5,7 +5,7 @@
 import re
 
 from PyQt6.QtWidgets import (QDialog, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout, QGroupBox, QLineEdit, QDoubleSpinBox, QDateEdit, QLabel,
-                              QPushButton, QTabWidget, QScrollArea, QMessageBox, QCheckBox, QTextEdit, QTableWidget, QTableWidgetItem, QAbstractItemView)
+                              QPushButton, QTabWidget, QScrollArea, QMessageBox, QCheckBox, QTextEdit, QTableWidget, QTableWidgetItem, QAbstractItemView, QApplication)
 from PyQt6.QtCore import QDate, QLocale, Qt
 
 from .date_widgets import DateEdit
@@ -234,6 +234,10 @@ class ContractCardDialog(QDialog):
         from .print_ui import make_buttons, gsvm_card
         for b in make_buttons(self, lambda: gsvm_card(db, self.contract_id), lambda: 'Договор ГСВ ' + (self.inp_number.text() or str(self.contract_id)), self.ensure_saved):
             bottom.addWidget(b)
+        copy_button = QPushButton('Скопировать данные клиента')
+        copy_button.setToolTip('В буфер обмена: ФИО, адрес, телефон, паспорт, кем выдан, дата выдачи, котёл (модель и серийный номер)')
+        copy_button.clicked.connect(self.copy_client_data)
+        bottom.addWidget(copy_button)
         self.edit_button = QPushButton('Изменить')
         self.edit_button.clicked.connect(self.toggle_edit)
         bottom.addWidget(self.edit_button)
@@ -281,6 +285,23 @@ class ContractCardDialog(QDialog):
             w.setEnabled(not locked)
         self.edit_button.setVisible(bool(self.contract_id))
         self.edit_button.setText('Изменить' if locked else 'Заблокировать')
+
+    def client_copy_text(self):
+        client = dict(self.client_form.values())
+        if self.customer.is_legal() and self.customer.legal_id():              # заказчик — юрлицо: берём его данные из справочника
+            row = db.fetchone('SELECT name,legal_address,phone FROM le_clients WHERE id=?', (self.customer.legal_id(),))
+            if row:
+                client.update(name=row[0], address=row[1] or '', phone=row[2] or '', passport='', passport_issuer='', passport_date='')
+        return md.client_copy_text(client, self.equipment_tab.rows(), self.inp_object_address.text())
+
+    def copy_client_data(self):
+        """Формирует текст по данным карточки (в том числе ещё не сохранённым) и сразу кладёт его в буфер обмена."""
+        text = self.client_copy_text()
+        if not text:
+            QMessageBox.information(self, 'Буфер обмена', 'В карточке нет данных клиента для копирования.')
+            return
+        QApplication.clipboard().setText(text)
+        self.status.setText('Скопировано в буфер обмена: ' + text.splitlines()[0])
 
     def toggle_edit(self):
         if not self.locked and not self.save_data():

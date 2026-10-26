@@ -30,6 +30,7 @@ SOURCES = {
  'smr_acts': ('Акт СМР','act_number',['act_number','description','note']),
  'notes': ('Заметка','title',['title','body']),
  'le_outgoing': ('Исходящий документ','reg_number',['reg_number','recipient','subject','note']),
+ 'contacts': ('Контакт','name',['name','organization','position','phone','email','address','note']),
  'weld_register': ('Заявка / письмо / протокол сварщиков','number',['number','counterparty','subject','basis','note']),
  'doc_register': ('Документ журнала','reg_number',['reg_number','doc_number','correspondent','subject','executor','note']),
 }
@@ -120,6 +121,8 @@ def initialize(db):
         docs_register_migrate(db)
         from .weld_register_domain import migrate as weld_register_migrate
         weld_register_migrate(db)
+        from .contacts_domain import migrate as contacts_migrate
+        contacts_migrate(db)
         from .incoming_domain import migrate as incoming_migrate
         incoming_migrate(db)
         from .secret_store import migrate as secret_migrate
@@ -237,6 +240,7 @@ def delete_client(db, cid):
             blank = ','.join(f"{c}=''" for c in cols if c in columns)
             db.execute(f'UPDATE {table} SET client_id=NULL' + (',' + blank if blank else '') + ' WHERE client_id=?', (cid,))
         db.execute('UPDATE smr_contracts SET person_id=NULL WHERE person_id=?', (cid,))
+        db.execute('UPDATE contacts SET client_id=NULL WHERE client_id=?', (cid,))
         db.execute('UPDATE ip_contracts SET person_id=NULL WHERE person_id=?', (cid,))
         db.execute('UPDATE fl_contracts SET person_id=NULL WHERE person_id=?', (cid,))
         db.execute("DELETE FROM notes WHERE link_table='crm.clients' AND link_id=?", (cid,))

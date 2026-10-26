@@ -32,7 +32,10 @@ def wait_job(owner, timeout=15):
         time.sleep(0.01)
 
 
-SKIP_IN_REMOTE = {'test_selftest_starts_program_like_user': 'отдельный процесс со своей базой — к сетевому режиму не относится',
+SKIP_IN_REMOTE = {'test_extra_phone_persists_in_all_cards': 'подменяет базу в модулях — несовместимо с сетевым режимом',
+                  'test_copy_button_in_montage_card_and_edit_buttons': 'подменяет базу в модулях — несовместимо с сетевым режимом',
+                  'test_contacts_view_and_menu': 'подменяет базу в модулях — несовместимо с сетевым режимом',
+                  'test_selftest_starts_program_like_user': 'отдельный процесс со своей базой — к сетевому режиму не относится',
                   'test_welders_view_has_register_tab': 'подменяет базу в модулях — несовместимо с сетевым режимом',
                   'test_transfer_dialog_recalculates_and_posts': 'подменяет базу в модулях — несовместимо с сетевым режимом',
                   'test_manual_contract_number_is_not_overwritten': 'подменяет базу в модулях — несовместимо с сетевым режимом',
@@ -55,3 +58,17 @@ def pytest_collection_modifyitems(config, items):
             reason = SKIP_IN_REMOTE.get(item.name)
             if reason:
                 item.add_marker(pytest.mark.skip(reason=reason))
+
+
+@pytest.fixture(autouse=True)
+def _restore_module_db():
+    """Тесты подменяют базу в модулях smetagaz; модули, впервые импортированные во время подмены, иначе навсегда остались бы со временной (закрытой) базой."""
+    import sys
+    from smetagaz import database as dbm
+    original = dbm.db
+    yield
+    for name, mod in list(sys.modules.items()):
+        if name.startswith('smetagaz') and name != 'smetagaz.database':
+            cur = getattr(mod, 'db', None)
+            if cur is not None and cur is not original and cur.__class__.__name__ == 'DatabaseManager':
+                mod.db = original

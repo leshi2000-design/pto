@@ -622,3 +622,31 @@ def consumption_summary(db, cid):
 def consumption_rows(db, cid):
     return db.fetchall("""SELECT c.created_at,coalesce((SELECT min(d.work_date) FROM welding_days d WHERE d.job_id=c.job_id),''),c.name,c.unit,c.qty
         FROM gsvm_consumption c WHERE c.contract_id=? ORDER BY c.id""", (cid,))
+
+
+def is_boiler(kind):
+    k = str(kind or '').casefold().replace('ё', 'е')
+    return 'котел' in k or 'котл' in k
+
+
+def client_copy_text(client, equipment_rows, object_address=''):
+    """Текст для буфера обмена: ФИО, адрес, телефоны, паспорт, кем выдан, дата выдачи и котёл (модель, серийный номер). Пустые данные пропускаются."""
+    from .dates import display_date
+    lines = []
+
+    def add(label, value):
+        value = str(value or '').strip()
+        if value:
+            lines.append(f'{label}: {value}')
+    add('ФИО', client.get('name'))
+    add('Адрес', client.get('address') or object_address)
+    add('Телефон', client.get('phone'))
+    add('Паспорт', client.get('passport'))
+    add('Кем выдан', client.get('passport_issuer'))
+    add('Дата выдачи', display_date(client.get('passport_date') or ''))
+    boilers = [r for r in equipment_rows if is_boiler(r.get('kind'))]
+    for r in boilers:
+        model, serial = str(r.get('model') or '').strip(), str(r.get('serial') or '').strip()
+        if model or serial:
+            lines.append('Котел: ' + ', '.join(x for x in (f'модель {model}' if model else '', f'серийный номер {serial}' if serial else '') if x))
+    return '\n'.join(lines)

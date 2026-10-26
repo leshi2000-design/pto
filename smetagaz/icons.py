@@ -22,6 +22,7 @@ PATHS={
 'materials':'M3 7l9-5 9 5v10l-9 5-9-5z M3 7l9 5 9-5 M12 12v10',
 'orders':'M9 2h6a1 1 0 0 1 1 1v1h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2V3a1 1 0 0 1 1-1z M8 11h8 M8 15h5',
 'docs':'M6 2h8l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z M14 2v5h5 M8 13h8 M8 17h6',
+'contacts':'M4 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4z M8 4v16 M12 10a2 2 0 1 0 4 0 2 2 0 0 0-4 0z M11 16c0-1.5 1.3-2.5 3-2.5s3 1 3 2.5',
 'welders':'M14 2L4 14h7l-1 8 10-13h-7z',
 'gsv_catalog':'M3 4h7v16H3z M14 4h7v16h-7z M6 8h1 M17 8h1',
 'calculators':'M5 2h14v20H5z M8 5h8v4H8z M8 13h1 M15 13h1 M8 17h1 M15 17h1',

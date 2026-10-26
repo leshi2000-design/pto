@@ -490,7 +490,13 @@ class ContractDialog(QDialog):
             g.addWidget(self.cmb_person, r, 1, 1, 2)
             new_person = QPushButton('＋ Новый клиент…')
             new_person.clicked.connect(self.new_person)
-            g.addWidget(new_person, r, 3)
+            edit_person = QPushButton('✎ Данные клиента…')
+            edit_person.setToolTip('Телефоны, адрес, паспорт выбранного клиента (сохраняются в разделе «Клиенты»)')
+            edit_person.clicked.connect(self.edit_person)
+            box = QHBoxLayout()
+            box.addWidget(new_person)
+            box.addWidget(edit_person)
+            g.addLayout(box, r, 3)
             r += 1
         (self.rb_legal if self.party_mode == 'legal' else self.rb_person).setChecked(True)
         if self.party_mode == 'both':
@@ -500,7 +506,13 @@ class ContractDialog(QDialog):
             g.addWidget(self.cmb_legal, r, 1, 1, 2)
             new_legal = QPushButton('＋ Новое юрлицо…')
             new_legal.clicked.connect(self.new_legal)
-            g.addWidget(new_legal, r, 3)
+            edit_legal = QPushButton('✎ Данные юрлица…')
+            edit_legal.setToolTip('Реквизиты, телефоны и контактные лица выбранного юрлица (сохраняются в справочнике юрлиц)')
+            edit_legal.clicked.connect(self.edit_legal)
+            box = QHBoxLayout()
+            box.addWidget(new_legal)
+            box.addWidget(edit_legal)
+            g.addLayout(box, r, 3)
             r += 1
         else:
             self.cmb_legal.hide()
@@ -621,6 +633,26 @@ class ContractDialog(QDialog):
         if d.exec():
             self.set_party('person', d.person_id)
 
+    def edit_person(self):
+        """Данные выбранного клиента (несколько телефонов, адрес, паспорт) — то же окно, что в разделе «Клиенты»."""
+        pid = self.cmb_person.currentData()
+        if not pid:
+            warn(self, 'Сначала выберите клиента.', 'Клиент')
+            return
+        from .workspace_view import RecordDialog
+        if RecordDialog('crm.clients', pid, self).exec():
+            populate_person_combo(self.cmb_person, pid)
+            self.refresh_party_info()
+
+    def edit_legal(self):
+        lid = self.cmb_legal.currentData()
+        if not lid:
+            warn(self, 'Сначала выберите юрлицо.', 'Юрлицо')
+            return
+        if LegalClientDialog(lid, self).exec():
+            populate_legal_combo(self.cmb_legal, lid)
+            self.refresh_party_info()
+
     def new_legal(self):
         d = LegalClientDialog(parent=self)
         if d.exec():
@@ -636,7 +668,8 @@ class ContractDialog(QDialog):
         if self.party_kind() == 'legal':
             lid = self.cmb_legal.currentData()
             row = cc.legal(db, lid) if lid else None
-            self.party_info.setText('' if not row else f'УНП {row["unp"] or "—"} · {row["legal_address"] or row["address"] or "адрес не указан"} · руководитель: {row["head_name"] or "не указан"}')
+            phones = '; '.join(x for x in [row['phone'] if row else ''] + [c['phone'] for c in (cc.contacts(db, lid) if row else []) if c['phone']] if x)
+            self.party_info.setText('' if not row else f'УНП {row["unp"] or "—"} · {row["legal_address"] or row["address"] or "адрес не указан"} · руководитель: {row["head_name"] or "не указан"} · тел.: {phones or "не указан"}')
         else:
             pid = self.cmb_person.currentData()
             row = gsv_domain.get_client(db, pid) if pid else None

@@ -44,6 +44,7 @@ from .staff_view import StaffView
 from .counterparty_ui import CounterpartyView, LegalDirectoryView
 from .orders_view import OrdersView
 from .docs_view import DocumentsView
+from .contacts_view import ContactsView
 from .ip_view import IpView
 from .incoming_view import IncomingView, process_files
 from . import error_log
@@ -91,7 +92,7 @@ NAV_SECTIONS = [
     ('Сегодня', ['tasks']),
     ('Услуги', ['gsv', 'contracts', 'gsn', 'ip', 'fl']),
     ('Сметы', ['estimates']),
-    ('Клиенты', ['clients']),
+    ('Клиенты', ['clients', 'contacts']),
     ('Юрлица', ['legal_entities', 'smr', 'to', 'le_other']),
     ('Работники', ['orders', 'welders', 'staff']),
     ('Документы', ['docs']),
@@ -101,7 +102,7 @@ NAV_SECTIONS = [
 ]
 KNOWN_TABS = [
     ("tasks", "Сегодня"), ("gsv", "Проекты ГСВ"), ("contracts", "Монтаж ГСВ"), ("gsn", "Монтаж ГСН"), ("ip", "СМР (ИП)"), ("fl", "СМР (физлица)"), ("le_other", "Прочие (юр.лица)"),
-    ("clients", "Клиенты"), ("legal_entities", "Справочник юрлиц"), ("smr", "СМР (юрлица)"), ("to", "ТО (юрлица)"),
+    ("clients", "Клиенты"), ("contacts", "Контакты"), ("legal_entities", "Справочник юрлиц"), ("smr", "СМР (юрлица)"), ("to", "ТО (юрлица)"),
     ("orders", "Наряды"), ("docs", "Документы"), ("welders", "Сварщики"), ("writeoff", "Списание"), ("calculators", "Калькуляторы"), ("stats", "Статистика"),
     ("estimates", "Реестр смет"), ("exec", "Исполнительная док."), ("workspace", "Все реестры · быстрый обзор"), ("audit", "Журнал и корзина"), ("errors", "Журнал ошибок"), ("staff", "Сотрудники и бригады"), ("incoming", "Входящие документы"),
     ("gsv_catalog", "Справочники ГСВ"), ("gsn_catalog", "Справочник ГСН"), ("materials", "Справочник"),
@@ -185,6 +186,7 @@ class MainWindow(QMainWindow):
             "le_other": lambda: CounterpartyView("le"),
             "orders": OrdersView,
             "docs": DocumentsView,
+            "contacts": ContactsView,
             "exec": ExecutiveDocsView,
             "materials": MaterialsView,
             "welders": WeldersView,
