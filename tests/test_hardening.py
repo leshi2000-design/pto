@@ -98,10 +98,10 @@ def test_backup_on_exit_runs_when_last_copy_is_old(tmp_path, monkeypatch):
     monkeypatch.setattr(services, 'db', d)
     svc = services.AutoBackupService()
     svc.backup_on_exit()
-    assert list((tmp_path / 'backups').glob('auto_*.zip')) and d.get_setting('last_db_backup')
-    before = len(list((tmp_path / 'backups').glob('auto_*.zip')))
+    assert list((tmp_path / 'backups').glob('db_*.zip')) and d.get_setting('last_db_backup')
+    before = len(list((tmp_path / 'backups').glob('db_*.zip')))
     svc2 = services.AutoBackupService(); svc2.backup_on_exit()       # свежая копия уже есть — повторно не создаётся
-    assert len(list((tmp_path / 'backups').glob('auto_*.zip'))) == before
+    assert len(list((tmp_path / 'backups').glob('db_*.zip'))) == before
     d.close()
 
 
@@ -217,7 +217,7 @@ def test_close_hides_window_at_once_and_backs_up_in_background(tmp_path, monkeyp
     end = time.time() + 20
     while not getattr(w, '_exit_ready', False) and time.time() < end:
         app.processEvents(); time.sleep(0.02)
-    assert w._exit_ready and list((tmp_path / 'backups').glob('auto_*.zip'))
+    assert w._exit_ready and list((tmp_path / 'backups').glob('db_*.zip'))
     d.close()
 
 
