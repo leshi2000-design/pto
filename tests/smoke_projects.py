@@ -17,6 +17,9 @@ def warning(*a,**k):raise AssertionError(str(a[1:]))
 QMessageBox.warning=warning
 from smetagaz.database import db
 db.init_db()
+import smetagaz.document_save as save_ui
+save_ui.choose_document_path=lambda parent,suggested,**kwargs:str(Path(folder.name)/'выбранные_файлы'/Path(suggested).name)    # автоматический ответ на «Сохранить как» в smoke-проверке
+
 import smetagaz.preflight_ui as pfu;PREFLIGHT_SEEN=[];pfu.confirm=lambda parent,title,issues:PREFLIGHT_SEEN.append((title,issues)) or True      # сверку подтверждаем автоматически
 from smetagaz import gsv_project_domain as g
 from smetagaz.gsv_view import ProjectEditDialog,GsvProjectsView,StatusEditorDialog,TemplateSettingsPanel
@@ -40,7 +43,7 @@ gv.open_file_or_dir=lambda path:None
 import smetagaz.folder_ui as fu
 fu.choose_folder=lambda parent,section,name,current='':(os.path.join(folder.name,'мои проекты',name),True)       # пользователь выбрал «Создать новую»
 for kind in ('contract','act','card'):p.make_document(kind)
-row=db.fetchone('SELECT pd_number,contract_number,work_status,client_status,contract_signed,act_signed,project_folder,client_id FROM gsv_projects WHERE id=?',(p.project_id,));assert os.path.isdir(row[6]) and os.path.basename(row[6]).startswith(row[0]+' - ') and row[6].endswith('(Иванов Иван Иванович)'),row[6]
+row=db.fetchone('SELECT pd_number,contract_number,work_status,client_status,contract_signed,act_signed,project_folder,client_id FROM gsv_projects WHERE id=?',(p.project_id,));assert not row[6] and all(Path(g.doc_path(db,p.project_id,k)).parent==Path(folder.name)/'выбранные_файлы' for k in g.DOC_KINDS)
 assert all(p.doc_state[k].text()=='актуален' for k in g.DOC_KINDS)
 assert p.is_editing_enabled          # сразу после первого создания карточка ещё открыта
 p.toggle_edit();assert not p.txt_object.isEnabled();p.toggle_edit();assert p.is_editing_enabled and p.txt_object.isEnabled()
@@ -76,6 +79,8 @@ assert c.ask_folder() and os.path.basename(md.contract_folder(db,c.contract_id))
 c2=ContractCardDialog(contract_id=c.contract_id);assert not c2.client_form.isEnabled() and not c2.inp_object.isEnabled() and c2.equipment_tab.isEnabled();c2.toggle_edit();assert c2.client_form.isEnabled()
 # --- файлы клиента ---
 from smetagaz.client_files import client_folders,ClientFilesWidget
+g.link_folder(db,p.project_id,Path(folder.name)/'выбранные_файлы')
+row=list(row);row[6]=g.project_folder(db,p.project_id)    # для проверки дерева папку привязываем явно
 (Path(row[6])/'тест.txt').write_text('x');widget=ClientFilesWidget(row[7]);assert widget.tree.topLevelItemCount()==1 and widget.tree.topLevelItem(0).childCount()>=1
 assert [s for s,_,_ in client_folders(db,row[7])]==['Проекты ГСВ']
 # --- календарь ---

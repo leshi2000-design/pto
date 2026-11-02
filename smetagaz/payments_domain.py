@@ -1,5 +1,5 @@
 """A single payment ledger, shared by an estimate and its linked contract."""
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from datetime import date
 OWNERS={'estimates':('total','Сметы'),'contracts':('contract_amount','ГСВ'),'gsn_projects':('contract_amount','ГСН'),'gsv_projects':('cost','Проектирование ГСВ'),'le_contracts':('amount','Прочие (юр.лица)'),'smr_contracts':('amount','СМР (юрлица)'),'to_contracts':('amount','ТО (юрлица)'),'ip_contracts':('amount','СМР (ИП)'),'fl_contracts':('amount','СМР (физлица)'),'client_sales':('amount','Продажа по чеку')}
 ESTIMATE_OWNERS=('contracts','gsn_projects','gsv_projects','smr_contracts','to_contracts','ip_contracts','fl_contracts')
@@ -30,21 +30,33 @@ def record(db,owner,rid):
     return dict(zip([c[0] for c in cur.description],row))
 def account(db,owner,rid):
     data=record(db,owner,rid);eid=rid if owner=='estimates' else data.get('estimate_id')
+    return (eid,data)
+
+def _reconcile(db,eid):
+    """Legacy opening balances are persisted only as part of a write transaction."""
     if eid:
         db.execute('UPDATE estimates SET payment_opening=max(0,round(coalesce(paid,0)-coalesce((SELECT sum(amount) FROM payments WHERE estimate_id=estimates.id),0),2)) WHERE id=? AND round(coalesce(paid,0)-coalesce(payment_opening,0)-coalesce((SELECT sum(amount) FROM payments WHERE estimate_id=estimates.id),0),2)<>0',(eid,))
-    return (eid,data)
 def history(db,owner,rid):
     eid,data=account(db,owner,rid)
     return db.fetchall('SELECT id,date,amount,note FROM payments WHERE '+('estimate_id=?' if eid else 'estimate_id IS NULL AND owner_type=? AND owner_id=?')+' ORDER BY date DESC,id DESC',(eid,) if eid else (owner,rid))
 def summary(db,owner,rid):
-    eid,data=account(db,owner,rid);opening=db.fetchone('SELECT payment_opening FROM estimates WHERE id=?',(eid,))[0] or 0 if eid else 0
-    paid=Decimal(str(opening))+sum((Decimal(str(r[2])) for r in history(db,owner,rid)),Decimal(0));total=Decimal(str(data.get(OWNERS[owner][0]) or 0))
+    eid,data=account(db,owner,rid)
+    ledger=sum((Decimal(str(r[2])) for r in history(db,owner,rid)),Decimal(0))
+    opening=Decimal(0)
+    if eid:
+        paid_value,stored=db.fetchone('SELECT paid,payment_opening FROM estimates WHERE id=?',(eid,))
+        opening=Decimal(str(stored or 0))
+        difference=Decimal(str(paid_value or 0))-opening-ledger
+        if difference.quantize(Decimal('.01'), rounding=ROUND_HALF_UP):
+            opening=max(Decimal(0),(Decimal(str(paid_value or 0))-ledger).quantize(Decimal('.01'), rounding=ROUND_HALF_UP))
+    paid=opening+ledger;total=Decimal(str(data.get(OWNERS[owner][0]) or 0))
     return {'total':total,'paid':paid,'debt':total-paid,'opening':Decimal(str(opening)),'estimate_id':eid}
 def add(db,owner,rid,amount,day,note=''):
     n=Decimal(str(amount));date.fromisoformat(day)
     if not n.is_finite() or n<=0 or n!=n.quantize(Decimal('.01')):raise ValueError('Введите положительную сумму с точностью до копейки')
     with db.transaction():
         eid,data=account(db,owner,rid)
+        _reconcile(db,eid)
         return db.execute('INSERT INTO payments(estimate_id,owner_type,owner_id,amount,date,note) VALUES(?,?,?,?,?,?)',(eid,owner,rid,float(n),day,note)).lastrowid
 
 def remove(db,pid):
@@ -59,6 +71,7 @@ def link(db,owner,rid,eid):
         if old and history(db,owner,rid):raise ValueError('У связанной сметы есть оплаты. Перепривязка запрещена, чтобы не переносить деньги между объектами.')
         if eid:
             account(db,'estimates',eid)
+            _reconcile(db,eid)
             for table in ESTIMATE_OWNERS:
                 found=db.fetchone(f'SELECT id FROM {table} WHERE estimate_id=?',(eid,))
                 if found and (table!=owner or found[0]!=rid):raise ValueError('Эта смета уже связана с другим договором')

@@ -270,9 +270,45 @@ class DatabaseManager:
                 ('export_font', 'Segoe UI'), ('export_font_size', '13'),
                 ('export_company_name', 'ООО "ГазМонтаж"'),
                 ('export_excel_template', ''), ('export_word_template', ''),
-                ('app_name', 'ПТО 4.9.0'), ('tabs_config', json.dumps(default_tabs))
+                ('app_name', 'ПТО 4.9.2'), ('tabs_config', json.dumps(default_tabs))
             ]
             c.executemany("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", defaults)
+
+    def snapshot_databases(self, folder, timeout=5, copy_timeout=120):
+        """Take both snapshots only between transactions; never wait inside sqlite3.backup.
+
+        A remote transaction spans multiple HTTP requests. Holding _lock while
+        backing up its source connection would prevent the client from committing.
+        The scheduler retries a busy snapshot on its next check.
+        """
+        from pathlib import Path
+        from .sqlite_util import connect
+        import time
+        if not self._lock.acquire(timeout=timeout):
+            raise sqlite3.OperationalError('База занята: повторите резервирование после завершения операции')
+        try:
+            if self.conn.in_transaction:
+                raise sqlite3.OperationalError('Открыта транзакция: повторите резервирование после её завершения')
+            deadline = time.monotonic() + copy_timeout
+            def progress(_status, _remaining, _total):
+                if time.monotonic() > deadline:
+                    raise sqlite3.OperationalError('Превышено время создания снимка базы; повторите резервирование')
+            def copy(source, target, name='main'):
+                source.backup(target, name=name, pages=256, progress=progress, sleep=0.05)
+            folder = Path(folder)
+            with connect(folder / 'smetagaz.db') as target:
+                copy(self.conn, target)
+            attached = {row[1] for row in self.conn.execute('PRAGMA database_list')}
+            if 'crm' in attached:
+                with connect(folder / 'clients.db') as target:
+                    copy(self.conn, target, name='crm')
+            else:
+                clients = Path(self.db_name).with_name('clients.db')
+                if clients.exists():
+                    with connect(clients) as source, connect(folder / 'clients.db') as target:
+                        copy(source, target)
+        finally:
+            self._lock.release()
 
     def safety_backup(self, reason, keep=10):
         """Снимок smetagaz.db и clients.db в backups/before_<причина>_<время>. Возвращает папку; при ошибке бросает исключение.
@@ -281,18 +317,26 @@ class DatabaseManager:
         """
         from pathlib import Path
         from datetime import datetime
+        import re
+        if not isinstance(reason, str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,39}', reason):
+            raise ValueError('Недопустимое имя причины резервирования')
+        if isinstance(keep, bool) or not isinstance(keep, int) or not 1 <= keep <= 100:
+            raise ValueError('Количество снимков должно быть от 1 до 100')
         root=Path(self.db_name).parent/'backups'
+        if root.is_symlink() or root.resolve() != Path(self.db_name).parent.resolve() / 'backups':
+            raise ValueError('Небезопасная папка резервных копий')
         folder=root/(f'before_{reason}_'+datetime.now().strftime('%Y%m%d_%H%M%S_%f'))
         folder.mkdir(parents=True)
-        with self._lock:
-            from .sqlite_util import connect
-            with connect(folder/'smetagaz.db') as target:
-                self.conn.backup(target)
-            clients=Path(self.db_name).with_name('clients.db')
-            if clients.exists():
-                with connect(clients) as source, connect(folder/'clients.db') as target:source.backup(target)
-        old=sorted(root.glob(f'before_{reason}_*'))
-        for stale in old[:-keep] if keep else []:
+        try:
+            self.snapshot_databases(folder)
+        except BaseException:
+            import shutil
+            shutil.rmtree(folder)
+            raise
+        old=sorted(p for p in root.glob(f'before_{reason}_*') if p.is_dir() and not p.is_symlink())
+        for stale in old[:-keep]:
+            if any(f.name not in ('smetagaz.db', 'clients.db') or not f.is_file() for f in stale.iterdir()):
+                continue                         # никогда не удалять посторонние каталоги
             for f in stale.iterdir():f.unlink()
             stale.rmdir()
         return str(folder)

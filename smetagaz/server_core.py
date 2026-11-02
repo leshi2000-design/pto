@@ -18,6 +18,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 
 from . import net_proto as proto
+from .net_permissions import personal_setting, read_pragma
 
 ROLES = {'admin': 'Администратор', 'manager': 'Руководитель', 'editor': 'Сотрудник', 'viewer': 'Только просмотр'}
 RESTRICTABLE = ('editor', 'viewer')       # скрывать разделы можно только у сотрудников и наблюдателей; руководитель и администратор видят всё
@@ -36,11 +37,15 @@ class UserStore:
     def __init__(self, path):
         self.path = str(path)
         self._lock = threading.Lock()
+        self._security_listeners = []
         with self._connect() as con:
             con.execute("""CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, login TEXT NOT NULL UNIQUE COLLATE NOCASE, full_name TEXT DEFAULT '', role TEXT NOT NULL DEFAULT 'editor',
                 salt TEXT NOT NULL, hash TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created TEXT DEFAULT '', last_login TEXT DEFAULT '')""")
             if 'hidden' not in [r[1] for r in con.execute('PRAGMA table_info(users)')]:
                 con.execute("ALTER TABLE users ADD COLUMN hidden TEXT DEFAULT ''")      # разделы, скрытые от пользователя (через запятую)
+            if 'auth_version' not in [r[1] for r in con.execute('PRAGMA table_info(users)')]:
+                con.execute('ALTER TABLE users ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 0')
+            con.execute('CREATE TABLE IF NOT EXISTS user_settings(uid INTEGER NOT NULL, key TEXT NOT NULL, value TEXT, PRIMARY KEY(uid,key))')
             con.execute("""CREATE TABLE IF NOT EXISTS access_log(id INTEGER PRIMARY KEY, ts TEXT NOT NULL, event TEXT NOT NULL, login TEXT DEFAULT '', ip TEXT DEFAULT '',
                 device TEXT DEFAULT '', details TEXT DEFAULT '')""")
             con.execute("""CREATE TABLE IF NOT EXISTS remember_tokens(id INTEGER PRIMARY KEY, uid INTEGER NOT NULL, hash TEXT NOT NULL UNIQUE, device TEXT DEFAULT '',
@@ -61,6 +66,23 @@ class UserStore:
     @staticmethod
     def _hash(password, salt):
         return hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), bytes.fromhex(salt), PBKDF2_ROUNDS).hex()
+
+    def security_state(self, uid):
+        with self._connect() as con:
+            return con.execute('SELECT active,auth_version FROM users WHERE id=?', (uid,)).fetchone()
+
+    def _security_changed(self, uid):
+        for callback in tuple(self._security_listeners):
+            callback(uid)
+
+    def preference(self, uid, key):
+        with self._connect() as con:
+            row = con.execute('SELECT value FROM user_settings WHERE uid=? AND key=?', (uid, key)).fetchone()
+        return row[0] if row else None
+
+    def set_preference(self, uid, key, value):
+        with self._lock, self._connect() as con:
+            con.execute('INSERT OR REPLACE INTO user_settings(uid,key,value) VALUES(?,?,?)', (uid, key, value))
 
     @staticmethod
     def _hidden_set(role, text):
@@ -114,10 +136,11 @@ class UserStore:
         self._check_password(password)
         salt = secrets.token_hex(16)
         with self._lock, self._connect() as con:
-            con.execute('UPDATE users SET salt=?,hash=? WHERE id=?', (salt, self._hash(password, salt), uid))
+            con.execute('UPDATE users SET salt=?,hash=?,auth_version=auth_version+1 WHERE id=?', (salt, self._hash(password, salt), uid))
             con.execute('DELETE FROM remember_tokens WHERE uid=?', (uid,))         # смена пароля отменяет все сохранённые входы
             row = con.execute('SELECT login FROM users WHERE id=?', (uid,)).fetchone()
         self.log('password', actor or (row[0] if row else ''), details=f'пароль пользователя {row[0] if row else uid} изменён, сохранённые входы отозваны')
+        self._security_changed(uid)
 
     def update(self, uid, role=None, active=None, full_name=None, hidden=None, actor=''):
         with self._lock, self._connect() as con:
@@ -132,9 +155,13 @@ class UserStore:
             if row[0] == 'admin' and row[1] and (new_role != 'admin' or not new_active):
                 if con.execute("SELECT count(*) FROM users WHERE role='admin' AND active=1 AND id<>?", (uid,)).fetchone()[0] == 0:
                     raise ValueError('Нельзя отключить или понизить последнего администратора')
-            con.execute('UPDATE users SET role=?,active=?,full_name=coalesce(?,full_name),hidden=? WHERE id=?', (new_role, new_active, full_name, new_hidden, uid))
-            if not new_active:
+            security_changed = (new_role, new_active, new_hidden) != (row[0], row[1], row[3])
+            con.execute('UPDATE users SET role=?,active=?,full_name=coalesce(?,full_name),hidden=?,auth_version=auth_version+? WHERE id=?',
+                        (new_role, new_active, full_name, new_hidden, int(security_changed), uid))
+            if security_changed:
                 con.execute('DELETE FROM remember_tokens WHERE uid=?', (uid,))
+        if security_changed:
+            self._security_changed(uid)
         changes = []
         if new_role != row[0]:
             changes.append(f'роль {ROLES[row[0]]} → {ROLES[new_role]}')
@@ -152,6 +179,8 @@ class UserStore:
                 raise ValueError('Нельзя удалить последнего администратора')
             con.execute('DELETE FROM users WHERE id=?', (uid,))
             con.execute('DELETE FROM remember_tokens WHERE uid=?', (uid,))
+            con.execute('DELETE FROM user_settings WHERE uid=?', (uid,))
+        self._security_changed(uid)
         if row:
             self.log('user_delete', actor, details=f'удалён {row[2]}')
 
@@ -171,13 +200,13 @@ class UserStore:
     def verify(self, login, password):
         """-> (id, login, full_name, role) или None. Время проверки не зависит от того, существует ли логин."""
         with self._connect() as con:
-            row = con.execute('SELECT id,login,full_name,role,salt,hash,active,hidden FROM users WHERE login=?', (str(login or '').strip(),)).fetchone()
+            row = con.execute('SELECT id,login,full_name,role,salt,hash,active,hidden,auth_version FROM users WHERE login=?', (str(login or '').strip(),)).fetchone()
         salt = row[4] if row else '00' * 16
         calc = self._hash(str(password or ''), salt)
         if row and row[6] and hmac.compare_digest(calc, row[5]):
             with self._lock, self._connect() as con:
                 con.execute('UPDATE users SET last_login=? WHERE id=?', (datetime.now().isoformat(timespec='seconds'), row[0]))
-            return row[0], row[1], row[2], row[3], self._hidden_set(row[3], row[7])
+            return row[0], row[1], row[2], row[3], self._hidden_set(row[3], row[7]), row[8]
         return None
 
 
@@ -198,7 +227,7 @@ class UserStore:
         if not raw:
             return None
         with self._connect() as con:
-            row = con.execute('SELECT u.id,u.login,u.full_name,u.role,u.active,t.id,t.last_used,u.hidden FROM remember_tokens t JOIN users u ON u.id=t.uid WHERE t.hash=?',
+            row = con.execute('SELECT u.id,u.login,u.full_name,u.role,u.active,t.id,t.last_used,u.hidden,u.auth_version FROM remember_tokens t JOIN users u ON u.id=t.uid WHERE t.hash=?',
                               (self._token_hash(raw),)).fetchone()
         if not row or not row[4] or str(row[1]).lower() != str(login or '').strip().lower():
             return None
@@ -210,7 +239,7 @@ class UserStore:
         with self._lock, self._connect() as con:
             con.execute('UPDATE remember_tokens SET last_used=? WHERE id=?', (datetime.now().isoformat(timespec='seconds'), row[5]))
             con.execute('UPDATE users SET last_login=? WHERE id=?', (datetime.now().isoformat(timespec='seconds'), row[0]))
-        return row[0], row[1], row[2], row[3], self._hidden_set(row[3], row[7])
+        return row[0], row[1], row[2], row[3], self._hidden_set(row[3], row[7]), row[8]
 
     def revoke_token(self, raw):
         with self._lock, self._connect() as con:
@@ -282,7 +311,8 @@ def classify(sql):
     if word == 'WITH':
         return 'write' if re.search(r'\b(INSERT|UPDATE|DELETE|REPLACE)\b', text, re.I) else 'read'
     if word == 'PRAGMA':
-        return 'denied' if '=' in text else 'read'
+        match = re.fullmatch(r'PRAGMA\s+(?:\w+\.)?(\w+)(?:\s*\(([^()]*)\))?\s*', text, re.I)
+        return 'read' if match and read_pragma(match[1], match[2]) else 'denied'
     if word in ('INSERT', 'UPDATE', 'DELETE', 'REPLACE'):
         return 'settings' if _SETTINGS_WRITE.match(text) else 'write'
     if word == 'VACUUM':
@@ -296,7 +326,7 @@ def allowed(role, kind):
     if kind == 'denied':
         return False
     if role == 'viewer':
-        return kind in ('read', 'settings', 'savepoint')
+        return kind == 'read'
     return True
 
 
@@ -319,14 +349,27 @@ def denied_tables(hidden):
     return full, write
 
 
-def make_authorizer(full, write):
+def make_authorizer(full, write, role='editor', restoring=False):
     DENY, OK = sqlite3.SQLITE_DENY, sqlite3.SQLITE_OK
     changing = (sqlite3.SQLITE_INSERT, sqlite3.SQLITE_UPDATE, sqlite3.SQLITE_DELETE)
 
     def check(action, a1, a2, dbname, source):
-        if source is not None:                       # действие триггера или представления (журнал изменений и т. п.)
-            return OK
         table = str(a1 or '').lower()
+        if action == sqlite3.SQLITE_PRAGMA:
+            return OK if read_pragma(a1, a2) else DENY
+        if action in changing:
+            if role == 'viewer':
+                return DENY
+            if table in ('audit_log', 'audit_ctx', 'sqlite_master', 'sqlite_schema', 'sqlite_temp_master', 'sqlite_temp_schema'):
+                if table == 'audit_log' and action == sqlite3.SQLITE_INSERT and str(source or '').startswith('audit_'):
+                    return OK
+                if table == 'audit_log' and restoring and action == sqlite3.SQLITE_UPDATE and a2 == 'restored':
+                    return OK
+                return DENY
+            if table == 'settings' and role != 'admin':
+                return DENY
+        if source is not None:                       # доверенные триггеры создаёт только сервер
+            return OK
         if action == sqlite3.SQLITE_READ and table in full:
             return DENY
         if action in changing and (table in full or table in write):
@@ -446,11 +489,12 @@ class Gate:
 # --- СЕРВЕР -------------------------------------------------------------------------------------------
 
 class Session:
-    def __init__(self, token, uid, login, name, role, ip, hidden=frozenset(), device=''):
+    def __init__(self, token, uid, login, name, role, ip, hidden=frozenset(), device='', auth_version=0):
         self.token, self.uid, self.login, self.name, self.role, self.ip = token, uid, login, name, role, ip
         self.hidden, self.device = frozenset(hidden), device
         full, write = denied_tables(self.hidden)
-        self.auth = make_authorizer(full, write) if (full or write) else None
+        self.auth = make_authorizer(full, write, role)
+        self.auth_version = auth_version
         self.created = self.last = time.time()
         self.requests = 0
 
@@ -465,6 +509,7 @@ class PtoServer:
         self.sessions = {}
         self.failures = {}
         self._lock = threading.Lock()
+        self.users._security_listeners.append(self.revoke_sessions)
         self.cert_path, self.key_path, self.fingerprint = ensure_certificate(tls_dir)
         self.httpd = None
         self.thread = None
@@ -559,7 +604,8 @@ class PtoServer:
         self.failures.pop((ip, str(login).lower()), None)
         token = secrets.token_urlsafe(32)
         with self._lock:
-            self.sessions[token] = Session(token, row[0], row[1], row[2] or row[1], row[3], ip, row[4], device)
+            self.sessions[token] = Session(token, row[0], row[1], row[2] or row[1], row[3], ip, row[4], device, row[5])
+        self.session(token)                       # изменение прав во время проверки пароля тоже отзывает вход
         logging.info('Вход: %s (%s) с %s', row[1], row[3], ip)
         self.users.log('login_token' if remember_token else 'login', row[1], ip, device, ROLES.get(row[3], row[3]))
         info = dict(token=token, login=row[1], name=row[2] or row[1], role=row[3], hidden=sorted(row[4]))
@@ -570,15 +616,24 @@ class PtoServer:
     def session(self, token):
         with self._lock:
             s = self.sessions.get(token)
-            if s and time.time() - s.last > SESSION_IDLE:
+        if s and (time.time() - s.last > SESSION_IDLE or self.users.security_state(s.uid) != (1, s.auth_version)):
+            with self._lock:
                 self.sessions.pop(token, None)
-                self.gate.forget(token)
-                s = None
+            self.gate.forget(token)              # не держим lock сеансов при ожидании блокировки базы
+            s = None
         if not s:
             raise proto.RemoteError('Сеанс завершён. Войдите заново.', 'no_session')
         s.last = time.time()
         s.requests += 1
         return s
+
+    def revoke_sessions(self, uid):
+        with self._lock:
+            tokens = [token for token, session in self.sessions.items() if session.uid == uid]
+            for token in tokens:
+                self.sessions.pop(token, None)
+        for token in tokens:
+            self.gate.forget(token)
 
     def active_sessions(self):
         with self._lock:
@@ -647,6 +702,44 @@ class PtoServer:
             return True
         if method == 'ping':
             return dict(user=s.login, role=s.role)
+        if method in ('get_setting', 'set_setting'):
+            key = str(req.get('key') or '')
+            if not key or len(key) > 200:
+                raise proto.RemoteError('Неверное имя настройки', 'bad_setting')
+            if method == 'get_setting':
+                value = self.users.preference(s.uid, key) if personal_setting(key) else None
+                with self.gate.access(s.token):
+                    return value if value is not None else self.db.get_setting(key, str(req.get('default', '')))
+            value = str(req.get('value', ''))
+            if len(value) > 1024 * 1024:
+                raise proto.RemoteError('Слишком большой размер настройки', 'bad_setting')
+            if personal_setting(key):
+                self.users.set_preference(s.uid, key, value)
+                return True
+            if s.role != 'admin':
+                raise proto.RemoteError('Общие настройки изменяет администратор', 'forbidden')
+            with self.gate.access(s.token):
+                self.session(s.token)
+                self.db.set_setting(key, value)
+                self._note_change(s.token, 'UPDATE settings')
+            self.users.log('setting', s.login, s.ip, s.device, key)   # значение может содержать секрет
+            return True
+        if method == 'restore_audit':
+            if s.role == 'viewer' or req.get('schema', 'main') not in ('main', 'crm'):
+                raise proto.RemoteError('Восстановление запрещено', 'forbidden')
+            from .audit_domain import restore
+            with self.gate.access(s.token):
+                self.session(s.token)
+                with self.db._lock:
+                    self._set_audit_user(s)
+                    full, write = denied_tables(s.hidden)
+                    self.db.conn.set_authorizer(make_authorizer(full, write, s.role, restoring=True))
+                    try:
+                        count = restore(self.db, int(req['entry_id']), req.get('schema', 'main'))
+                    finally:
+                        self.db.conn.set_authorizer(None)
+                    self._note_change(s.token, '*')
+                    return count
         if method == 'poll':
             rev, tables = self.changes_since(s.token, req.get('since'))
             return dict(rev=rev, tables=tables)
@@ -666,9 +759,16 @@ class PtoServer:
             if s.role == 'viewer':
                 raise proto.RemoteError('Недостаточно прав для изменения данных', 'forbidden')
             self.gate.begin(s.token)
-            self._set_audit_user(s)
+            try:
+                self.session(s.token)
+                with self.db._lock:
+                    self._set_audit_user(s)
+            except BaseException:
+                self.gate.forget(s.token)
+                raise
             return True
         if method == 'tx_end':
+            self.session(s.token)
             self.gate.end(s.token, bool(req.get('commit')))
             return True
         if method in ('exec', 'execmany'):
@@ -680,7 +780,8 @@ class PtoServer:
             if s.role == 'viewer':
                 raise proto.RemoteError('Недостаточно прав', 'forbidden')
             with self.gate.access(s.token):
-                return self.db.safety_backup(str(req.get('reason') or 'client')[:40], keep=int(req.get('keep', 10)))
+                self.session(s.token)
+                return self.db.safety_backup(req.get('reason') or 'client', keep=req.get('keep', 10))
         raise proto.RemoteError('Неизвестная команда', 'bad_method')
 
     def _set_audit_user(self, s):
@@ -698,11 +799,16 @@ class PtoServer:
         kind = classify(sql)
         if not self.allow_unsafe and not allowed(s.role, kind):
             raise proto.RemoteError('Команда запрещена: изменение структуры базы и опасные команды выполняет только сервер; режим «только просмотр» не позволяет менять данные', 'forbidden')
+        if not self.allow_unsafe and kind == 'savepoint' and self.gate.owner != s.token:
+            raise proto.RemoteError('Вложенная транзакция допустима только внутри вашей транзакции', 'forbidden')
         with self.gate.access(s.token):
+            self.session(s.token)                 # повторная проверка после ожидания чужой транзакции
             with self.db._lock:                    # установка имени для журнала и сама команда — одним неразрывным действием
+                if not self.allow_unsafe and kind == 'savepoint' and self.gate.owner != s.token:
+                    raise proto.RemoteError('Вложенная транзакция допустима только внутри вашей транзакции', 'forbidden')
                 if kind != 'read' and self.gate.owner != s.token:
                     self._set_audit_user(s)
-                if s.auth:
+                if not self.allow_unsafe:
                     self.db.conn.set_authorizer(s.auth)          # разделы, закрытые для этого пользователя, недоступны на уровне базы
                 try:
                     if many:
@@ -712,11 +818,11 @@ class PtoServer:
                     desc = [d[0] for d in cur.description] if cur.description else None
                     rows = [list(r) for r in cur.fetchall()] if desc else []
                 except sqlite3.DatabaseError as e:
-                    if s.auth and ('not authorized' in str(e) or 'prohibited' in str(e)):
-                        raise proto.RemoteError('Этот раздел закрыт для вашей учётной записи. Обратитесь к администратору.', 'forbidden')
+                    if not self.allow_unsafe and ('not authorized' in str(e) or 'prohibited' in str(e)):
+                        raise proto.RemoteError('Команда запрещена для вашей учётной записи. Обратитесь к администратору.', 'forbidden')
                     raise
                 finally:
-                    if s.auth:
+                    if not self.allow_unsafe:
                         self.db.conn.set_authorizer(None)
                 if kind in ('write', 'settings'):
                     self._note_change(s.token, sql)

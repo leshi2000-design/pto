@@ -19,6 +19,43 @@ from .edit_lock_ui import guarded
 from . import section_codes
 
 
+class ToHandoffDialog(QDialog):
+    """Какое оборудование передать в «ТО физ.лиц.»: по каждой отмеченной строке там будет заведена заготовка договора."""
+
+    def __init__(self, rows, parent=None):
+        super().__init__(parent)
+        from . import to_handoff as th
+        self.setWindowTitle('Передать в ТО физ.лиц.')
+        self.rows = rows
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel('Отметьте оборудование, на которое нужен договор технического обслуживания.\n'
+                                'Для каждого отмеченного в «ТО физ.лиц.» откроется отдельная карточка. '
+                                'Если не отметить ничего, будут переданы только данные клиента.'))
+        self.boxes = []
+        for r in rows:
+            text = ' · '.join(x for x in (r.get('kind'), r.get('model'), ('№ ' + r['serial']) if r.get('serial') else '') if x)
+            box = QCheckBox(text)
+            box.setChecked(th.is_maintainable(r.get('kind')))
+            layout.addWidget(box)
+            self.boxes.append(box)
+        if not rows:
+            layout.addWidget(QLabel('В карточке нет оборудования — будут переданы только данные клиента.'))
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        ok, cancel = QPushButton('Передать'), QPushButton('Отмена')
+        ok.setProperty('type', 'primary')
+        ok.setDefault(True)
+        ok.clicked.connect(self.accept)
+        cancel.clicked.connect(self.reject)
+        buttons.addWidget(cancel)
+        buttons.addWidget(ok)
+        layout.addLayout(buttons)
+        self.setMinimumWidth(460)
+
+    def selected(self):
+        return [r for r, box in zip(self.rows, self.boxes) if box.isChecked()]
+
+
 @guarded('gsvm', lambda d: d.contract_id, 'Договор монтажа ГСВ')
 class ContractCardDialog(QDialog):
     def __init__(self, estimate_id=None, title='', parent=None, contract_id=None):
@@ -238,6 +275,11 @@ class ContractCardDialog(QDialog):
         copy_button.setToolTip('В буфер обмена: ФИО, адрес, телефон, паспорт, кем выдан, дата выдачи, котёл (модель и серийный номер)')
         copy_button.clicked.connect(self.copy_client_data)
         bottom.addWidget(copy_button)
+        self.to_button = QPushButton('Передать в ТО')
+        self.to_button.setToolTip('Одним нажатием передать в программу «ТО физ.лиц.» (на этом компьютере): ФИО, адрес, телефон, паспортные данные, '
+                                  'газовое оборудование и его серийный номер. В «ТО физ.лиц.» откроется заполненная карточка нового договора.')
+        self.to_button.clicked.connect(self.send_to_to)
+        bottom.addWidget(self.to_button)
         self.edit_button = QPushButton('Изменить')
         self.edit_button.clicked.connect(self.toggle_edit)
         bottom.addWidget(self.edit_button)
@@ -302,6 +344,47 @@ class ContractCardDialog(QDialog):
             return
         QApplication.clipboard().setText(text)
         self.status.setText('Скопировано в буфер обмена: ' + text.splitlines()[0])
+
+    def send_to_to(self):
+        """«Передать в ТО»: данные карточки (в том числе ещё не сохранённые) уходят в программу «ТО физ.лиц.» на этом компьютере."""
+        from . import to_handoff as th
+        if self.customer.is_legal() and self.customer.legal_id():
+            QMessageBox.information(self, 'Передать в ТО', 'Заказчик этого договора — юридическое лицо. Программа «ТО физ.лиц.» работает только с физическими лицами.')
+            return
+        client = dict(self.client_form.values())
+        if not str(client.get('name') or '').strip():
+            QMessageBox.information(self, 'Передать в ТО', 'В карточке не указано ФИО клиента.')
+            return
+        rows = [r for r in self.equipment_tab.rows() if str(r.get('model') or '').strip() or str(r.get('serial') or '').strip()]
+        chosen = th.candidates(rows)
+        if len(chosen) != 1:                                          # ровно один котёл/колонка/плита — передаём без вопросов
+            dialog = ToHandoffDialog(rows, self)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            chosen = dialog.selected()
+        from . import __version__
+        payload = th.build_payload(client, chosen, self.inp_object_address.text(), self.inp_number.text(), __version__)
+        try:
+            th.write_payload(payload)
+        except OSError as exc:
+            QMessageBox.warning(self, 'Передать в ТО', 'Не удалось передать данные: ' + str(exc))
+            return
+        what = ', '.join(x for x in (r.get('kind') or '' for r in chosen) if x) or 'только данные клиента'
+        if th.to_is_running():
+            self.status.setText('Передано в «ТО физ.лиц.» (' + what + '): откройте окно «ТО физ.лиц.» — карточка договора уже готова.')
+            return
+        exe = th.find_exe()
+        if not exe:
+            from PyQt6.QtWidgets import QFileDialog
+            QMessageBox.information(self, 'Передать в ТО', 'Данные переданы. Программа «ТО физ.лиц.» сейчас не запущена, и я не знаю, где она лежит. '
+                                    'Укажите файл TO_fizlic.exe — я запомню его и запущу программу.')
+            exe, _ = QFileDialog.getOpenFileName(self, 'Где лежит TO_fizlic.exe', '', 'Программа (*.exe);;Все файлы (*)')
+            if exe:
+                th.save_exe(exe)
+        if exe and th.launch(exe):
+            self.status.setText('Передано в «ТО физ.лиц.» (' + what + '). Запускаю программу…')
+        else:
+            self.status.setText('Передано (' + what + '). Данные появятся при следующем запуске «ТО физ.лиц.».')
 
     def toggle_edit(self):
         if not self.locked and not self.save_data():
@@ -685,7 +768,7 @@ class ContractCardDialog(QDialog):
             self.doc_make[kind].style().polish(self.doc_make[kind])
             self.doc_open[kind].setEnabled(state in ('fresh', 'stale', 'linked'))
         folder = md.contract_folder(db, self.contract_id) if self.contract_id else ''
-        self.lbl_folder.setText(f'Папка договора: {folder}' if folder else 'Папка договора не привязана — программа предложит создать или выбрать её при формировании документов и кнопкой «Папка договора».')
+        self.lbl_folder.setText(f'Папка договора: {folder}' if folder else 'Папка договора не привязана. При формировании документа выберите место в окне «Сохранить как».')
 
     def make_document(self, kind):
         if not self.ensure_saved():
@@ -693,10 +776,12 @@ class ContractCardDialog(QDialog):
         from . import preflight, preflight_ui
         if not preflight_ui.confirm(self, f'«{dd.DOC_KINDS[kind][0]}»', preflight.check_montage(db, self.contract_id, kind)):
             return
-        if not self.ensure_folder():
-            return
         try:
-            path = dd.generate(db, self.contract_id, kind)
+            from .document_save import choose_document_path
+            destination = choose_document_path(self, dd.suggested_path(db, self.contract_id, kind), protected=[dd.template_path(db, kind)])
+            if not destination:
+                return
+            path = dd.generate(db, self.contract_id, kind, destination=destination)
         except (ValueError, OSError) as e:
             QMessageBox.warning(self, 'Документ не создан', str(e))
             return

@@ -382,14 +382,26 @@ def template_path(db, kind=KIND_TASK):
     return path if path and os.path.exists(path) else str(create_default_template(kind))
 
 
-def generate(db, oid, out_dir):
+def suggested_path(db, oid, out_dir=None):
+    o = get_order(db, oid)
+    if not o:
+        raise ValueError('Наряд не найден')
+    prefix = 'Наряд-допуск' if o['kind'] == KIND_PERMIT else 'Наряд'
+    name = gd.safe_name(f'{prefix}_{o["number"].replace("/", "-")}').replace(' ', '_')
+    ext = os.path.splitext(str(template_path(db, o['kind'])))[1].lower()
+    return os.path.join(str(out_dir or ''), name + ext)
+
+
+def generate(db, oid, out_dir=None, destination=None):
     """Формирует документ наряда (формат Word или Excel — как у шаблона) в папке out_dir; возвращает путь."""
     o = get_order(db, oid)
     if not o:
         raise ValueError('Наряд не найден')
-    os.makedirs(out_dir, exist_ok=True)
+    if out_dir and not destination:
+        os.makedirs(out_dir, exist_ok=True)
+    out_dir = str(out_dir or '')
     prefix = 'Наряд-допуск' if o['kind'] == KIND_PERMIT else 'Наряд'
     base = os.path.join(out_dir, gd.safe_name(f'{prefix}_{o["number"].replace("/", "-")}').replace(' ', '_'))
-    out = gd.render_file(template_path(db, o['kind']), base + '.docx', tags(db, oid))
+    out = gd.render_file(template_path(db, o['kind']), str(destination) if destination else base + '.docx', tags(db, oid))
     db.execute('UPDATE work_orders SET doc_path=? WHERE id=?', (out, oid))
     return out

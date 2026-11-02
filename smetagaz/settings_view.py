@@ -46,6 +46,7 @@ class SettingsView(QWidget):
         net_box = QGroupBox('Сетевая работа')
         net_layout = QHBoxLayout(net_box)
         remote = getattr(db, 'is_remote', False)
+        self.can_admin = not remote or db.role == 'admin'
         side = getattr(db, 'side_by_side', False)
         net_layout.addWidget(QLabel(f'Режим: клиент, вы вошли как {db.user}' if remote else
                                     ('Режим: локально, параллельно с ПТО Сервером этого компьютера' if side else 'Режим: локальная база на этом компьютере')), 1)
@@ -55,6 +56,7 @@ class SettingsView(QWidget):
         layout.addWidget(net_box)
         btn_password=QPushButton('Установить / изменить пароль входа')
         btn_password.clicked.connect(self.change_password);layout.addWidget(btn_password)
+        btn_password.setEnabled(self.can_admin)
         self.job=None
         layout.addWidget(QLabel('Пароль входа защищает интерфейс. Базы на диске не зашифрованы.\nДля защиты диска используйте шифрование средствами ОС.'))
 
@@ -63,6 +65,7 @@ class SettingsView(QWidget):
         l_app = QGridLayout(box_app)
         l_app.addWidget(QLabel("Название программы:"), 0, 0)
         self.inp_app_name = QLineEdit(db.get_setting("app_name", "ПТО"))
+        self.inp_app_name.setEnabled(self.can_admin)
         l_app.addWidget(self.inp_app_name, 0, 1, 1, 2)
 
         self.btn_color = QPushButton("Выбрать акцентный цвет интерфейса")
@@ -91,6 +94,7 @@ class SettingsView(QWidget):
         exp_layout = QGridLayout(box_export)
         exp_layout.addWidget(QLabel("Организация:"), 0, 0)
         self.inp_company = QLineEdit(db.get_setting("export_company_name", 'ООО "ГазМонтаж"'))
+        self.inp_company.setEnabled(self.can_admin)
         exp_layout.addWidget(self.inp_company, 0, 1, 1, 2)
 
         exp_layout.addWidget(QLabel("Шрифт PDF:"), 1, 0)
@@ -126,8 +130,8 @@ class SettingsView(QWidget):
             box_db.setEnabled(False)
             box_db.setToolTip('Резервные копии и восстановление выполняет ПТО Сервер: пока он работает, база не должна подменяться')
 
-        layout.addWidget(OcrSettingsBox())
-        layout.addWidget(SectionCodesBox())          # номера разделов договоров (вручную)
+        ocr_box = OcrSettingsBox(); ocr_box.setEnabled(self.can_admin); layout.addWidget(ocr_box)
+        codes_box = SectionCodesBox(); codes_box.setEnabled(self.can_admin); layout.addWidget(codes_box)
 
         # 4. Папки договоров: где создаются новые папки (по разделам)
         box_folders = QGroupBox("Папки договоров (где создавать новые папки)")
@@ -151,6 +155,7 @@ class SettingsView(QWidget):
             buttons.addWidget(reset_btn)
             fl.addLayout(buttons, row, 2)
         layout.addWidget(box_folders)
+        box_folders.setEnabled(self.can_admin)
 
         # 4a. Копия вне компьютера
         box_off = QGroupBox("Копия вне компьютера (второй диск или облачная папка)")
@@ -270,7 +275,8 @@ class SettingsView(QWidget):
         self.table_tabs.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
 
     def save_app_settings(self):
-        db.set_setting("app_name", self.inp_app_name.text().strip())
+        if self.can_admin:
+            db.set_setting("app_name", self.inp_app_name.text().strip())
 
         tabs_data = []
         for r in range(self.table_tabs.rowCount()):
@@ -291,7 +297,8 @@ class SettingsView(QWidget):
 
     def save_export_settings(self):
         db.set_setting('estimate_prepared_by',self.inp_prepared_by.text().strip())
-        db.set_setting('export_company_name', self.inp_company.text())
+        if self.can_admin:
+            db.set_setting('export_company_name', self.inp_company.text())
         db.set_setting('export_font', self.font_combo.currentFont().family())
         db.set_setting('export_font_size', self.font_size.value())
         QMessageBox.information(self, "Успех", "Настройки экспорта сохранены.")
@@ -408,7 +415,15 @@ class SettingsView(QWidget):
         return Path(db.db_name).parent / 'excel_reports' / EXPORT_FILENAME
 
     def export_contracts_excel_now(self):
-        path = self.contracts_excel_path()
+        from .document_save import choose_document_paths
+        from .gsv_project_domain import EXPORT_FILENAME as PROJECTS_FILE
+        choices = choose_document_paths(self, [
+            dict(key='registry', path=self.contracts_excel_path()),
+            dict(key='projects', path=self.contracts_excel_path().parent / PROJECTS_FILE),
+        ])
+        if choices is None:
+            return
+        path = Path(choices['registry'])
 
         def work(ctx):
             now = datetime.now()
@@ -422,8 +437,8 @@ class SettingsView(QWidget):
                 out['registry'] = f'{now:%d.%m.%Y %H:%M}: ошибка экспорта — {e}'
             ctx.progress(1, 2, 'Карточки проектов ГСВ…')
             try:
-                from .gsv_project_domain import export_cards, EXPORT_FILENAME as PROJECTS_FILE
-                ppath = path.parent / PROJECTS_FILE
+                from .gsv_project_domain import export_cards
+                ppath = Path(choices['projects'])
                 count = export_cards(db, ppath)
                 out['projects'] = f'{now:%d.%m.%Y %H:%M}: проекты ГСВ, карточек {count} — {ppath}'
                 db.set_setting('last_projects_excel', now.isoformat())

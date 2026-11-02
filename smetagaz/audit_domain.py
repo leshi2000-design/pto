@@ -143,6 +143,10 @@ LEGACY_CHILDREN = {'contracts': [('contract_equipment', 'contract_id'), ('gsvm_e
 
 def restore(db, entry_id, schema='main'):
     """Восстанавливает удалённую запись и её дочерние записи, удалённые в тот же момент. Возвращает число восстановленных строк."""
+    if schema not in ('main', 'crm'):
+        raise ValueError('Неизвестная схема журнала')
+    if getattr(db, 'is_remote', False):
+        return db.restore_audit(entry_id, schema)
     row = db.fetchone(f"SELECT id,ts,table_name,record_id,action,old_json,restored FROM {schema}.audit_log WHERE id=?", (entry_id,))
     if not row or row[4] != 'D':
         raise ValueError('Восстановить можно только удалённую запись')

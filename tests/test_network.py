@@ -119,7 +119,7 @@ def test_viewer_and_inactive_user(net):
     net.users.add('view', 'pass12', 'viewer')
     v = net.client('view', 'pass12')
     assert v.fetchone('SELECT count(*) FROM estimates')[0] == 0
-    v.set_setting('ui', '1')                                  # настройки интерфейса смотрящему можно
+    v.set_setting('is_dark', '1')                             # персональные настройки интерфейса смотрящему можно
     with pytest.raises(proto.RemoteError):
         v.execute("INSERT INTO estimates(title,date,total) VALUES('x','2026-01-01',1)")
     with pytest.raises(proto.RemoteError):

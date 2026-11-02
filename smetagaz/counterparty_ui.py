@@ -870,7 +870,7 @@ class ContractDialog(QDialog):
         self.doc_state_lbl.setStyleSheet(f'color:{color};font-weight:600;')
         self.btn_make_contract.setText('⟳ Переформировать' if state in ('stale', 'fresh', 'linked') else 'Сформировать')
         folder = cc.contract_folder(db, self.mod, self.contract_id) if self.contract_id else ''
-        self.lbl_folder.setText(f'Папка договора: {folder}' if folder else 'Папка договора не привязана — программа предложит создать или выбрать её при формировании документов и кнопкой «Папка договора».')
+        self.lbl_folder.setText(f'Папка договора: {folder}' if folder else 'Папка договора не привязана. При формировании документа выберите место в окне «Сохранить как».')
 
     def ensure_folder(self):
         if cc.contract_folder(db, self.mod, self.contract_id):
@@ -909,10 +909,12 @@ class ContractDialog(QDialog):
         from . import preflight_ui
         if not preflight_ui.confirm(self, f'«{cc.DOC_KINDS[kind][0]}»', cc.check(db, self.mod, kind, ref)):
             return
-        if not self.ensure_folder():
-            return
         try:
-            path = cc.generate(db, self.mod, kind, ref)
+            from .document_save import choose_document_path
+            destination = choose_document_path(self, cc.suggested_path(db, self.mod, kind, ref), protected=[cc.template_path(db, self.mod, kind)])
+            if not destination:
+                return
+            path = cc.generate(db, self.mod, kind, ref, destination=destination)
         except Exception as e:
             warn(self, str(e))
             return

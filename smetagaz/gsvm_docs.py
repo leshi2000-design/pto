@@ -374,17 +374,28 @@ def doc_state(db, cid, kind):
     return 'fresh' if row[1] == data_hash(db, cid) else 'stale'
 
 
-def generate(db, cid, kind):
+def suggested_path(db, cid, kind):
+    if kind not in DOC_KINDS:
+        raise ValueError('Неизвестный документ')
+    tags = tag_map(db, cid)
+    number = tags.get('НОМЕР_ДОГОВОРА') or str(cid)
+    name = gd.safe_name(f'{DOC_KINDS[kind][3]}_{number.replace("/", "-")}').replace(' ', '_')
+    ext = os.path.splitext(str(template_path(db, kind)))[1].lower()
+    return os.path.join(md.contract_folder(db, cid) or '', name + ext)
+
+
+def generate(db, cid, kind, destination=None):
     """Формирует документ в папке договора (старый файл перезаписывается); возвращает путь."""
     if kind not in DOC_KINDS:
         raise ValueError('Неизвестный документ')
     folder = md.contract_folder(db, cid)
-    if not folder:
+    if not destination and not folder:
         raise ValueError('Сначала привяжите или создайте папку договора кнопкой «Папка договора»')
     tags = tag_map(db, cid)
     title, ext, _group, prefix = DOC_KINDS[kind]
     number = tags.get('НОМЕР_ДОГОВОРА') or str(cid)
     out = os.path.join(folder, gd.safe_name(f'{prefix}_{number.replace("/", "-")}').replace(' ', '_') + '.' + ext)
+    out = str(destination) if destination else out
     template = template_path(db, kind)
     out = gd.render_file(template, out, tags, normalize=norm_tag, payments=payments(db, cid))
     db.execute('INSERT OR REPLACE INTO gsvm_docs(contract_id,kind,file_path,data_hash,generated_at,linked) VALUES(?,?,?,?,?,0)',

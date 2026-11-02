@@ -17,7 +17,7 @@ class DocsTab(QWidget):
         super().__init__()
         self.dialog = dialog
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel('Документы формируются по тегам (вкладка «Шаблоны и теги») из данных всех вкладок и сохраняются в папке договора. '
+        layout.addWidget(QLabel('Документы формируются по тегам (вкладка «Шаблоны и теги») из данных всех вкладок. Перед созданием каждого файла открывается «Сохранить как». '
                                 'Можно привязать уже готовый файл вместо формирования.'))
         self.table = make_table(['Документ', 'Состояние', 'Файл'], (380, 260))
         self.table.cellDoubleClicked.connect(lambda *_: self.open_selected())
@@ -67,10 +67,12 @@ class DocsTab(QWidget):
             from . import preflight_ui
             if not preflight_ui.confirm(self, f'«{dd.DOC_KINDS[kind][0]}»', dd.check(db, self.dialog.contract_id, kind)):
                 return None
-        if not self.dialog.ensure_folder():
-            return None
         try:
-            return dd.generate(db, self.dialog.contract_id, kind)
+            from .document_save import choose_document_path
+            destination = choose_document_path(self, dd.suggested_path(db, self.dialog.contract_id, kind), protected=[dd.template_path(db, kind)])
+            if not destination:
+                return None
+            return dd.generate(db, self.dialog.contract_id, kind, destination=destination)
         except (ValueError, OSError) as e:
             QMessageBox.warning(self, 'Документ не создан', str(e))
             return None

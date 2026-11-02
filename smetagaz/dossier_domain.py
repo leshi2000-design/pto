@@ -2,9 +2,9 @@
 from pathlib import Path
 import hashlib
 import json
-import os
-import tempfile
 import shutil
+import threading
+from functools import partial
 from . import template_domain as domain
 
 def migrate(db):
@@ -89,59 +89,86 @@ def digest(path):
         for block in iter(lambda:f.read(1024*1024),b''):h.update(block)
     return h.hexdigest()
 
-import threading
 _generation_lock=threading.Lock()
 
-def generate(db,did):
-    with _generation_lock:return _generate(db,did)
-
-def _generate(db,did):
-    from .template_engine import transform,filename
-    from .table_templates import render
+def _plan(db, did, slots=None, require_folder=False):
+    from .template_engine import transform, filename
     with db.transaction():
-        ctx,tables,certs=context(db,did);target=folder(db,did);selected={r[0] for r in db.fetchall('SELECT slot FROM dossier_selection WHERE dossier_id=?',(did,))};tpls=[t for t in templates(db,did) if t['slot'] in selected];old={r[0]:r[1:] for r in db.fetchall('SELECT slot,file_path,signature,sha256 FROM dossier_files WHERE dossier_id=?',(did,))}
-    jobs=[]
-    for t in tpls:
-        if not t['file_path']:raise ValueError('Не подключён шаблон: '+t['label'])
-        source=domain.path(db,t['file_path']);tags=transform(source);out=target/(filename(t['label'])+'_'+t['slot']+source.suffix.lower());jobs.append([t['slot'],t['label'],source,out,tags,False])
-    data=row(db,did)
-    if data['owner_type'] in ('contracts','gsv_projects'):
-        for docid,title,file in db.fetchall('SELECT d.id,d.title,d.file_path FROM object_welding_documents l JOIN welding_documents d ON d.id=l.document_id WHERE l.owner_type=? AND l.owner_id=?',(data['owner_type'],data['owner_id'])):
-            source=domain.path(db,file)
-            if not source.is_file():raise ValueError('Недоступен документ сварки: '+title)
-            jobs.append(['welding:'+str(docid),title,source,target/('Сварка_'+str(docid)+'_'+filename(source.name)),set(),True])
-    for c in certs:
-        source=domain.path(db,c['path']) if c['path'] else None
-        if source is None or not source.is_file():raise ValueError('Недоступен файл сертификата: '+c['name'])
-        jobs.append(['cert:'+str(c['id']),c['name'],source,target/('Сертификат_'+str(c['id'])+'_'+filename(source.name)),set(),True])
-    ctx['document_register']='\n'.join(f'{i}. {title} — {out.name}' for i,(_,title,_,out,_,_) in enumerate(jobs,1));ctx['реестр']=ctx['document_register']
-    if not jobs:raise ValueError('Подключите и выберите шаблоны или добавьте сертификаты')
-    target.mkdir(parents=True,exist_ok=True);changed=[];unchanged=[]
-    with tempfile.TemporaryDirectory(prefix='.id-stage-',dir=target) as temp:
-        for slot,title,src,out,tags,is_cert in jobs:
-            dependency={k:ctx.get(k,tables.get(k.split('.')[0])) for k in sorted(tags)}
-            sig=hashlib.sha256((digest(src)+json.dumps(dependency,sort_keys=True,ensure_ascii=False,default=str)).encode()).hexdigest()
-            previous=old.get(slot)
-            if previous:
-                recorded=domain.path(db,previous[0])
-                if recorded.resolve()!=out.resolve() and recorded.exists():raise ValueError('Папка или имя ранее созданного файла изменены. Создайте новый комплект для другой папки.')
-            if previous and previous[1]==sig and out.is_file():unchanged.append(str(out));continue
-            if out.exists() and (not previous or digest(out)!=previous[2]):raise ValueError('Файл изменён вручную или создан вне программы. Сохраните его отдельно и уберите из рабочей папки перед переформированием: '+out.name)
-            staged=Path(temp)/('new_'+str(len(changed)))
-            if is_cert:shutil.copyfile(src,staged)
-            else:render(src,ctx,tables,staged)
-            changed.append((slot,title,out,staged,sig,digest(staged)))
-        backups=[];published=[]
+        ctx, tables, certs = context(db, did)
+        data = row(db, did)
         try:
-            for i,(slot,title,out,staged,sig,sha) in enumerate(changed):
-                if out.exists():backup=Path(temp)/('old_'+str(i));shutil.copy2(out,backup);backups.append((out,backup))
-                os.replace(staged,out);published.append(out)
-            with db.transaction():
-                row(db,did)
-                for slot,title,out,staged,sig,sha in changed:db.execute('INSERT INTO dossier_files(dossier_id,slot,title,file_path,signature,sha256) VALUES(?,?,?,?,?,?) ON CONFLICT(dossier_id,slot) DO UPDATE SET title=excluded.title,file_path=excluded.file_path,signature=excluded.signature,sha256=excluded.sha256,updated_at=CURRENT_TIMESTAMP',(did,slot,title,str(out),sig,sha))
-        except Exception:
-            for out in published:out.unlink(missing_ok=True)
-            for out,backup in backups:os.replace(backup,out)
-            raise
-    # Deselected/obsolete files stay on disk and in history; never silently delete user documents.
-    return {'changed':len(changed),'unchanged':len(unchanged),'folder':str(target)}
+            target = folder(db, did)
+        except ValueError:
+            if require_folder:
+                raise
+            target = Path('ИД_' + data['module'] + '_' + str(did))
+        selected = set(slots) if slots is not None else {r[0] for r in db.fetchall('SELECT slot FROM dossier_selection WHERE dossier_id=?', (did,))}
+        tpls = [t for t in templates(db, did) if t['slot'] in selected]
+        old = {r[0]: r[1:] for r in db.fetchall('SELECT slot,file_path,signature,sha256 FROM dossier_files WHERE dossier_id=?', (did,))}
+    jobs = []
+    for template in tpls:
+        if not template['file_path']:
+            raise ValueError('Не подключён шаблон: ' + template['label'])
+        source = domain.path(db, template['file_path'])
+        out = target / (filename(template['label']) + '_' + template['slot'] + source.suffix.lower())
+        jobs.append(dict(key=template['slot'], title=template['label'], source=source, path=out, tags=transform(source), copy=False))
+    if data['owner_type'] in ('contracts', 'gsv_projects'):
+        for docid, title, file in db.fetchall('SELECT d.id,d.title,d.file_path FROM object_welding_documents l JOIN welding_documents d ON d.id=l.document_id WHERE l.owner_type=? AND l.owner_id=?',
+                                             (data['owner_type'], data['owner_id'])):
+            source = domain.path(db, file)
+            if not source.is_file():
+                raise ValueError('Недоступен документ сварки: ' + title)
+            jobs.append(dict(key='welding:' + str(docid), title=title, source=source, path=target / ('Сварка_' + str(docid) + '_' + filename(source.name)), tags=set(), copy=True))
+    for cert in certs:
+        source = domain.path(db, cert['path']) if cert['path'] else None
+        if source is None or not source.is_file():
+            raise ValueError('Недоступен файл сертификата: ' + cert['name'])
+        jobs.append(dict(key='cert:' + str(cert['id']), title=cert['name'], source=source, path=target / ('Сертификат_' + str(cert['id']) + '_' + filename(source.name)), tags=set(), copy=True))
+    if not jobs:
+        raise ValueError('Подключите и выберите шаблоны или добавьте сертификаты')
+    return ctx, tables, target, old, jobs
+
+
+def planned_documents(db, did, slots=None):
+    return _plan(db, did, slots)[4]
+
+
+def generate(db, did, destinations=None):
+    with _generation_lock:
+        return _generate(db, did, destinations)
+
+
+def _generate(db, did, destinations=None):
+    from .table_templates import render
+    from .document_files import validate_destinations, publish_files
+    ctx, tables, target, old, jobs = _plan(db, did, require_folder=destinations is None)
+    jobs = validate_destinations(jobs, destinations)
+    ctx['document_register'] = '\n'.join(f'{i}. {job["title"]} — {job["path"].name}' for i, job in enumerate(jobs, 1))
+    ctx['реестр'] = ctx['document_register']
+    changed, unchanged, writers = [], [], []
+    for job in jobs:
+        slot, source, out, tags = job['key'], job['source'], job['path'], job['tags']
+        dependency = {k: ctx.get(k, tables.get(k.split('.')[0])) for k in sorted(tags)}
+        sig = hashlib.sha256((digest(source) + json.dumps(dependency, sort_keys=True, ensure_ascii=False, default=str)).encode()).hexdigest()
+        previous = old.get(slot)
+        same_path = previous and domain.path(db, previous[0]).resolve() == out.resolve()
+        if previous and not same_path and domain.path(db, previous[0]).exists() and destinations is None:
+            raise ValueError('Папка или имя ранее созданного файла изменены. Создайте новый комплект для другой папки.')
+        if same_path and previous[1] == sig and out.is_file() and digest(out) == previous[2]:
+            unchanged.append(str(out))
+            continue
+        if destinations is None and out.exists() and (not previous or digest(out) != previous[2]):
+            raise ValueError('Файл изменён вручную или создан вне программы. Сохраните его отдельно и уберите из рабочей папки перед переформированием: ' + out.name)
+        changed.append((job, sig))
+        writer = partial(shutil.copyfile, source) if job['copy'] else partial(render, source, ctx, tables)
+        writers.append((out, writer))
+    def record(hashes):
+        with db.transaction():
+            row(db, did)
+            for job, sig in changed:
+                db.execute('INSERT INTO dossier_files(dossier_id,slot,title,file_path,signature,sha256) VALUES(?,?,?,?,?,?) ON CONFLICT(dossier_id,slot) DO UPDATE SET title=excluded.title,file_path=excluded.file_path,signature=excluded.signature,sha256=excluded.sha256,updated_at=CURRENT_TIMESTAMP',
+                           (did, job['key'], job['title'], str(job['path']), sig, hashes[str(job['path'])]))
+    publish_files(writers, record)
+    parents = {str(job['path'].parent) for job in jobs}
+    return {'changed': len(changed), 'unchanged': len(unchanged), 'folder': next(iter(parents)) if len(parents) == 1 else str(target),
+            'paths': [str(job['path']) for job in jobs]}

@@ -716,19 +716,31 @@ def doc_path(db, mod, kind, ref_id):
     return row[0] if row else ''
 
 
-def generate(db, mod, kind, ref_id):
+def suggested_path(db, mod, kind, ref_id):
+    if kind not in DOC_KINDS:
+        raise ValueError('Неизвестный документ')
+    cid, aid = _ids(db, mod, kind, ref_id)
+    tags = tag_map(db, mod, cid, aid)
+    number = tags.get('НОМЕР_ДОГОВОРА') or str(cid)
+    suffix = f'_{tags.get("НОМЕР_АКТА") or aid}' if aid else ''
+    name = gd.safe_name(f'{DOC_KINDS[kind][2]}{suffix}_{number.replace("/", "-")}').replace(' ', '_')
+    ext = os.path.splitext(str(template_path(db, mod, kind)))[1].lower()
+    return os.path.join(contract_folder(db, mod, cid) or '', name + ext)
+
+
+def generate(db, mod, kind, ref_id, destination=None):
     if kind not in DOC_KINDS:
         raise ValueError('Неизвестный документ')
     cid, aid = _ids(db, mod, kind, ref_id)
     folder = contract_folder(db, mod, cid)
-    if not folder:
+    if not destination and not folder:
         raise ValueError('Сначала привяжите или создайте папку договора кнопкой «Папка договора»')
     tags = tag_map(db, mod, cid, aid)
     title, scope, prefix = DOC_KINDS[kind]
     number = tags.get('НОМЕР_ДОГОВОРА') or str(cid)
     suffix = f'_{tags.get("НОМЕР_АКТА") or aid}' if aid else ''
     out = os.path.join(folder, gd.safe_name(f'{prefix}{suffix}_{number.replace("/", "-")}').replace(' ', '_') + '.docx')
-    out = gd.render_file(template_path(db, mod, kind), out, tags, normalize=norm_tag)
+    out = gd.render_file(template_path(db, mod, kind), str(destination) if destination else out, tags, normalize=norm_tag)
     db.execute(f"INSERT OR REPLACE INTO {cfg(mod)['docs']}(scope,ref_id,kind,file_path,data_hash,generated_at,linked) VALUES(?,?,?,?,?,?,0)",
                (scope, ref_id, kind, out, data_hash(db, mod, cid, aid), datetime.now().isoformat(timespec='seconds')))
     return out

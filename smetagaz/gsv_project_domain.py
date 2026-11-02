@@ -533,7 +533,10 @@ def render_file(template, out_base, tags, normalize=None, payments=None):
     ext = os.path.splitext(str(template))[1].lower()
     if ext not in TEMPLATE_EXTS:
         raise ValueError('Шаблон должен быть в формате Word (.docx) или Excel (.xlsx). Файл «%s» сохраните в одном из этих форматов.' % os.path.basename(str(template)))
-    out = os.path.splitext(out_base)[0] + ext
+    out_base = str(out_base)
+    out = out_base if os.path.splitext(out_base)[1].lower() == ext else os.path.splitext(out_base)[0] + ext
+    if os.path.normcase(os.path.realpath(out)) == os.path.normcase(os.path.realpath(template)):
+        raise ValueError('Нельзя сохранить готовый документ поверх исходного шаблона')
     if ext == '.xlsx':
         render_xlsx(template, out, tags, payments or [], normalize=normalize)
     else:
@@ -709,7 +712,17 @@ def doc_state(db, pid, kind):
     return 'fresh' if row[1] == data_hash(db, pid) else 'stale'
 
 
-def generate(db, pid, kind):
+def suggested_path(db, pid, kind):
+    if kind not in DOC_KINDS:
+        raise ValueError('Неизвестный документ')
+    tags = project_tags(db, pid)
+    number = tags['НОМЕР_ПД'] if kind == 'card' else tags['НОМЕР_ДОГОВОРА']
+    name = safe_name(f'{DOC_KINDS[kind][3]}_{number}').replace(' ', '_')
+    ext = os.path.splitext(str(template_path(db, kind)))[1].lower()
+    return os.path.join(project_folder(db, pid) or '', name + ext)
+
+
+def generate(db, pid, kind, destination=None):
     """Формирует договор / акт (Word) или карточку клиента (Excel) в папке договора; возвращает путь к файлу."""
     if kind not in DOC_KINDS:
         raise ValueError('Неизвестный документ')
@@ -717,14 +730,14 @@ def generate(db, pid, kind):
     if kind == 'act' and not tags['ДАТА_АКТА_С']:
         raise ValueError('Укажите дату акта в карточке договора')
     folder = project_folder(db, pid)
-    if not folder:
+    if not destination and not folder:
         raise ValueError('Сначала привяжите или создайте папку договора кнопкой «Папка договора»')
     template = template_path(db, kind)
     prefix = DOC_KINDS[kind][3]
     ext = '.xlsx' if kind == 'card' else '.docx'
     number = tags['НОМЕР_ПД'] if kind == 'card' else tags['НОМЕР_ДОГОВОРА']
     out = os.path.join(folder, safe_name(f'{prefix}_{number}').replace(' ', '_') + ext)
-    out = render_file(template, out, tags, payments=payments_list(db, pid))
+    out = render_file(template, str(destination) if destination else out, tags, payments=payments_list(db, pid))
     db.execute('INSERT OR REPLACE INTO gsv_project_docs(project_id,kind,file_path,data_hash,generated_at) VALUES(?,?,?,?,?)',
                (pid, kind, out, data_hash(db, pid), datetime.now().isoformat(timespec='seconds')))
     return out

@@ -40,7 +40,7 @@ def test_equipment_pipelines_automatic_dossier(d,tmp_path):
     with pytest.raises(Exception):d.execute('DELETE FROM gsv_pipelines WHERE id=?',(pipeline,))
     save_pipelines(d,'contracts',rid,[]);assert len(dossier(d,'contracts',rid))==1
 
-def test_external_docs_shared_and_no_file_copy(d,tmp_path):
+def test_external_docs_shared_and_included_in_backup(d,tmp_path):
     rid,_=contract(d);w=d.execute('INSERT INTO welders(name,birth_date,stamp) VALUES(?,?,?)',('Сварщик','1990-03-15','ABC')).lastrowid
     source=tmp_path/'outside';source.mkdir();file=source/'protocol.pdf';file.write_bytes(b'protocol')
     doc=add_document(d,dict(title='Протокол 12',category='welder',document_type='Протокол',file_path=str(file),welder_id=w,number='12',document_date='2026-09-16',note=''))
@@ -51,9 +51,14 @@ def test_external_docs_shared_and_no_file_copy(d,tmp_path):
     assert dossier(d,'contracts',rid)[0]['path']==str(other)
     archive=tmp_path/'backup.zip';result=create_backup(d,archive)
     assert result['external_welding_references'][0]['path']==str(other)
-    with zipfile.ZipFile(archive) as z:assert not any(name.endswith('renamed.pdf') for name in z.namelist())
+    with zipfile.ZipFile(archive) as z:
+        names=[name for name in z.namelist() if name.endswith('renamed.pdf')]
+        assert names and z.read(names[0])==b'protocol'
     restored=tmp_path/'restored';restore_backup(archive,restored)
-    new=DatabaseManager(restored/'smetagaz.db');new.init_db();assert dossier(new,'contracts',rid)[0]['path']==str(other);new.close()
+    new=DatabaseManager(restored/'smetagaz.db');new.init_db()
+    recovered=Path(dossier(new,'contracts',rid)[0]['path'])
+    assert recovered.is_relative_to(restored) and recovered.read_bytes()==b'protocol'
+    new.close()
     d.execute('DELETE FROM welding_documents WHERE id=?',(doc,));assert other.exists();assert not dossier(d,'contracts',rid)
 
 def test_schedule_days_objects_and_delete(d):

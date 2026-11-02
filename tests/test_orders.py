@@ -1,4 +1,5 @@
 import pytest
+from pathlib import Path
 from smetagaz import main_window, orders_view, docs_view, counterparty_ui, contract_card, gsn_card, volumes_ui, legal_entities_view  # noqa: F401  (до подмены базы в тестах)
 from smetagaz.database import DatabaseManager
 from smetagaz import orders_domain as od, staff_domain as sd, volumes_domain as vd, contracts_core as cc
@@ -100,6 +101,7 @@ def test_orders_ui_flow(db, monkeypatch, tmp_path):
     monkeypatch.setattr(QMessageBox, 'information', lambda *a, **k: 0)
     monkeypatch.setattr(gd, 'DATA_DIR', tmp_path)
     monkeypatch.setattr('smetagaz.gsvm_tabs.open_file', lambda *a, **k: None)
+    monkeypatch.setattr('smetagaz.document_save.choose_document_path', lambda parent, suggested, **kwargs: str(tmp_path / Path(suggested).name))
     a, b = make_staff(db, 'Иванов', 'Петров')
     crew = sd.save_crew(db, 'Бригада 1', leader_id=a, members=[a, b])
     lid = cc.save_legal(db, dict(name='ООО Ромашка', unp='190123456'))

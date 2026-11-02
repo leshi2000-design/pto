@@ -390,7 +390,12 @@ class OrderDialog(QDialog):
         if not self.save(ask=False):
             return
         try:
-            path = od.generate(db, self.order_id, str(gd.DATA_DIR / 'Наряды'))
+            from .document_save import choose_document_path
+            order = od.get_order(db, self.order_id)
+            destination = choose_document_path(self, od.suggested_path(db, self.order_id, gd.DATA_DIR / 'Наряды'), protected=[od.template_path(db, order['kind'])])
+            if not destination:
+                return
+            path = od.generate(db, self.order_id, destination=destination)
         except Exception as e:
             QMessageBox.warning(self, 'Наряд', str(e))
             return
@@ -503,7 +508,12 @@ class OrdersView(QWidget):
             QMessageBox.information(self, 'Наряд', 'Выберите наряд в таблице.')
             return
         try:
-            path = od.generate(db, oid, str(gd.DATA_DIR / 'Наряды'))
+            from .document_save import choose_document_path
+            order = od.get_order(db, oid)
+            destination = choose_document_path(self, od.suggested_path(db, oid, gd.DATA_DIR / 'Наряды'), protected=[od.template_path(db, order['kind'])])
+            if not destination:
+                return
+            path = od.generate(db, oid, destination=destination)
         except Exception as e:
             QMessageBox.warning(self, 'Наряд', str(e))
             return

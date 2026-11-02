@@ -63,10 +63,7 @@ def export_registries(db, destination):
     from . import payments_domain
     rows = []
     for (cid, num, date, obj, client, phone, amount, title, address, signed, start, end, act, act_signed, mats, works, code, designer, folder, joints) in gsv_rows:
-        try:
-            paid = float(payments_domain.summary(db, 'contracts', cid)['paid'])
-        except Exception:
-            paid = 0.0
+        paid = float(payments_domain.summary(db, 'contracts', cid)['paid'])
         rows.append([num or "Б/Н", date or "", obj or "", client or "", phone or "", float(amount or 0), title or "— нет сметы —",
                      address or "", "Да" if signed else "Нет", start or "", end or "", act or "", "Да" if act_signed else "Нет",
                      float(mats or 0), float(works or 0), paid, float(amount or 0) - paid, code or "", designer or "", joints, folder or ""])

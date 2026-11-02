@@ -940,12 +940,12 @@ class ProjectEditDialog(QDialog):
         from . import preflight, preflight_ui
         if not preflight_ui.confirm(self, f'«{gsvdom.DOC_KINDS[kind][0]}»', preflight.check_project(db, self.project_id, kind)):
             return
-        from .folder_ui import ensure_project_folder
-        if not ensure_project_folder(self, db, self.project_id):
-            return
-        self.refresh_folder()
         try:
-            path = gsvdom.generate(db, self.project_id, kind)
+            from .document_save import choose_document_path
+            destination = choose_document_path(self, gsvdom.suggested_path(db, self.project_id, kind), protected=[gsvdom.template_path(db, kind)])
+            if not destination:
+                return
+            path = gsvdom.generate(db, self.project_id, kind, destination=destination)
         except Exception as e:
             QMessageBox.warning(self, 'Документ не создан', str(e))
             return

@@ -10,6 +10,9 @@ def warning(*a,**k):raise AssertionError(str(a[1:]))
 QMessageBox.warning=warning
 from smetagaz.database import db
 db.init_db()
+import smetagaz.document_save as save_ui
+save_ui.choose_document_path=lambda parent,suggested,**kwargs:str(Path(folder.name)/'выбранные_файлы'/Path(suggested).name)    # автоматический ответ на «Сохранить как» в smoke-проверке
+
 from smetagaz.tasks_view import TaskEditDialog
 from smetagaz.task_catalog import TasksTable
 sid=db.execute("INSERT INTO task_statuses(code,name) VALUES('review','На согласовании')").lastrowid;tag=db.execute("INSERT INTO task_tags(name) VALUES('Срочный выезд')").lastrowid

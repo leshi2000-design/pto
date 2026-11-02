@@ -61,15 +61,24 @@ class DossierDialog(QDialog):
         db.execute('DELETE FROM dossier_certificates WHERE dossier_id=? AND certificate_id=?',(self.did,c['id']));self.load_data()
     def generate(self):
         if self.future:return
+        from .document_save import choose_document_paths
+        slots = [t['slot'] for r, t in enumerate(self.templates) if self.docs.item(r, 0).checkState() == Qt.CheckState.Checked]
+        try:
+            destinations = choose_document_paths(self, domain.planned_documents(db, self.did, slots))
+            if destinations is None:
+                return
+        except Exception as error:
+            QMessageBox.warning(self, 'Комплект не сформирован', str(error))
+            return
         with db.transaction():
             db.execute('DELETE FROM dossier_selection WHERE dossier_id=?',(self.did,))
             for r,t in enumerate(self.templates):
                 if self.docs.item(r,0).checkState()==Qt.CheckState.Checked:db.execute('INSERT INTO dossier_selection VALUES(?,?)',(self.did,t['slot']))
-        self.generate_button.setEnabled(False);self.status.setText('Проверка изменений и формирование…');self.future=self.pool.submit(domain.generate,db,self.did);self.timer.start()
+        self.generate_button.setEnabled(False);self.status.setText('Проверка изменений и формирование…');self.future=self.pool.submit(domain.generate,db,self.did,destinations=destinations);self.timer.start()
     def poll(self):
         if not self.future or not self.future.done():return
         future=self.future;self.future=None;self.timer.stop();self.generate_button.setEnabled(True)
-        try:r=future.result();self.load_data();self.status.setText(f"Обновлено: {r['changed']}; оставлено без изменений: {r['unchanged']}. {r['folder']}");self.tabs.setCurrentIndex(2)
+        try:r=future.result();self.load_data();self.status.setText(f"Обновлено: {r['changed']}; оставлено без изменений: {r['unchanged']}. {r['folder']}");self.tabs.setCurrentIndex(3)
         except Exception as e:self.status.setText(str(e));QMessageBox.warning(self,'Комплект не сформирован',str(e))
     def show_tags(self):
         from PyQt6.QtWidgets import QApplication

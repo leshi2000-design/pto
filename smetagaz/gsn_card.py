@@ -528,7 +528,7 @@ class GsnContractDialog(QDialog):
             self.doc_make[kind].style().polish(self.doc_make[kind])
             self.doc_open[kind].setEnabled(state in ('fresh', 'stale', 'linked'))
         folder = gn.contract_folder(db, self.contract_id) if self.contract_id else ''
-        self.lbl_folder.setText(f'Папка договора: {folder}' if folder else 'Папка договора не привязана — программа предложит создать или выбрать её при формировании документа.')
+        self.lbl_folder.setText(f'Папка договора: {folder}' if folder else 'Папка договора не привязана. При формировании документа выберите место в окне «Сохранить как».')
 
     def make_document(self, kind):
         if not self.ensure_saved():
@@ -536,10 +536,12 @@ class GsnContractDialog(QDialog):
         from . import preflight_ui
         if not preflight_ui.confirm(self, f'«{dd.DOC_KINDS[kind][0]}»', dd.check(db, self.contract_id, kind)):
             return
-        if not self.ensure_folder():
-            return
         try:
-            path = dd.generate(db, self.contract_id, kind)
+            from .document_save import choose_document_path
+            destination = choose_document_path(self, dd.suggested_path(db, self.contract_id, kind), protected=[dd.template_path(db, kind)])
+            if not destination:
+                return
+            path = dd.generate(db, self.contract_id, kind, destination=destination)
         except (ValueError, OSError) as e:
             QMessageBox.warning(self, 'Документ не создан', str(e))
             return

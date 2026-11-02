@@ -183,8 +183,17 @@ class ExecutiveWorkspace(QTabWidget):
     def generate(self):
         if self.future or not self.save_callback():return
         slots=[row['slot'] for r,row in enumerate(self.template_rows) if self.templates_table.item(r,0).checkState()==Qt.CheckState.Checked]
-        from .template_engine import generate
-        self.generate_button.setEnabled(False);self.status.setText('Проверка тегов и создание документов…');self.future=self.pool.submit(generate,db,self.owner,self.rid,slots,self.copy_certs.isChecked());self.timer.start()
+        from .template_engine import generate, planned_documents
+        from .document_save import choose_document_paths
+        try:
+            jobs = planned_documents(db, self.owner, self.rid, slots, self.copy_certs.isChecked())
+            destinations = choose_document_paths(self, jobs)
+            if destinations is None:
+                return
+        except Exception as error:
+            QMessageBox.warning(self, 'Документы не созданы', str(error))
+            return
+        self.generate_button.setEnabled(False);self.status.setText('Проверка тегов и создание документов…');self.future=self.pool.submit(generate,db,self.owner,self.rid,slots,self.copy_certs.isChecked(),destinations=destinations);self.timer.start()
     def poll(self):
         if not self.future or not self.future.done():return
         self.timer.stop();future=self.future;self.future=None;self.generate_button.setEnabled(True)

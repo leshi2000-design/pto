@@ -1,6 +1,7 @@
 import os
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 import pytest
+from pathlib import Path
 from PyQt6.QtWidgets import QApplication, QMessageBox, QFileDialog
 from smetagaz import contracts_core as cc
 
@@ -27,6 +28,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(folder_ui, 'choose_folder', lambda parent, section, name, current='': (str(tmp_path / 'f' / name), True))
     monkeypatch.setattr(QMessageBox, 'warning', lambda *a, **k: print('WARN', a[2:]))
     monkeypatch.setattr(ui, 'open_file', lambda *a, **k: True)
+    monkeypatch.setattr('smetagaz.document_save.choose_document_path', lambda parent, suggested, **kwargs: str(tmp_path / Path(suggested).name))
     app = QApplication.instance() or QApplication([])
     yield d, ui
     del app

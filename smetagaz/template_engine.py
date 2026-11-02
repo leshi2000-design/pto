@@ -5,10 +5,9 @@ from lxml import etree as ET
 import re
 import json
 import hashlib
-import tempfile
 import shutil
-import os
 import uuid
+from functools import partial
 from . import template_domain as domain
 TAG=re.compile(r'{{\s*([\w.]+)\s*}}',re.UNICODE)
 W='http://schemas.openxmlformats.org/wordprocessingml/2006/main'
@@ -111,55 +110,79 @@ def filename(text):
     if text.split('.')[0].upper() in {'CON','PRN','AUX','NUL',*[f'COM{i}' for i in range(1,10)],*[f'LPT{i}' for i in range(1,10)]}:text='_'+text
     return text
 
-def generate(db,owner,rid,slots,copy_certificates=True):
+def _plan(db, owner, rid, slots, copy_certificates, token='', require_folder=False):
     with db.transaction():
-        ctx,mats=domain.context(db,owner,rid);folder,_=domain.load_details(db,owner,rid)
-        selected=[t for t in domain.templates(db,owner,rid) if t['slot'] in slots]
-    if not selected:raise ValueError('Выберите документы')
-    if not folder:raise ValueError('Привяжите папку договора')
-    target=domain.path(db,folder).resolve()
-    if not target.is_dir():raise ValueError('Папка договора недоступна')
-    token=uuid.uuid4().hex[:10];jobs=[]
+        ctx, mats = domain.context(db, owner, rid)
+        folder, _ = domain.load_details(db, owner, rid)
+        selected = [t for t in domain.templates(db, owner, rid) if t['slot'] in slots]
+    if not selected:
+        raise ValueError('Выберите документы')
+    if require_folder and not folder:
+        raise ValueError('Привяжите папку договора')
+    target = domain.path(db, folder).resolve() if folder else Path()
+    if require_folder and not target.is_dir():
+        raise ValueError('Папка договора недоступна')
+    jobs = []
     for t in selected:
-        if not t['file_path']:raise ValueError('Подключите шаблон: '+t['label'])
-        src=domain.path(db,t['file_path'])
-        tags=transform(src);missing=sorted(k for k in tags if k not in ctx or ctx[k] in ('',None))
-        missing=[k for k in missing if k not in ('реестр','document_register')]
-        if missing:raise ValueError(t['label']+': не заполнены '+', '.join(missing))
-        def sub(m):
-            value=ctx.get(m.group(1))
-            if value in ('',None):raise ValueError('Не заполнен тег имени файла: '+m.group(1))
+        if not t['file_path']:
+            raise ValueError('Подключите шаблон: ' + t['label'])
+        src = domain.path(db, t['file_path'])
+        tags = transform(src)
+        missing = sorted(k for k in tags if k not in ctx or ctx[k] in ('', None))
+        missing = [k for k in missing if k not in ('реестр', 'document_register')]
+        if missing:
+            raise ValueError(t['label'] + ': не заполнены ' + ', '.join(missing))
+        def sub(match):
+            value = ctx.get(match.group(1))
+            if value in ('', None):
+                raise ValueError('Не заполнен тег имени файла: ' + match.group(1))
             return str(value)
-        name=filename(TAG.sub(sub,t['output_name'] or t['label']))
-        if name.lower().endswith(src.suffix.lower()):name=name[:-len(src.suffix)]
-        jobs.append((t,src,target/(name+'_'+token+src.suffix.lower())))
-    ctx['document_register']='\n'.join(f'{i}. {t["label"]} — {out.name}' for i,(t,src,out) in enumerate(jobs,1));ctx['реестр']=ctx['document_register']
-    certs={}
+        name = filename(TAG.sub(sub, t['output_name'] or t['label']))
+        if name.lower().endswith(src.suffix.lower()):
+            name = name[:-len(src.suffix)]
+        out = target / (name + ('_' + token if token else '') + src.suffix.lower())
+        jobs.append(dict(key=t['slot'], title=t['label'], source=src, path=out, template=t))
     if copy_certificates:
-        for m in mats:
-            if not m.get('certificate_id'):continue
-            if not m.get('certificate_path'):raise ValueError('Нет файла сертификата: '+m['name'])
-            src=domain.path(db,m['certificate_path'])
-            if not src.is_file():raise ValueError('Недоступен сертификат: '+str(src))
-            certs[m['certificate_id']]=src
-    created=[]
-    with tempfile.TemporaryDirectory(prefix='.smetagaz-',dir=target) as stage:
-        staged=[]
-        for i,(t,src,out) in enumerate(jobs):
-            tmp=Path(stage)/str(i);transform(src,ctx,tmp);staged.append((tmp,out,t))
-        for cid,src in certs.items():
-            tmp=Path(stage)/('cert'+str(cid));shutil.copyfile(src,tmp);staged.append((tmp,target/('Сертификат_'+str(cid)+'_'+token+'_'+filename(src.name)),None))
-        try:
-            for tmp,out,t in staged:
-                with out.open('xb') as dest:
-                    created.append(out)
-                    with tmp.open('rb') as source:shutil.copyfileobj(source,dest)
-                    dest.flush();os.fsync(dest.fileno())
-            with db.transaction():
-                domain.require(db,owner,rid)
-                for tmp,out,t in staged:
-                    if t:db.execute('INSERT INTO executive_generated(owner_type,owner_id,slot,title,file_path,context_json,sha256) VALUES(?,?,?,?,?,?,?)',(owner,rid,t['slot'],t['label'],str(out),json.dumps(ctx,ensure_ascii=False),_sha256_file(out)))
-        except Exception:
-            for out in created:out.unlink(missing_ok=True)
-            raise
-    return [str(p) for p in created]
+        certs = {}
+        for material in mats:
+            if not material.get('certificate_id'):
+                continue
+            if not material.get('certificate_path'):
+                raise ValueError('Нет файла сертификата: ' + material['name'])
+            src = domain.path(db, material['certificate_path'])
+            if not src.is_file():
+                raise ValueError('Недоступен сертификат: ' + str(src))
+            certs[material['certificate_id']] = src
+        for cid, src in certs.items():
+            out = target / ('Сертификат_' + str(cid) + ('_' + token if token else '') + '_' + filename(src.name))
+            jobs.append(dict(key='cert:' + str(cid), title=src.name, source=src, path=out, template=None))
+    return ctx, jobs
+
+
+def planned_documents(db, owner, rid, slots, copy_certificates=True):
+    return _plan(db, owner, rid, slots, copy_certificates)[1]
+
+
+def generate(db, owner, rid, slots, copy_certificates=True, destinations=None):
+    from .document_files import validate_destinations, publish_files
+    ctx, jobs = _plan(db, owner, rid, slots, copy_certificates,
+                      token=uuid.uuid4().hex[:10] if destinations is None else '', require_folder=destinations is None)
+    jobs = validate_destinations(jobs, destinations)
+    docs = [job for job in jobs if job['template']]
+    ctx['document_register'] = '\n'.join(f'{i}. {job["title"]} — {job["path"].name}' for i, job in enumerate(docs, 1))
+    ctx['реестр'] = ctx['document_register']
+    if destinations is None and any(job['path'].exists() for job in jobs):
+        raise FileExistsError('Файл с выбранным именем уже существует')
+    writers = []
+    for job in jobs:
+        source = job['source']
+        writer = partial(transform, source, ctx) if job['template'] else partial(shutil.copyfile, source)
+        writers.append((job['path'], writer))
+    def record(hashes):
+        with db.transaction():
+            domain.require(db, owner, rid)
+            for job in docs:
+                db.execute('INSERT INTO executive_generated(owner_type,owner_id,slot,title,file_path,context_json,sha256) VALUES(?,?,?,?,?,?,?)',
+                           (owner, rid, job['key'], job['title'], str(job['path']), json.dumps(ctx, ensure_ascii=False), hashes[str(job['path'])]))
+    publish_files(writers, record)
+    return [str(job['path']) for job in jobs]

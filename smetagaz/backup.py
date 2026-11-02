@@ -9,6 +9,7 @@ import tempfile
 import zipfile
 from pathlib import Path
 from datetime import datetime, timezone
+from .asset_registry import fields, quote, rebase, MANAGED_FOLDERS
 
 
 def flush_to_disk(path):
@@ -38,14 +39,12 @@ def create_backup(db, destination, progress=None):
         missing=[]
         external_references=[]
         directory_mappings={}
-        with db._lock:
-            # No application writes between these two snapshots or attachment enumeration.
-            for schema,name in [('main','smetagaz.db'),('crm','clients.db')]:
-                with connect(stage/name) as target: db.conn.backup(target,name=schema)
+        db.snapshot_databases(stage)
         data_root=Path(db.db_name).parent.resolve()
         # Include generated and not-yet-linked managed documents as well.
-        for dirname in ['projects','templates','attachments','certificates_storage']:
+        for dirname in MANAGED_FOLDERS:
             source=data_root/dirname
+            if source.is_symlink():raise ValueError('Символическая ссылка в папке данных: '+str(source))
             if source.is_dir():
                 for item in source.rglob('*'):
                     step(0, 0, 'Копирование файлов: ' + item.name)
@@ -58,9 +57,8 @@ def create_backup(db, destination, progress=None):
             snapshot.execute("UPDATE settings SET value='0' WHERE key='offsite_enabled'")
             if snapshot.execute("SELECT 1 FROM sqlite_master WHERE name='welding_documents'").fetchone():
                 external_references=[dict(id=r[0],title=r[1],path=r[2]) for r in snapshot.execute('SELECT id,title,file_path FROM welding_documents')]
-            for table,column in [('attachments','file_path'),('certificates','file_path'),('gsv_projects','tu_path'),('gsv_projects','custom_contract_path'),('gsv_projects','project_folder'),('executive_objects','folder_path'),('executive_templates','file_path'),('executive_overrides','file_path'),('executive_generated','file_path'),('report_templates','file_path'),('dossiers','folder_path'),('dossier_files','file_path')]:
-                if not snapshot.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(table,)).fetchone():continue
-                for rid,value in snapshot.execute(f'SELECT id,{column} FROM {table} WHERE {column} IS NOT NULL AND {column}<>""').fetchall():
+            for table,column in fields(snapshot):
+                for rid,value in snapshot.execute(f'SELECT rowid,{quote(column)} FROM {quote(table)} WHERE {quote(column)} IS NOT NULL AND {quote(column)}<>\'\'').fetchall():
                     src=Path(value).expanduser()
                     if not src.is_absolute(): src=Path(db.db_name).parent/src
                     if not src.exists():
@@ -71,19 +69,20 @@ def create_backup(db, destination, progress=None):
                         raise ValueError("Резервную копию нельзя сохранять внутри папки документов договора: "+str(resolved))
                     mapped=next(((base,rel) for base,rel in sorted(directory_mappings.items(),key=lambda item:len(item[0].parts),reverse=True) if resolved.is_relative_to(base)),None)
                     if mapped:relative=mapped[1]/resolved.relative_to(mapped[0])
-                    else:relative=resolved.relative_to(data_root) if resolved.is_relative_to(data_root) and bool(resolved.relative_to(data_root).parts) and resolved.relative_to(data_root).parts[0] in ['projects','templates','attachments','certificates_storage'] else Path('files')/table/str(rid)/column/src.name
+                    else:relative=resolved.relative_to(data_root) if resolved.is_relative_to(data_root) and bool(resolved.relative_to(data_root).parts) and resolved.relative_to(data_root).parts[0] in MANAGED_FOLDERS else Path('files')/table/str(rid)/column/src.name
                     if src.is_dir():directory_mappings[resolved]=relative
                     target=stage/relative
                     target.parent.mkdir(parents=True,exist_ok=True)
                     if not target.exists():
                         if src.is_dir(): shutil.copytree(src,target,symlinks=False)
                         else: shutil.copy2(src,target)
-                    snapshot.execute(f'UPDATE {table} SET {column}=? WHERE id=?',(relative.as_posix(),rid))
+                    snapshot.execute(f'UPDATE {quote(table)} SET {quote(column)}=? WHERE rowid=?',(relative.as_posix(),rid))
             # Export templates stored in settings must travel with the backup.
             for key,value in snapshot.execute("SELECT key,value FROM settings WHERE key LIKE '%template%'").fetchall():
                 src=Path(value or '')
+                if value and not src.is_absolute():src=data_root/src
                 if value and src.is_file():
-                    dest=Path('templates')/(key+'_'+src.name);(stage/dest).parent.mkdir(exist_ok=True)
+                    dest=Path('templates')/(hashlib.sha256(key.encode()).hexdigest()[:16]+'_'+src.name);(stage/dest).parent.mkdir(exist_ok=True)
                     shutil.copy2(src,stage/dest);snapshot.execute('UPDATE settings SET value=? WHERE key=?',(dest.as_posix(),key))
         staged = [f for f in stage.rglob('*') if f.is_file()]
         files = {}
@@ -133,6 +132,8 @@ def restore_backup(archive, destination):
         for name in ['smetagaz.db','clients.db']:
             with connect(stage/name) as c:
                 if c.execute('PRAGMA integrity_check').fetchone()[0]!='ok':raise ValueError('Повреждена база '+name)
+        with connect(stage/'smetagaz.db') as c:
+            rebase(c, stage, destination)
         os.replace(stage,destination)
         destination.chmod(0o700)
     return manifest

@@ -105,7 +105,7 @@ class RemoteDatabaseManager:
     # --- соединение
     def _connection(self, fresh=False):
         conn = getattr(self._local, 'conn', None)
-        if conn is not None and not fresh:
+        if conn is not None and conn.sock is not None and not fresh:
             return conn
         if conn is not None:
             try:
@@ -133,7 +133,7 @@ class RemoteDatabaseManager:
     def _is_read(payload):
         from .server_core import classify
         method = payload.get('m')
-        if method in ('hello', 'ping', 'poll', 'online', 'access_log', 'total_changes'):
+        if method in ('hello', 'ping', 'poll', 'online', 'access_log', 'total_changes', 'get_setting'):
             return True
         return method == 'exec' and classify(payload.get('sql')) == 'read'
 
@@ -149,16 +149,21 @@ class RemoteDatabaseManager:
         except proto.RemoteError:
             raise
         except (OSError, http.client.HTTPException, ssl.SSLError) as e:
+            failed = getattr(self._local, 'conn', None)
+            if failed is not None:
+                failed.close()
             self._local.conn = None
-            if retry and self._tx_depth == 0 and payload.get('m') not in ('execmany',):
+            safe = phase == 'connect' or self._is_read(payload)
+            if retry and self._tx_depth == 0 and safe:
                 return self._post(payload, retry=False, wait=wait)
             # запрос, который сервер не получил (или чтение), можно безопасно повторить, когда связь вернётся; запись неясной судьбы — нет
-            if wait and self.on_lost and (phase == 'connect' or self._is_read(payload)):
+            if wait and self.on_lost and self._tx_depth == 0 and safe:
                 self._status(False, 'нет связи с сервером')
                 if self.on_lost():
                     return self._post(payload, retry=False, wait=wait)
             self._status(False, 'нет связи с сервером')
-            raise proto.ConnectionLost(f'Нет связи с сервером ({self.cfg["host"]}:{self.cfg["port"]}): {e}')
+            detail = '' if safe else '\nСервер мог выполнить операцию. Проверьте данные после восстановления связи перед повтором.'
+            raise proto.ConnectionLost(f'Нет связи с сервером ({self.cfg["host"]}:{self.cfg["port"]}): {e}{detail}') from e
         self._status(True, f'{self.user} · сервер {self.cfg["host"]}')
         return proto.loads(data)
 
@@ -284,13 +289,13 @@ class RemoteDatabaseManager:
         return self.execute(query, params).fetchall()
 
     def get_setting(self, key, default=''):
-        row = self.fetchone('SELECT value FROM settings WHERE key=?', (key,))
-        if row and row[0] is not None:
-            return str(row[0])
-        return default
+        return self._call('get_setting', key=key, default=default)
 
     def set_setting(self, key, value):
-        self.execute('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', (key, str(value)))
+        return self._call('set_setting', key=key, value=str(value))
+
+    def restore_audit(self, entry_id, schema='main'):
+        return self._call('restore_audit', entry_id=entry_id, schema=schema)
 
     @contextmanager
     def transaction(self):

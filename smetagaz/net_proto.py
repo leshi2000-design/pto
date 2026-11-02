@@ -4,7 +4,7 @@ import json
 from datetime import date, datetime
 from decimal import Decimal
 
-PROTOCOL = 1
+PROTOCOL = 2             # обновить сервер и всех клиентов: безопасные транзакции и отдельные настройки
 DEFAULT_PORT = 8765
 MAX_BODY = 64 * 1024 * 1024
 
