@@ -28,8 +28,9 @@ def digest(path):
     return h.hexdigest()
 
 
-def create_backup(db, destination, progress=None):
-    """progress(сделано, всего, текст) — необязательный обратный вызов; он же может прервать копирование исключением (до этого момента итоговый файл не тронут)."""
+def create_backup(db, destination, progress=None, include_files=True):
+    """include_files=False — только базы данных и настройки (маленький снимок для частых автоматических копий); True — ещё и все вложения и папки договоров.
+    progress(сделано, всего, текст) — необязательный обратный вызов; он же может прервать копирование исключением (до этого момента итоговый файл не тронут)."""
     step = progress or (lambda *a, **k: None)
     step(0, 0, 'Снимок баз данных')
     destination=Path(destination).resolve()
@@ -42,7 +43,7 @@ def create_backup(db, destination, progress=None):
         db.snapshot_databases(stage)
         data_root=Path(db.db_name).parent.resolve()
         # Include generated and not-yet-linked managed documents as well.
-        for dirname in MANAGED_FOLDERS:
+        for dirname in (MANAGED_FOLDERS if include_files else ()):
             source=data_root/dirname
             if source.is_symlink():raise ValueError('Символическая ссылка в папке данных: '+str(source))
             if source.is_dir():
@@ -57,7 +58,7 @@ def create_backup(db, destination, progress=None):
             snapshot.execute("UPDATE settings SET value='0' WHERE key='offsite_enabled'")
             if snapshot.execute("SELECT 1 FROM sqlite_master WHERE name='welding_documents'").fetchone():
                 external_references=[dict(id=r[0],title=r[1],path=r[2]) for r in snapshot.execute('SELECT id,title,file_path FROM welding_documents')]
-            for table,column in fields(snapshot):
+            for table,column in (list(fields(snapshot)) if include_files else []):
                 for rid,value in snapshot.execute(f'SELECT rowid,{quote(column)} FROM {quote(table)} WHERE {quote(column)} IS NOT NULL AND {quote(column)}<>\'\'').fetchall():
                     src=Path(value).expanduser()
                     if not src.is_absolute(): src=Path(db.db_name).parent/src
@@ -78,7 +79,7 @@ def create_backup(db, destination, progress=None):
                         else: shutil.copy2(src,target)
                     snapshot.execute(f'UPDATE {quote(table)} SET {quote(column)}=? WHERE rowid=?',(relative.as_posix(),rid))
             # Export templates stored in settings must travel with the backup.
-            for key,value in snapshot.execute("SELECT key,value FROM settings WHERE key LIKE '%template%'").fetchall():
+            for key,value in (snapshot.execute("SELECT key,value FROM settings WHERE key LIKE '%template%'").fetchall() if include_files else []):
                 src=Path(value or '')
                 if value and not src.is_absolute():src=data_root/src
                 if value and src.is_file():
@@ -89,7 +90,7 @@ def create_backup(db, destination, progress=None):
         for n, f in enumerate(staged, 1):
             step(n, len(staged), 'Контрольные суммы: ' + f.name)
             files[f.relative_to(stage).as_posix()] = digest(f)
-        manifest={'version':1,'created':datetime.now(timezone.utc).isoformat(),'files':files,'missing':missing,'external_welding_references':external_references}
+        manifest={'version':1,'files_included':include_files,'created':datetime.now(timezone.utc).isoformat(),'files':files,'missing':missing,'external_welding_references':external_references}
         (stage/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2),encoding='utf-8')
         temp_archive=stage/'archive.tmp'
         with zipfile.ZipFile(temp_archive,'w',zipfile.ZIP_DEFLATED,compresslevel=3,allowZip64=True) as z:

@@ -27,6 +27,7 @@ class AutoBackupService(QObject):
         super().__init__()
         self.pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='backup')
         self.future=None
+        self.full_future=None
         self.contracts_future=None
         self.projects_future=None
         self.offsite_future=None
@@ -39,6 +40,10 @@ class AutoBackupService(QObject):
             try:last=datetime.fromisoformat(db.get_setting('last_db_backup',''))
             except ValueError:last=datetime.min
             if (datetime.now()-last).total_seconds()>3600:self.future=self.pool.submit(self.backup_db,datetime.now())
+        if not (self.full_future and not self.full_future.done()):
+            try:last=datetime.fromisoformat(db.get_setting('last_full_backup',''))
+            except ValueError:last=datetime.min
+            if db.get_setting('backup_full_daily','1')=='1' and (datetime.now()-last).total_seconds()>86400:self.full_future=self.pool.submit(self.backup_db,datetime.now(),True)
         if not (self.contracts_future and not self.contracts_future.done()):
             try:last=datetime.fromisoformat(db.get_setting('last_contracts_excel',''))
             except ValueError:last=datetime.min
@@ -85,13 +90,29 @@ class AutoBackupService(QObject):
         except Exception as e:
             logging.exception('Projects Excel export failed')
             db.set_setting('projects_excel_status',f'{now:%d.%m.%Y %H:%M}: ошибка экспорта — {e}')
-    def backup_db(self,now):
+    def backup_db(self,now,full=False):
+        """Каждый час — копия только баз данных (db_*.zip); раз в сутки — полная копия с вложениями и папками договоров (full_*.zip), если хватает места."""
+        from . import backup_policy
         try:
             folder=Path(db.db_name).parent/'backups';folder.mkdir(exist_ok=True)
-            result=create_backup(db,folder/f'auto_{now:%Y%m%d_%H%M%S_%f}.zip')
-            db.set_setting('last_db_backup',now.isoformat())
-            db.set_setting('backup_status',f'{now:%d.%m.%Y %H:%M}: пропущенных файлов: {len(result["missing"])}')
-            for old in sorted(folder.glob('auto_*.zip'))[:-24]:old.unlink()
+            note=''
+            if full:
+                ok,reason=backup_policy.full_backup_allowed(db,folder)
+                if not ok:
+                    db.set_setting('last_full_backup',now.isoformat())      # повторная попытка — через сутки
+                    db.set_setting('backup_full_status',f'{now:%d.%m.%Y %H:%M}: полная копия с файлами пропущена — {reason}. Базы данных копируются каждый час.')
+                    return
+                result=create_backup(db,folder/f'full_{now:%Y%m%d_%H%M%S_%f}.zip',include_files=True)
+                db.set_setting('last_full_backup',now.isoformat())
+                db.set_setting('backup_full_status',f'{now:%d.%m.%Y %H:%M}: полная копия с файлами создана, пропущенных файлов: {len(result["missing"])}')
+            else:
+                result=create_backup(db,folder/f'db_{now:%Y%m%d_%H%M%S_%f}.zip',include_files=False)
+                db.set_setting('last_db_backup',now.isoformat())
+                db.set_setting('backup_status',f'{now:%d.%m.%Y %H:%M}: копия баз данных создана')
+            removed=backup_policy.prune(folder,backup_policy.cap_bytes(db))
+            if removed:note=f' · удалено старых копий: {len(removed)}'
+            size=backup_policy.summary(folder)['total']
+            db.set_setting('backup_folder_status',f'Автоматические копии занимают {size/1024**3:.2f} ГБ{note}')
         except Exception as e:
             logging.exception('Backup failed')
             db.set_setting('backup_status',f'{now:%d.%m.%Y %H:%M}: ошибка резервного копирования — {e}')

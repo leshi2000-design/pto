@@ -42,6 +42,11 @@ class SettingsView(QWidget):
         layout.setSpacing(15)
         self.backup_status=QLabel(db.get_setting('backup_status','Резервных копий пока нет'))
         self.backup_status.setWordWrap(True);layout.addWidget(self.backup_status)
+        from . import backup_policy
+        self.backup_space=QLabel();self.backup_space.setWordWrap(True)
+        free_button=QPushButton('Освободить место: оставить минимум автоматических копий');free_button.clicked.connect(self.free_backup_space)
+        row=QHBoxLayout();row.addWidget(self.backup_space,1);row.addWidget(free_button);layout.addLayout(row)
+        self.refresh_backup_space()
         from .network_ui import NetworkDialog
         net_box = QGroupBox('Сетевая работа')
         net_layout = QHBoxLayout(net_box)
@@ -308,6 +313,23 @@ class SettingsView(QWidget):
         if color.isValid():
             db.set_setting("accent_color", color.name())
             self.main_window.refresh_ui()
+
+    def refresh_backup_space(self):
+        from . import backup_policy
+        folder=Path(db.db_name).parent/'backups'
+        s=backup_policy.summary(folder)
+        gb=lambda n:f'{n/1024**3:.2f} ГБ'
+        self.backup_space.setText(f'Автоматические копии в {folder}: {gb(s["total"])} ({s["count"]} файлов: баз данных — {s["db"][0]} / {gb(s["db"][1])}, полных с файлами — {s["full"][0]} / {gb(s["full"][1])}, прежних почасовых — {s["legacy"][0]} / {gb(s["legacy"][1])}). '
+                                  f'Лимит {backup_policy.cap_bytes(db)/1024**3:.0f} ГБ. Копии баз — каждый час, полная копия с файлами — раз в сутки.')
+
+    def free_backup_space(self):
+        from . import backup_policy
+        folder=Path(db.db_name).parent/'backups'
+        s=backup_policy.summary(folder)
+        if QMessageBox.question(self,'Освободить место','Будут удалены старые автоматические копии: останутся последняя полная копия, последние 24 копии баз и одна прежняя почасовая копия. Ручные копии и копии «перед действием» не затрагиваются. Продолжить?')!=QMessageBox.StandardButton.Yes:return
+        removed=backup_policy.prune(folder,backup_policy.cap_bytes(db),hourly=24,full=1,legacy=1)
+        self.refresh_backup_space()
+        QMessageBox.information(self,'Копии',f'Удалено файлов: {len(removed)}, освобождено {sum(size for _n,size in removed)/1024**3:.2f} ГБ.')
 
     def change_password(self):
         current=db.get_setting('password_hash','')
