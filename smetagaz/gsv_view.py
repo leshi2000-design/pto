@@ -112,7 +112,12 @@ class TemplateSettingsPanel(QWidget):
     def copy_tag(self, tag_text, btn):
         QApplication.clipboard().setText(tag_text)
         btn.setText("Скопировано!")
-        QTimer.singleShot(1500, lambda: btn.setText("Копировать"))
+        def restore():
+            try:
+                btn.setText("Копировать")
+            except RuntimeError:                           # кнопка уже закрыта вместе с окном
+                pass
+        QTimer.singleShot(1500, restore)
 
     def browse(self, kind):
         flt = "Шаблоны Word и Excel (*.docx *.xlsx)"

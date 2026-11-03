@@ -261,7 +261,14 @@ class DateEdit(QLineEdit):
 
     def _flash(self):
         self.setStyleSheet('QLineEdit { border:1px solid #D13438; }')
-        QTimer.singleShot(900, lambda: self.setStyleSheet(''))
+        if getattr(self, '_flash_timer', None) is None:
+            self._flash_timer = QTimer(self)               # таймер принадлежит полю: при закрытии окна он уничтожается вместе с ним
+            self._flash_timer.setSingleShot(True)
+            self._flash_timer.timeout.connect(self._unflash)
+        self._flash_timer.start(900)
+
+    def _unflash(self):
+        self.setStyleSheet('')
 
     # --- ввод
     def keyPressEvent(self, event):
@@ -281,7 +288,13 @@ class DateEdit(QLineEdit):
 
     def focusInEvent(self, event):
         super().focusInEvent(event)
-        QTimer.singleShot(0, self.selectAll)          # набираемая дата заменяет прежнюю
+        QTimer.singleShot(0, self._select_all_later)          # набираемая дата заменяет прежнюю
+
+    def _select_all_later(self):
+        try:
+            self.selectAll()
+        except RuntimeError:                              # поле уже закрыто вместе с окном
+            pass
 
     def focusOutEvent(self, event):
         self._commit()

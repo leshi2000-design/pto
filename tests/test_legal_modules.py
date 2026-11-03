@@ -491,3 +491,37 @@ def test_manual_contract_number_is_not_overwritten(db, monkeypatch):
         d.number.textEdited.emit('')                         # пустой номер снова назначается автоматически
         d.date.setDate(QDate(2026, 6, 6))
         assert d.number.text() and d.number.text() != 'MY-17'
+
+
+def test_date_edit_flash_survives_closing_window(qt_application):
+    """Подсветка неверной даты гаснет по таймеру; если окно закрыли раньше, ошибки «object has been deleted» быть не должно."""
+    from PyQt6.QtCore import QDate
+    from PyQt6.QtTest import QTest
+    from PyQt6.QtWidgets import QWidget, QVBoxLayout
+    from PyQt6 import sip
+    from smetagaz.date_widgets import DateEdit
+    import sys
+    errors = []
+    old_hook = sys.excepthook
+    sys.excepthook = lambda *a: errors.append(a[1])
+    host = QWidget()
+    lay = QVBoxLayout(host)
+    w = DateEdit(QDate(2026, 3, 5))
+    lay.addWidget(w)
+    host.show()
+    w.setText('99.99.9999')
+    w._dirty = True
+    w._commit()                                       # неверный ввод — подсветка и таймер
+    assert w.styleSheet() and w.text() == '05.03.2026'
+    host.close()
+    sip.delete(host)                                  # окно и поле уничтожены до срабатывания таймера
+    QTest.qWait(1100)                                 # таймер не должен сработать на удалённом объекте
+    w2 = DateEdit(QDate(2026, 3, 5))
+    w2.show()
+    w2.setText('77')
+    w2._dirty = True
+    w2._commit()
+    QTest.qWait(1000)
+    sys.excepthook = old_hook
+    mine = [e for e in errors if 'DateEdit' in str(e) or 'OptionalDate' in str(e)]       # посторонние отложенные вызовы других тестов не считаются
+    assert mine == [] and w2.styleSheet() == ''     # ошибок нет, у живого поля подсветка гаснет
