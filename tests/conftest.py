@@ -32,7 +32,8 @@ def wait_job(owner, timeout=15):
         time.sleep(0.01)
 
 
-SKIP_IN_REMOTE = {'test_extra_phone_persists_in_all_cards': 'подменяет базу в модулях — несовместимо с сетевым режимом',
+SKIP_IN_REMOTE = {'test_zip_update_dialog': 'подменяет базу в модулях — несовместимо с сетевым режимом',
+                  'test_extra_phone_persists_in_all_cards': 'подменяет базу в модулях — несовместимо с сетевым режимом',
                   'test_copy_button_in_montage_card_and_edit_buttons': 'подменяет базу в модулях — несовместимо с сетевым режимом',
                   'test_contacts_view_and_menu': 'подменяет базу в модулях — несовместимо с сетевым режимом',
                   'test_selftest_starts_program_like_user': 'отдельный процесс со своей базой — к сетевому режиму не относится',

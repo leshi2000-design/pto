@@ -47,6 +47,10 @@ class SettingsView(QWidget):
         free_button=QPushButton('Освободить место: оставить минимум автоматических копий');free_button.clicked.connect(self.free_backup_space)
         row=QHBoxLayout();row.addWidget(self.backup_space,1);row.addWidget(free_button);layout.addLayout(row)
         self.refresh_backup_space()
+        update_box=QHBoxLayout()
+        update_box.addWidget(QLabel('Обновление программы — установкой ZIP-архива (файлы программы не заменяются).'),1)
+        update_zip=QPushButton('Обновить программу из ZIP…');update_zip.clicked.connect(lambda:__import__('smetagaz.update_ui',fromlist=['x']).ZipUpdateDialog(self).exec())
+        update_box.addWidget(update_zip);layout.addLayout(update_box)
         from .network_ui import NetworkDialog
         net_box = QGroupBox('Сетевая работа')
         net_layout = QHBoxLayout(net_box)

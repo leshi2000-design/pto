@@ -403,6 +403,8 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         if getattr(self, '_exit_ready', False) or not self.backup_service.exit_backup_needed():
+            from .services import arm_exit_watchdog
+            arm_exit_watchdog(15)
             self.backup_service.close()
             self._exit_ready = True
             from . import edit_locks
@@ -412,6 +414,8 @@ class MainWindow(QMainWindow):
         event.ignore()
         self._closing = True
         self.hide()
+        from .services import arm_exit_watchdog
+        arm_exit_watchdog(200)                # копия при закрытии ждёт не дольше 180 с; дальше — принудительное завершение
         self._exit_future = self.backup_service.start_exit_backup()
         self._exit_started = time.monotonic()
         self._exit_timer = QTimer(self)
@@ -516,4 +520,6 @@ def main():
     if not login(db):return
     window = MainWindow()
     window.show()
+    if os.environ.get('PTO_EXIT_AFTER_MS'):          # для автоматических проверок запуска: программа сама закрывается через заданное время
+        QTimer.singleShot(int(os.environ['PTO_EXIT_AFTER_MS']), window.close)
     sys.exit(app.exec())

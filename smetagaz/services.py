@@ -1,4 +1,6 @@
 import logging
+import time
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -22,9 +24,14 @@ class NoBackupService:
         pass
 
 
+class BackupCancelled(Exception):
+    """Копия прервана при закрытии программы (итоговый файл не тронут, временные файлы удалены)."""
+
+
 class AutoBackupService(QObject):
     def __init__(self):
         super().__init__()
+        self._abort=threading.Event()          # установлен при закрытии: долгие копии останавливаются на ближайшем файле
         self.pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='backup')
         self.future=None
         self.full_future=None
@@ -90,29 +97,40 @@ class AutoBackupService(QObject):
         except Exception as e:
             logging.exception('Projects Excel export failed')
             db.set_setting('projects_excel_status',f'{now:%d.%m.%Y %H:%M}: ошибка экспорта — {e}')
+    def _checker(self):
+        """Функция для create_backup: прерывает копию, запущенную до закрытия программы. Каждая копия держит свой флажок, поэтому копия при закрытии не затрагивается."""
+        flag=self._abort
+        def check(*_):
+            if flag.is_set():raise BackupCancelled()
+        return check
+    def abort_running(self):
+        """Останавливает идущие и отменяет ожидающие фоновые копии (при закрытии программы); новые копии получают новый флажок."""
+        self._abort.set();self._abort=threading.Event()
     def backup_db(self,now,full=False):
         """Каждый час — копия только баз данных (db_*.zip); раз в сутки — полная копия с вложениями и папками договоров (full_*.zip), если хватает места."""
         from . import backup_policy
         try:
             folder=Path(db.db_name).parent/'backups';folder.mkdir(exist_ok=True)
-            note=''
+            note='';check=self._checker()
             if full:
                 ok,reason=backup_policy.full_backup_allowed(db,folder)
                 if not ok:
                     db.set_setting('last_full_backup',now.isoformat())      # повторная попытка — через сутки
                     db.set_setting('backup_full_status',f'{now:%d.%m.%Y %H:%M}: полная копия с файлами пропущена — {reason}. Базы данных копируются каждый час.')
                     return
-                result=create_backup(db,folder/f'full_{now:%Y%m%d_%H%M%S_%f}.zip',include_files=True)
+                result=create_backup(db,folder/f'full_{now:%Y%m%d_%H%M%S_%f}.zip',check,include_files=True)
                 db.set_setting('last_full_backup',now.isoformat())
                 db.set_setting('backup_full_status',f'{now:%d.%m.%Y %H:%M}: полная копия с файлами создана, пропущенных файлов: {len(result["missing"])}')
             else:
-                result=create_backup(db,folder/f'db_{now:%Y%m%d_%H%M%S_%f}.zip',include_files=False)
+                result=create_backup(db,folder/f'db_{now:%Y%m%d_%H%M%S_%f}.zip',check,include_files=False)
                 db.set_setting('last_db_backup',now.isoformat())
                 db.set_setting('backup_status',f'{now:%d.%m.%Y %H:%M}: копия баз данных создана')
             removed=backup_policy.prune(folder,backup_policy.cap_bytes(db))
             if removed:note=f' · удалено старых копий: {len(removed)}'
             size=backup_policy.summary(folder)['total']
             db.set_setting('backup_folder_status',f'Автоматические копии занимают {size/1024**3:.2f} ГБ{note}')
+        except BackupCancelled:
+            logging.info('Backup cancelled on exit')
         except Exception as e:
             logging.exception('Backup failed')
             db.set_setting('backup_status',f'{now:%d.%m.%Y %H:%M}: ошибка резервного копирования — {e}')
@@ -149,14 +167,35 @@ class AutoBackupService(QObject):
                 if offsite_backup.configured(db) and offsite_backup.due(db)[0]:self.offsite_backup(now)
             except Exception:
                 logging.exception('Exit offsite backup failed')
-        self._stopped=True;self.timer.stop()
+        self.abort_running();self._stopped=True;self.timer.stop()
+        self.pool.shutdown(wait=False,cancel_futures=True)
+        self.pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='backup-exit')       # копия при закрытии не стоит в очереди за долгой полной копией
         try:return self.pool.submit(work)
         except RuntimeError:           # пул уже остановлен предыдущим закрытием
             self.pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='backup');return self.pool.submit(work)
     def backup_on_exit(self,min_age=None):
         """Синхронный вариант (тесты и закрытие без окна): дожидается и делает копии при необходимости."""
-        self._stopped=True;self.timer.stop();self.pool.shutdown(wait=True)
+        self.abort_running();self._stopped=True;self.timer.stop();self.pool.shutdown(wait=True)
         if self.exit_backup_needed():
             self.pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='backup');self.start_exit_backup().result()
     def close(self):
-        self._stopped=True;self.timer.stop();self.pool.shutdown(wait=True)
+        """Остановка без ожидания долгих копий: идущая копия прерывается на ближайшем файле, ожидание — не дольше нескольких секунд."""
+        self.abort_running();self._stopped=True;self.timer.stop()
+        self.pool.shutdown(wait=False,cancel_futures=True)
+        deadline=time.monotonic()+8
+        for f in (self.future,self.full_future,self.contracts_future,self.projects_future,self.offsite_future,self.integrity_future):
+            if f is not None and not f.done():
+                try:f.result(timeout=max(0.1,deadline-time.monotonic()))
+                except Exception:pass
+
+
+def arm_exit_watchdog(seconds=15):
+    """Страховка от «зависшего» завершения: если через seconds секунд после начала выхода процесс всё ещё жив (поток копии, сеть), он завершается принудительно.
+    Данные не страдают: базы SQLite записываются транзакциями, незавершённая копия удаляется как временная."""
+    import os
+    if os.environ.get('PYTEST_CURRENT_TEST') or os.environ.get('PTO_NO_WATCHDOG'):
+        return
+    def kill():
+        time.sleep(seconds)
+        os._exit(0)
+    threading.Thread(target=kill,daemon=True,name='exit-watchdog').start()
