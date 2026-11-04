@@ -520,6 +520,11 @@ def main():
     if not login(db):return
     window = MainWindow()
     window.show()
+    try:
+        from . import web_gateway
+        web_gateway.apply_settings(db, DATA_DIR)          # веб-доступ, если включён в настройках
+    except Exception:
+        logging.exception('Веб-доступ не запущен')
     if os.environ.get('PTO_EXIT_AFTER_MS'):          # для автоматических проверок запуска: программа сама закрывается через заданное время
         QTimer.singleShot(int(os.environ['PTO_EXIT_AFTER_MS']), window.close)
     sys.exit(app.exec())

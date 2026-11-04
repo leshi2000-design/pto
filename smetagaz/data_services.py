@@ -123,6 +123,8 @@ def initialize(db):
         weld_register_migrate(db)
         from .contacts_domain import migrate as contacts_migrate
         contacts_migrate(db)
+        from .web_gateway import migrate as web_migrate
+        web_migrate(db)
         from .incoming_domain import migrate as incoming_migrate
         incoming_migrate(db)
         from .secret_store import migrate as secret_migrate
