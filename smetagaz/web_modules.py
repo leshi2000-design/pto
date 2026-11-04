@@ -2,6 +2,7 @@
 
 Разделы: Услуги — Проекты ГСВ, Монтаж ГСВ, Монтаж ГСН, СМР (ИП), СМР (физлица); Юрлица — Справочник юрлиц, СМР (юрлица), ТО (юрлица), Прочие (юр.лица); Клиенты — Клиенты, Контакты.
 Веб-клиент не меняет то, что требует особых правил программы: файлы, папки, сметы, начисления; номера новых договоров назначаются так же, как в программе."""
+import re
 from datetime import date
 
 from . import contacts_domain as cd
@@ -9,6 +10,7 @@ from . import contracts_core as cc
 from . import gsn_domain as gn
 from . import gsvm_domain as md
 from . import section_codes
+from . import gsvm_statuses
 from . import web_cards as wc
 from .gsv_domain import save_client
 
@@ -28,6 +30,9 @@ class Child:
 
 
 class Module:
+    owner = None                 # владелец в книге платежей (payments_domain.OWNERS); None — оплат нет
+    dossier = None               # 'person' / 'legal': карточка — это клиент, у которого есть досье
+
     def __init__(self, key, title, section, icon, columns, fields, search, load, save, blank=None, children=(), lock=None, copy=None, chips=None, can_create=True):
         self.key, self.title, self.section, self.icon = key, title, section, icon
         self.columns, self.fields, self.search, self.load, self.save = columns, fields, search, load, save
@@ -87,6 +92,9 @@ def _client_from_form(values):
 
 def contracts_module():
     eq_fields = [Field('kind', 'Тип', 'select', choices=lambda db: [(k, k) for k in wc.EQUIPMENT_CHOICES]), Field('model', 'Модель'), Field('serial', 'Серийный номер'), Field('note', 'Примечание')]
+    pipe_fields = [Field('pipeline_id', 'Трубопровод', 'select', choices=lambda db: [(str(i), n) for i, n in db.fetchall('SELECT id,name FROM gsv_pipelines WHERE coalesce(active,1)=1 ORDER BY name')]),
+                   Field('quantity', 'Количество, м', 'number'), Field('note', 'Примечание')]
+    joint_fields = [Field('name', 'Наименование'), Field('count', 'Стыков, шт', 'number'), Field('note', 'Примечание')]
 
     def search(db, q, limit=200):
         return [dict(id=c['id'], cols=[c['number'] or 'б/н', c['date'], c['client'], f'{c["object"]} {c["address"]}'.strip()], statuses=[s for s in c['statuses'].split(',') if s.strip()],
@@ -96,21 +104,86 @@ def contracts_module():
         card = wc.get_card(db, cid)
         if not card:
             return None
+        row = db.execute('SELECT designer_code,designer,project_month,work_end_date,acceptance_act_date,contract_amount,id_transferred,id_recipient,id_transfer_date,le_client_id FROM contracts WHERE id=?', (cid,)).fetchone()
         v = dict(_title=f'Договор № {card["number"] or "б/н"} от {card["date"]}', number=card['number'], contract_date=card['date'], object=card['object'], object_address=card['object_address'],
-                 notes=card['notes'], signed=card['signed'], act_signed=card['act_signed'], _legal=card['legal'], _party=card['party_name'], _statuses=card['statuses'])
+                 notes=card['notes'], signed=card['signed'], act_signed=card['act_signed'], _legal=card['legal'], _party=card['party_name'], _statuses=card['statuses'],
+                 designer_code=row[0] or '', designer=row[1] or '', project_month=row[2] or '', work_end_date=row[3] or '', act_date=row[4] or '', contract_amount=row[5] or 0,
+                 id_transferred=bool(row[6]), id_recipient=row[7] or '', id_transfer_date=row[8] or '')
+        chosen = gsvm_statuses.contract_status_ids(db, cid)
+        v['status_work'] = [i for i, _n, _c in gsvm_statuses.catalog(db, 'work') if i in chosen]
+        v['status_client'] = [i for i, _n, _c in gsvm_statuses.catalog(db, 'client') if i in chosen]
         v.update(_client_values(db, card['client_id'], card['client']))
+        v['_dossier'] = ('legal', row[9]) if row[9] else (('person', card['client_id']) if card['client_id'] else None)
         return v
 
-    def rows(db, cid):
+    def eq_rows(db, cid):
         return [dict(id=e['id'], kind=e['kind'], model=e['model'], serial=e['serial'], note=e['note']) for e in md.equipment(db, cid)]
 
-    def save_rows(db, cid, rows_):
-        wc._save_equipment(db, cid, rows_)
+    def pipe_rows(db, cid):
+        return [dict(id=r['id'], pipeline_id=str(r['pipeline_id']), quantity=r['quantity'], note=r['note']) for r in md.pipelines(db, cid)]
+
+    def joint_rows(db, cid):
+        return [dict(id=r['id'], name=r['name'], count=r['count'], note=r['note']) for r in md.joints(db, cid)]
+
+    def date_ok(text, what):
+        if text:
+            try:
+                date.fromisoformat(text)
+            except ValueError:
+                raise ValueError(f'{what}: формат ГГГГ-ММ-ДД') from None
+        return text or ''
 
     def save(db, cid, values, rows_):
+        rows_ = rows_ if isinstance(rows_, dict) else dict(equipment=rows_)
         if not cid:
             cid = create(db, values)
-        wc.save_card(db, cid, values, rows_)
+        number = str(values.get('number') or '').strip()
+        day = date_ok(values.get('contract_date'), 'Дата договора')
+        if number and db.fetchone('SELECT 1 FROM contracts WHERE contract_number=? AND id<>?', (number, cid)):
+            raise ValueError(f'Договор с номером {number} уже есть')
+        month = str(values.get('project_month') or '').strip()
+        if month and not re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])', month):
+            raise ValueError('Дата проекта: формат ГГГГ-ММ')
+        end, act, idate = date_ok(values.get('work_end_date'), 'Окончание работ'), date_ok(values.get('act_date'), 'Дата акта'), date_ok(values.get('id_transfer_date'), 'Дата передачи ИД')
+        amount = _f(values.get('contract_amount'))
+        if amount < 0:
+            raise ValueError('Стоимость не может быть отрицательной')
+        with db.transaction():
+            wc.save_card(db, cid, values, rows_.get('equipment', []))
+            if 'pipelines' in rows_:
+                kept = {r['id']: r for r in md.pipelines(db, cid)}
+                keep = []
+                for r in rows_['pipelines']:
+                    if r.get('delete') or not r.get('pipeline_id'):
+                        continue
+                    old = kept.get(int(r['id'])) if r.get('id') else None
+                    keep.append(dict(pipeline_id=int(r['pipeline_id']), quantity=_f(r.get('quantity')), note=r.get('note'), from_estimate=old['from_estimate'] if old else 0))
+                md.save_pipelines(db, cid, keep)
+            if 'joints' in rows_:
+                existing = {r['id']: r for r in md.joints(db, cid)}
+                out = []
+                for r in rows_['joints']:
+                    rid = int(r['id']) if r.get('id') else None
+                    if rid and rid not in existing:
+                        raise ValueError('Стык не относится к этому договору')
+                    if rid and existing[rid]['custom'] and r.get('delete'):
+                        continue
+                    if not rid and not str(r.get('name') or '').strip():
+                        continue
+                    out.append(dict(id=rid, name=r.get('name'), count=int(_f(r.get('count'))), note=r.get('note'), custom=1 if (not rid or existing[rid]['custom']) else 0,
+                                    profile_id=existing[rid].get('profile_id') if rid else None))
+                md.save_joints(db, cid, out)
+            fields = dict(designer_code=str(values.get('designer_code') or '').strip(), designer=str(values.get('designer') or '').strip(), project_month=month, work_end_date=end,
+                          acceptance_act_date=act, contract_amount=amount, id_transferred=int(bool(values.get('id_transferred'))), id_recipient=str(values.get('id_recipient') or '').strip(),
+                          id_transfer_date=idate)
+            if number:
+                fields['contract_number'] = number
+            if day:
+                fields.update(contract_date=day, work_start_date=day)
+            db.execute('UPDATE contracts SET ' + ','.join(f'{k}=?' for k in fields) + ' WHERE id=?', (*fields.values(), cid))
+            if 'status_work' in values or 'status_client' in values:
+                valid = {i for kind in ('work', 'client') for i, _n, _c in gsvm_statuses.catalog(db, kind)}
+                gsvm_statuses.set_contract_statuses(db, cid, [int(i) for i in list(values.get('status_work') or []) + list(values.get('status_client') or []) if int(i) in valid])
         return cid
 
     def create(db, values):
@@ -120,14 +193,24 @@ def contracts_module():
         seq, yy, number = md.next_number(db, day)
         with db.transaction():
             client_id = save_client(db, client, None)
-            return db.execute('INSERT INTO contracts(contract_number,contract_date,client_id,client_name,client_phone,seq_num,year_num,work_start_date) VALUES(?,?,?,?,?,?,?,?)',
-                              (number, day, client_id, client['name'], client['phone'], seq, yy, day)).lastrowid
+            return db.execute('INSERT INTO contracts(contract_number,contract_date,client_id,client_name,client_phone,seq_num,year_num,work_start_date,work_end_date) VALUES(?,?,?,?,?,?,?,?,?)',
+                              (number, day, client_id, client['name'], client['phone'], seq, yy, day, (md.default_end(day) or date.today()).isoformat())).lastrowid
 
-    fields = [Field('contract_date', 'Дата договора', 'date', 'Договор', new_only=True)] + _client_fields() + [
-        Field('object', 'Объект', group='Объект'), Field('object_address', 'Адрес объекта', group='Объект'), Field('notes', 'Примечание', 'textarea', 'Объект'),
-        Field('signed', 'Договор подписан', 'check', 'Объект'), Field('act_signed', 'Акт подписан', 'check', 'Объект')]
-    return Module('contracts', 'Монтаж ГСВ', 'Услуги', 'contracts', ['№', 'Дата', 'Клиент', 'Объект'], fields, search, load, save, children=[Child('equipment', 'Оборудование', eq_fields, rows, save_rows)],
-                  lock='gsvm', copy=wc.copy_text)
+    def blank(db):
+        return dict(contract_date=date.today().isoformat())
+
+    fields = [Field('number', 'Номер договора', group='Договор', hint='Новый договор получает номер автоматически'), Field('contract_date', 'Дата заключения', 'date', 'Договор')] + _client_fields() + [
+        Field('object', 'Наименование объекта', group='1. Адрес / объект'), Field('object_address', 'Адрес объекта', group='1. Адрес / объект'), Field('notes', 'Примечания по объекту', 'textarea', '3. Примечания'),
+        Field('designer_code', 'Шифр проекта', group='4. Проект'), Field('designer', 'Проектировщик', group='4. Проект'), Field('project_month', 'Дата проекта (ГГГГ-ММ)', group='4. Проект'),
+        Field('work_end_date', 'Окончание работ', 'date', '5. Сроки и стоимость', hint='Начало работ совпадает с датой заключения'), Field('act_date', 'Дата акта', 'date', '5. Сроки и стоимость'),
+        Field('contract_amount', 'Стоимость работ, BYN', 'number', '5. Сроки и стоимость'), Field('signed', 'Договор подписан', 'check', '5. Сроки и стоимость'), Field('act_signed', 'Акт подписан', 'check', '5. Сроки и стоимость'),
+        Field('status_work', 'Статусы работ', 'multi', '7. Статусы договора', choices=lambda db: [(i, n) for i, n, _c in gsvm_statuses.catalog(db, 'work')]),
+        Field('status_client', 'Статусы клиента', 'multi', '7. Статусы договора', choices=lambda db: [(i, n) for i, n, _c in gsvm_statuses.catalog(db, 'client')]),
+        Field('id_transferred', 'Исполнительная документация передана', 'check', '8. Передача исполнительной документации'), Field('id_recipient', 'Кому передана', group='8. Передача исполнительной документации'),
+        Field('id_transfer_date', 'Дата передачи', 'date', '8. Передача исполнительной документации')]
+    return Module('contracts', 'Монтаж ГСВ', 'Услуги', 'contracts', ['№', 'Дата', 'Клиент', 'Объект'], fields, search, load, save, blank=blank,
+                  children=[Child('equipment', 'Оборудование', eq_fields, eq_rows, None), Child('pipelines', 'Трубопроводы', pipe_fields, pipe_rows, None),
+                            Child('joints', 'Стыки', joint_fields, joint_rows, None)], lock='gsvm', copy=wc.copy_text)
 
 
 # --- ПРОЕКТЫ ГСВ ----------------------------------------------------------------------------------------
@@ -149,6 +232,7 @@ def gsv_module():
                  act_date=p['act_date'] or '', cost=p['cost'] or 0, tu_text=p['tu_text'] or '', notes=p['notes'] or '', contract_signed=bool(p['contract_signed']), act_signed=bool(p['act_signed']),
                  _legal=bool(p.get('le_client_id')), _party=p.get('party_name') or '', pd_number=p['pd_number'], contract_number=p['contract_number'])
         v.update(_client_values(db, p['client_id'], dict(name=p['client_name'], phone=p['phone'], address=p['client_address'], passport=p['passport'])))
+        v['_dossier'] = ('legal', p['le_client_id']) if p.get('le_client_id') else (('person', p['client_id']) if p.get('client_id') else None)
         return v
 
     def save(db, pid, values, rows_):
@@ -208,6 +292,7 @@ def gsn_module():
                  tu_text=c.get('tu_text') or '', notes=c.get('notes') or '', contract_signed=bool(c.get('contract_signed')), act_signed=bool(c.get('act_signed')))
         v.update(_client_values(db, c.get('client_id'), dict(name=c.get('client_name'), phone=c.get('phone'), address=c.get('client_address'), passport=c.get('passport'),
                                                           passport_issuer=c.get('passport_issuer'), passport_date=c.get('passport_issue_date'))))
+        v['_dossier'] = ('person', c['client_id']) if c.get('client_id') else None
         return v
 
     def save(db, pid, values, rows_):
@@ -283,6 +368,7 @@ def counterparty_module(mod, section, icon):
                  status_manual=r.get('status_manual') or '', annual=bool(r.get('annual')), amount_from_acts=bool(r.get('amount_from_acts')), note=r['note'] or '', party_type=kind,
                  person_id=str(r.get('person_id') or ''), legal_id=str((r.get('client_id') if legal_mode else r.get('legal_id')) or ''), direction=r.get('direction') or '')
         v['_party'] = next((n for i, n in party_choices(db, kind) if i == v['legal_id' if kind == 'legal' else 'person_id']), '')
+        v['_dossier'] = ('legal', int(v['legal_id'])) if kind == 'legal' and v['legal_id'] else (('person', int(v['person_id'])) if kind == 'person' and v['person_id'] else None)
         v['_chip_keys'] = [cc.display_status(dict(status=v['status'], start_date=v['start_date'], end_date=v['end_date'], annual=v['annual'], status_manual=v['status_manual']))]
         return v
 
@@ -462,4 +548,8 @@ def all_modules():
     for m in mods:
         if m.key == 'le':
             m.key = 'le_other'
+    owners = dict(contracts='contracts', gsv='gsv_projects', gsn='gsn_projects', ip='ip_contracts', fl='fl_contracts', smr='smr_contracts', to='to_contracts', le_other='le_contracts')
+    for m in mods:
+        m.owner = owners.get(m.key)
+        m.dossier = {'clients': 'person', 'legal_entities': 'legal'}.get(m.key)
     return {m.key: m for m in mods}

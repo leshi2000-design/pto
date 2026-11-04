@@ -119,13 +119,106 @@ code{{background:#f1f1f4;padding:1px 6px;border-radius:6px}}h1{{font-size:22px}}
 Сертификат публичный (в нём нет паролей и данных); он нужен только чтобы устройство доверяло вашему компьютеру с ПТО.</p>
 <p><a class="btn" href="/pto-ca.crt">Скачать сертификат (pto-ca.crt)</a></p>
 <p class="muted">Отпечаток SHA-256 (сверьте с настройками ПТО): <code>{fp}</code></p></div>
-<div class="card"><h2>Windows (компьютер)</h2><p>Откройте скачанный файл → «Установить сертификат» → «Локальный компьютер» (или «Текущий пользователь») → «Поместить все сертификаты в следующее хранилище» →
+<div class="card"><h2>Windows: одним файлом</h2><p>Скачайте и запустите <a href="/pto-web-setup.bat">pto-web-setup.bat</a>: он установит сертификат (Windows спросит «Да/Нет» — нажмите «Да») и создаст на рабочем столе ярлык «ПТО (веб)» на портал. Браузер может предупредить о скачивании .bat — это обычный текстовый сценарий, его содержимое можно открыть блокнотом.
+Только ярлык без сертификата: <a href="/pto.url">pto.url</a>.</p></div>
+<div class="card"><h2>Windows (компьютер), вручную</h2><p>Откройте скачанный файл → «Установить сертификат» → «Локальный компьютер» (или «Текущий пользователь») → «Поместить все сертификаты в следующее хранилище» →
 <b>«Доверенные корневые центры сертификации»</b> → Готово. Перезапустите браузер.</p></div>
 <div class="card"><h2>Android</h2><p>Настройки → Безопасность (или «Защита и конфиденциальность») → Шифрование и учётные данные → <b>Установить сертификат → Сертификат ЦС</b> → выберите скачанный файл
 (подтвердите предупреждение). Затем откройте <b>{https}</b> в Chrome.</p></div>
 <div class="card"><h2>iPhone / iPad</h2><p>Скачайте файл → «Настройки» → вверху «Профиль загружен» → Установить. Затем: Настройки → Основные → Об этом устройстве →
 <b>Доверие сертификатов</b> → включите доверие для «ПТО — локальный центр сертификации». Затем откройте <b>{https}</b> в Safari.</p></div>
 <div class="card"><p>Открыть программу: <a href="{https}">{https}</a></p></div></main></body></html>"""
+
+
+SHORTCUT_NAME = 'ПТО (веб).url'
+
+
+def shortcut_text(url):
+    return f'[InternetShortcut]\r\nURL={url}\r\n'
+
+
+def setup_script(url, base):
+    """Файл .bat для Windows: один раз ставит сертификат ПТО (для текущего пользователя, без прав администратора — Windows спросит подтверждение) и создаёт на рабочем столе ярлык на портал.
+    Сам сценарий PowerShell передаётся закодированным, поэтому кириллица и кавычки не ломаются."""
+    ps = ("$ErrorActionPreference='Stop'\n"
+          "Add-Type -AssemblyName System.Windows.Forms\n"
+          f"$url='{url}'\n$base='{base}'\n"
+          "$msg=''\n"
+          "try { $f=Join-Path $env:TEMP 'pto-ca.crt'; Invoke-WebRequest -UseBasicParsing -Uri ($base+'/pto-ca.crt') -OutFile $f; "
+          "Import-Certificate -FilePath $f -CertStoreLocation Cert:\\CurrentUser\\Root | Out-Null; Remove-Item $f -ErrorAction SilentlyContinue; $msg+='Сертификат ПТО установлен.'+[Environment]::NewLine } "
+          "catch { $msg+='Сертификат установить не удалось ('+$_.Exception.Message+'). Откройте '+$base+' и установите его вручную.'+[Environment]::NewLine }\n"
+          "try { $d=[Environment]::GetFolderPath('Desktop'); $p=Join-Path $d '" + SHORTCUT_NAME + "'; "
+          "[IO.File]::WriteAllText($p, \"[InternetShortcut]`r`nURL=$url`r`n\", [Text.Encoding]::ASCII); $msg+='Ярлык создан на рабочем столе: " + SHORTCUT_NAME + "' } "
+          "catch { $msg+='Ярлык создать не удалось: '+$_.Exception.Message }\n"
+          "[System.Windows.Forms.MessageBox]::Show($msg,'ПТО — веб-доступ') | Out-Null\n")
+    import base64
+    encoded = base64.b64encode(ps.encode('utf-16-le')).decode('ascii')
+    return f'@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand {encoded}\r\n'
+
+
+def desktop_folder():
+    """Рабочий стол текущего пользователя (с учётом перенаправления в OneDrive)."""
+    if sys.platform == 'win32':
+        try:
+            import ctypes
+            buf = ctypes.create_unicode_buffer(260)
+            if ctypes.windll.shell32.SHGetFolderPathW(0, 0x0000, 0, 0, buf) == 0 and buf.value:
+                return Path(buf.value)
+        except Exception:
+            pass
+    return Path.home() / 'Desktop'
+
+
+def create_desktop_shortcut(url, folder=None):
+    """Создаёт на рабочем столе этого компьютера ярлык на портал ПТО. Возвращает путь к ярлыку."""
+    folder = Path(folder) if folder else desktop_folder()
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / SHORTCUT_NAME
+    path.write_bytes(shortcut_text(url).encode('ascii'))
+    return path
+
+
+def install_page(folder, https_url, path, host_header=''):
+    """(код, данные, тип, заголовки) для страницы установки сертификата и самого сертификата; другие адреса — 404."""
+    path = path.split('?')[0]
+    if path in ('/pto-ca.crt', '/pto-ca.cer'):
+        return 200, ca_der(folder), 'application/x-x509-ca-cert', [('Content-Disposition', f'attachment; filename="{path[1:]}"')]
+    if path == '/pto-ca.pem':
+        return 200, ensure_ca(folder)[0].read_bytes(), 'application/x-pem-file', [('Content-Disposition', 'attachment; filename="pto-ca.pem"')]
+    host = re.sub(r'[^0-9A-Za-z.\-]', '', host_header.rsplit(':', 1)[0]) or 'localhost'
+    if path == '/pto.url':
+        return 200, shortcut_text(https_url.replace('{host}', host)).encode('ascii', 'replace'), 'application/octet-stream', [('Content-Disposition', 'attachment; filename="pto.url"')]
+    if path == '/pto-web-setup.bat':
+        base = 'http://' + re.sub(r'[^0-9A-Za-z.\-:]', '', host_header or host)
+        return 200, setup_script(https_url.replace('{host}', host), base).encode('ascii'), 'application/octet-stream', [('Content-Disposition', 'attachment; filename="pto-web-setup.bat"')]
+    if path in ('/', '/index.html'):
+        fp = ca_fingerprint(folder)
+        return 200, INSTALL_HTML.format(https=https_url.replace('{host}', host), fp=':'.join(fp[i:i + 2] for i in range(0, 64, 2))).encode('utf-8'), 'text/html; charset=utf-8', []
+    return 404, b'', 'text/plain', []
+
+
+def install_handler(context):
+    """Класс обработчика HTTP для страницы установки сертификата; context() -> (папка, адрес https)."""
+    class Handler(http.server.BaseHTTPRequestHandler):
+        server_version = 'PTO'
+        sys_version = ''
+
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            folder, https_url = context()
+            code, data, ctype, headers = install_page(folder, https_url, self.path, self.headers.get('Host') or '')
+            self.send_response(code)
+            self.send_header('Content-Type', ctype)
+            self.send_header('Content-Length', str(len(data)))
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.send_header('Connection', 'close')
+            for k, v in headers:
+                self.send_header(k, v)
+            self.end_headers()
+            self.wfile.write(data)
+    return Handler
 
 
 class InstallServer:
@@ -136,37 +229,7 @@ class InstallServer:
         self.thread = None
 
     def start(self):
-        owner = self
-
-        class Handler(http.server.BaseHTTPRequestHandler):
-            server_version = 'PTO'
-            sys_version = ''
-
-            def log_message(self, *a):
-                pass
-
-            def do_GET(self):
-                path = self.path.split('?')[0]
-                if path in ('/pto-ca.crt', '/pto-ca.cer'):
-                    data, ctype = ca_der(owner.folder), 'application/x-x509-ca-cert'
-                elif path == '/pto-ca.pem':
-                    data, ctype = ensure_ca(owner.folder)[0].read_bytes(), 'application/x-pem-file'
-                elif path in ('/', '/index.html'):
-                    host = re.sub(r'[^0-9A-Za-z.\-]', '', (self.headers.get('Host') or '').rsplit(':', 1)[0]) or 'localhost'
-                    data = INSTALL_HTML.format(https=owner.https_url.replace('{host}', host), fp=':'.join(ca_fingerprint(owner.folder)[i:i + 2] for i in range(0, 64, 2))).encode('utf-8')
-                    ctype = 'text/html; charset=utf-8'
-                else:
-                    self.send_error(404)
-                    return
-                self.send_response(200)
-                self.send_header('Content-Type', ctype)
-                self.send_header('Content-Length', str(len(data)))
-                if path.startswith('/pto-ca.'):
-                    self.send_header('Content-Disposition', f'attachment; filename="{path[1:]}"')
-                self.send_header('X-Content-Type-Options', 'nosniff')
-                self.end_headers()
-                self.wfile.write(data)
-        self.httpd = http.server.ThreadingHTTPServer((self.host, self.port), Handler)
+        self.httpd = http.server.ThreadingHTTPServer((self.host, self.port), install_handler(lambda: (self.folder, self.https_url)))
         self.httpd.daemon_threads = True
         self.port = self.httpd.server_address[1]
         self.thread = threading.Thread(target=self.httpd.serve_forever, kwargs={'poll_interval': 0.3}, daemon=True, name='web-install')
@@ -206,20 +269,48 @@ def firewall_rule_exists():
     return code == 0 and RULE_NAME.lower() in out.lower()
 
 
+PRIVATE_RANGES = 'LocalSubnet,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16'      # своя сеть, в том числе соседняя подсеть роутера (кабель и Wi‑Fi бывают в разных); интернет — нет
+
+
 def firewall_command(ports):
     ports = ','.join(str(p) for p in ports)
     return (f'netsh advfirewall firewall delete rule name="{RULE_NAME}" & '
-            f'netsh advfirewall firewall add rule name="{RULE_NAME}" dir=in action=allow protocol=TCP localport={ports} profile=any remoteip=localsubnet')
+            f'netsh advfirewall firewall add rule name="{RULE_NAME}" dir=in action=allow protocol=TCP localport={ports} profile=any remoteip={PRIVATE_RANGES}')
+
+
+def firewall_script(ports, exe=None):
+    """Сценарий PowerShell (от администратора): снимает запрещающие правила Windows для программы (их создаёт отказ в окне «Разрешить доступ» при первом запуске —
+    запрет сильнее любого разрешения), создаёт разрешающие правила по портам и для самой программы."""
+    exe = exe or sys.executable
+    ports = ','.join(str(p) for p in ports)
+    return (f"$ErrorActionPreference='SilentlyContinue'\n"
+            f"$exe='{exe.replace(chr(39), chr(39) * 2)}'\n"
+            "Get-NetFirewallApplicationFilter | Where-Object { $_.Program -eq $exe } | Get-NetFirewallRule | Where-Object { $_.Action -eq 'Block' -and $_.Direction -eq 'Inbound' } | Remove-NetFirewallRule\n"
+            f'netsh advfirewall firewall delete rule name="{RULE_NAME}" | Out-Null\n'
+            f'netsh advfirewall firewall delete rule name="{RULE_NAME} (программа)" | Out-Null\n'
+            f'netsh advfirewall firewall add rule name="{RULE_NAME}" dir=in action=allow protocol=TCP localport={ports} profile=any remoteip={PRIVATE_RANGES} | Out-Null\n'
+            f'netsh advfirewall firewall add rule name="{RULE_NAME} (программа)" dir=in action=allow program="$exe" profile=any remoteip={PRIVATE_RANGES} | Out-Null\n')
 
 
 def open_firewall(ports):
-    """Создаёт правило брандмауэра (вход по TCP с адресов своей подсети, для всех типов сети). Windows спросит подтверждение администратора (UAC)."""
+    """Создаёт правила брандмауэра (вход по TCP из своей сети, для всех типов сети). Windows спросит подтверждение администратора (UAC)."""
     if sys.platform != 'win32':
         return False
-    cmd = firewall_command(ports).replace('"', '\\"')
-    subprocess.Popen(['powershell', '-NoProfile', '-Command', f'Start-Process cmd -ArgumentList \'/c {cmd}\' -Verb RunAs -WindowStyle Hidden'],
+    import base64
+    encoded = base64.b64encode(firewall_script(ports).encode('utf-16-le')).decode('ascii')
+    subprocess.Popen(['powershell', '-NoProfile', '-Command', f"Start-Process powershell -ArgumentList '-NoProfile','-EncodedCommand','{encoded}' -Verb RunAs -WindowStyle Hidden"],
                      creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     return True
+
+
+def blocking_rules():
+    """Запрещающие входящие правила Windows для этой программы (None — не Windows / проверить не удалось)."""
+    if sys.platform != 'win32':
+        return None
+    exe = sys.executable.replace("'", "''")
+    code, out = _run(['powershell', '-NoProfile', '-Command',
+                      f"Get-NetFirewallApplicationFilter | Where-Object {{ $_.Program -eq '{exe}' }} | Get-NetFirewallRule | Where-Object {{ $_.Action -eq 'Block' -and $_.Direction -eq 'Inbound' -and $_.Enabled -eq 'True' }} | ForEach-Object {{ $_.DisplayName }}"], timeout=15)
+    return [line.strip() for line in out.splitlines() if line.strip()] if code == 0 else None
 
 
 def network_profiles():
@@ -271,6 +362,10 @@ def diagnose(gateway, install_port=None):
     for ip in ips:
         ok = can_connect(ip, gateway.port)
         out.append(('ok' if ok else 'err', f'Адрес {ip}: ' + ('порт отвечает с этого компьютера.' if ok else 'порт не отвечает даже с самого компьютера — порт занят другой программой или сервер не запущен.')))
+    blocked = blocking_rules()
+    if blocked:
+        out.append(('err', 'В брандмауэре Windows есть ЗАПРЕЩАЮЩЕЕ правило для программы (' + ', '.join(blocked[:3]) + ') — оно сильнее любого разрешения. Его создаёт отказ в окне «Разрешить доступ» при первом запуске. '
+                    'Кнопка «Разрешить в брандмауэре» снимает такие правила.'))
     rule = firewall_rule_exists()
     if rule is False:
         out.append(('err', 'В брандмауэре Windows НЕТ правила для ПТО — это самая частая причина, почему телефон не заходит. Нажмите «Разрешить в брандмауэре» (потребуется подтверждение администратора).'))

@@ -114,7 +114,7 @@ class WebAccessBox(QGroupBox):
         row.addStretch()
         lay.addLayout(row)
         tools = QHBoxLayout()
-        for text, fn in (('Разрешить в брандмауэре', self.open_firewall), ('Проверить доступ', self.check), ('Сохранить сертификат ПТО…', self.save_certificate), ('Скопировать адрес', self.copy_address)):
+        for text, fn in (('Разрешить в брандмауэре', self.open_firewall), ('Проверить доступ', self.check), ('Сохранить сертификат ПТО…', self.save_certificate), ('Скопировать адрес', self.copy_address), ('Ярлык на рабочий стол', self.desktop_shortcut), ('Сохранить скрипт установки…', self.save_setup_script)):
             b = QPushButton(text)
             b.clicked.connect(fn)
             tools.addWidget(b)
@@ -160,6 +160,36 @@ class WebAccessBox(QGroupBox):
                 f.write(web_tls.ca_der(DATA_DIR / 'web_cert'))
             QMessageBox.information(self, 'Сертификат', 'Сохранено. Установите файл как «центр сертификации» на устройстве (на телефоне проще открыть «Страницу сертификата» в браузере).\n'
                                     'Отпечаток SHA-256: ' + web_tls.ca_fingerprint(DATA_DIR / 'web_cert'))
+
+    def portal_url(self):
+        urls = wg.urls()
+        return urls[0] + '/' if urls else ''
+
+    def desktop_shortcut(self):
+        url = self.portal_url()
+        if not url:
+            QMessageBox.information(self, 'Ярлык', 'Сначала включите веб-доступ и нажмите «Применить».')
+            return
+        try:
+            path = web_tls.create_desktop_shortcut(url)
+        except OSError as e:
+            QMessageBox.warning(self, 'Ярлык', f'Не удалось создать ярлык: {e}')
+            return
+        QMessageBox.information(self, 'Ярлык', f'Ярлык создан: {path}\nОн открывает портал ПТО ({url}) в браузере.')
+
+    def save_setup_script(self):
+        url = self.portal_url()
+        if not url or not wg.RUNNING or not wg.RUNNING.https:
+            QMessageBox.information(self, 'Скрипт установки', 'Включите веб-доступ с HTTPS и нажмите «Применить».')
+            return
+        host = url.split('//', 1)[1].rsplit(':', 1)[0]
+        path, _ = QFileDialog.getSaveFileName(self, 'Сохранить скрипт установки', 'pto-web-setup.bat', 'Сценарий Windows (*.bat)')
+        if path:
+            install_port = wg.RUNNING.installer.port if wg.RUNNING.installer else wg.RUNNING.port
+            with open(path, 'w', encoding='ascii', newline='') as f:
+                f.write(web_tls.setup_script(url, f'http://{host}:{install_port}'))
+            QMessageBox.information(self, 'Скрипт установки', 'Сохранено. Запустите файл на другом компьютере сети (по флешке или почте): он установит сертификат ПТО и создаст ярлык на рабочем столе. '
+                                    'Компьютер с ПТО при этом должен быть включён. Этот же файл можно скачать в самом портале: меню «Ярлык на рабочий стол».')
 
     def copy_address(self):
         urls = wg.urls()

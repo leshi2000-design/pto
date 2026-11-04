@@ -48,6 +48,14 @@ class Client:
         conn.close()
         return out
 
+    def raw_post(self, path, body):
+        conn = http.client.HTTPConnection('127.0.0.1', self.gw.port, timeout=10)
+        conn.request('POST', path, body, {'Cookie': self.cookie, 'Content-Type': 'application/x-www-form-urlencoded'})
+        r = conn.getresponse()
+        out = (r.status, r.read().decode('utf-8'), dict(r.getheaders()))
+        conn.close()
+        return out
+
     def login(self, user, password):
         return self.request('POST', '/login', dict(login=user, password=password))
 
@@ -216,3 +224,41 @@ def test_settings_box_and_users_dialog(db, tmp_path, monkeypatch):
         db.set_setting('web_enabled', '0')
         wg.apply_settings(db, tmp_path)
     assert wg.RUNNING is None
+
+
+def test_remember_me_survives_restart_and_is_revoked(db):
+    uid = wg.add_user(db, 'anna', 'password123', 'editor')
+    g1 = wg.WebGateway(db, '127.0.0.1', 0)
+    g1.start()
+    try:
+        c = Client(g1)
+        status, _b, headers = c.request('POST', '/login', dict(login='anna', password='password123', remember='1'))
+        assert status == 303 and f'Max-Age={30 * 86400}' in headers['Set-Cookie'] and 'HttpOnly' in headers['Set-Cookie']
+        cookie = c.cookie
+        assert db.fetchone('SELECT count(*) FROM web_tokens')[0] == 1
+        assert cookie.split('=', 1)[1] not in str(db.fetchall('SELECT * FROM web_tokens'))             # в базе только хэш токена
+        plain = Client(g1)
+        _s, _b, h2 = plain.request('POST', '/login', dict(login='anna', password='password123'))
+        assert 'Max-Age' not in h2['Set-Cookie']                                                       # без галочки — обычный сеанс до закрытия браузера
+    finally:
+        g1.stop()
+    g2 = wg.WebGateway(db, '127.0.0.1', 0)                                                             # программу перезапустили
+    g2.start()
+    try:
+        c2 = Client(g2)
+        c2.cookie = cookie
+        assert c2.request('GET', '/m/clients')[0] == 200                                               # входить заново не нужно
+        wg.set_password(db, uid, 'another-pass1')                                                      # смена пароля завершает запомненные входы
+        assert Client(g2).request('GET', '/m/clients')[0] == 303
+        c3 = Client(g2)
+        c3.request('POST', '/login', dict(login='anna', password='another-pass1', remember='1'))
+        assert c3.request('GET', '/m/clients')[0] == 200
+        c3.request('POST', '/logout', dict(csrf=c3.csrf('/m/clients')))
+        assert db.fetchone('SELECT count(*) FROM web_tokens')[0] == 0
+        c4 = Client(g2)
+        c4.request('POST', '/login', dict(login='anna', password='another-pass1', remember='1'))
+        wg.set_user(db, uid, active=False)
+        g2.sessions.clear()
+        assert c4.request('GET', '/m/clients')[0] == 303
+    finally:
+        g2.stop()
