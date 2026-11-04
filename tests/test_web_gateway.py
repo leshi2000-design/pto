@@ -118,7 +118,7 @@ def test_http_flow_security_and_editing(db, gateway):
     status, body, headers = anon.request('GET', '/contracts')
     assert status == 303 and headers['Location'] == '/login'
     assert anon.request('GET', '/health')[1] == 'ok'
-    assert anon.request('GET', f'/contracts/{cid}')[0] == 303                           # без входа карточка недоступна
+    assert anon.request('GET', f'/m/contracts/{cid}')[0] == 303                           # без входа карточка недоступна
     assert anon.login('editor1', 'bad')[0] == 401
     # защита от подбора пароля
     for _ in range(5):
@@ -130,33 +130,35 @@ def test_http_flow_security_and_editing(db, gateway):
     v.gw = gateway
     gateway.fails.clear()
     assert v.login('viewer1', 'viewerpass1')[0] == 303
-    status, page, headers = v.request('GET', '/contracts')
+    status, page, headers = v.request('GET', '/m/contracts')
     assert status == 200 and '01-02/26' in page and 'Content-Security-Policy' in headers and headers['X-Frame-Options'] == 'DENY' and headers['Cache-Control'] == 'no-store'
     assert '&lt;script&gt;alert(1)&lt;/script&gt;' in page and '<script>alert(1)' not in page            # экранирование
-    status, page, _h = v.request('GET', f'/contracts/{cid}')
+    status, page, _h = v.request('GET', f'/m/contracts/{cid}')
     assert status == 200 and 'Только просмотр' in page and 'disabled' in page and 'SN-1' in page and 'ФИО:' in page
-    assert v.request('POST', f'/contracts/{cid}', dict(csrf=v.csrf(f'/contracts/{cid}'), client_name='Взлом'))[0] == 403
+    assert v.request('POST', f'/m/contracts/{cid}', {'csrf': v.csrf(f'/m/contracts/{cid}'), 'f_client_name': 'Взлом'})[0] == 403
     # сотрудник
     e = Client(gateway)
     assert e.login('editor1', 'editorpass1')[0] == 303
-    assert e.request('POST', f'/contracts/{cid}', dict(client_name='Без csrf'))[0] == 403           # CSRF-токен обязателен
-    token = e.csrf(f'/contracts/{cid}')
-    form = dict(csrf=token, client_name='Петров Пётр', phones='375291111111\n375292222222 (доп)', client_address='Брест', passport='AB123', passport_issuer='РУВД', passport_date='2019-05-06',
-                object='Склад', object_address='Брест, Заводская 1', notes='примечание', signed='1', eq_count='2', eq_id_0=str(wc.get_card(db, cid)['equipment'][0]['id']), eq_kind_0='Котел',
-                eq_model_0='Новая модель', eq_serial_0='SN-2', eq_note_0='', eq_id_1='', eq_kind_1='', eq_model_1='', eq_serial_1='', eq_note_1='')
-    status, page, _h = e.request('POST', f'/contracts/{cid}', form)
+    assert e.request('POST', f'/m/contracts/{cid}', {'f_client_name': 'Без csrf'})[0] == 403           # CSRF-токен обязателен
+    token = e.csrf(f'/m/contracts/{cid}')
+    eqid = str(wc.get_card(db, cid)['equipment'][0]['id'])
+    form = {'csrf': token, 'f_client_name': 'Петров Пётр', 'f_phones': '375291111111\n375292222222 (доп)', 'f_client_address': 'Брест', 'f_passport': 'AB123', 'f_passport_issuer': 'РУВД',
+            'f_passport_date': '2019-05-06', 'f_object': 'Склад', 'f_object_address': 'Брест, Заводская 1', 'f_notes': 'примечание', 'f_signed': '1', 'c_equipment_count': '2',
+            'c_equipment_id_0': eqid, 'c_equipment_kind_0': 'Котел', 'c_equipment_model_0': 'Новая модель', 'c_equipment_serial_0': 'SN-2', 'c_equipment_note_0': '',
+            'c_equipment_id_1': '', 'c_equipment_kind_1': '', 'c_equipment_model_1': '', 'c_equipment_serial_1': '', 'c_equipment_note_1': ''}
+    status, page, _h = e.request('POST', f'/m/contracts/{cid}', form)
     assert status == 200 and 'Сохранено.' in page and '375292222222 (доп)' in page
     assert db.fetchone('SELECT client_name,client_phone FROM contracts WHERE id=?', (cid,)) == ('Петров Пётр', '375291111111; 375292222222 (доп)')
     # ошибка проверки данных
-    bad = dict(form, client_name='')
-    assert 'Введите ФИО клиента' in e.request('POST', f'/contracts/{cid}', bad)[1]
+    bad = dict(form, f_client_name='')
+    assert 'Введите ФИО клиента' in e.request('POST', f'/m/contracts/{cid}', bad)[1]
     # блокировка: карточка открыта в программе
     db.execute("INSERT INTO edit_locks(key,sid,user,host,since,beat) VALUES(?,?,?,?,?,CAST(strftime('%s','now') AS INTEGER))", (f'gsvm:{cid}', 'x', 'Мария', 'PC-2', ''))
-    status, page, _h = e.request('POST', f'/contracts/{cid}', dict(form, client_name='Под замком'))
+    status, page, _h = e.request('POST', f'/m/contracts/{cid}', dict(form, f_client_name='Под замком'))
     assert 'Мария' in page and db.fetchone('SELECT client_name FROM contracts WHERE id=?', (cid,))[0] == 'Петров Пётр'
     # выход
     assert e.request('POST', '/logout', dict(csrf=token))[0] == 303
-    assert e.request('GET', '/contracts')[0] == 303
+    assert e.request('GET', '/m/contracts')[0] == 303
     assert e.request('GET', '/nope')[0] in (303, 404)
 
 

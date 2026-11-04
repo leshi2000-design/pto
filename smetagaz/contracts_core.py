@@ -913,3 +913,8 @@ def check(db, mod, kind, ref_id):
     if cfg(mod)['estimate'] and estimate_state(db, cid, mod) == 'stale':
         add('error', 'Смета изменена после получения данных — обновите стоимость в карточке договора')
     return out
+
+
+def status_titles():
+    """[(ключ, название)] визуальных статусов договора (для выбора «вручную» в веб-доступе)."""
+    return [(k, t) for k, t in STATUS_FILTERS if k and k != 'cancelled'] + [('cancelled', 'Расторгнут')]

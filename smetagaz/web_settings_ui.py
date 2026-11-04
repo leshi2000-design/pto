@@ -1,8 +1,8 @@
 """Настройки веб-доступа (прототип): включение, порт, HTTPS, пользователи."""
-from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDialog, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QMessageBox, QPushButton, QSpinBox,
+from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QMessageBox, QPushButton, QSpinBox,
                              QVBoxLayout, QWidget)
 
-from . import web_gateway as wg
+from . import web_gateway as wg, web_tls
 from .config import DATA_DIR
 from .database import db
 
@@ -90,8 +90,9 @@ class WebAccessBox(QGroupBox):
     def __init__(self, parent=None):
         super().__init__('Веб-доступ (прототип): карточки договоров с других компьютеров и телефонов сети', parent)
         lay = QVBoxLayout(self)
-        note = QLabel('Работает, пока программа открыта на этом компьютере. Доступ только из локальной сети, по логину и паролю. Адрес откройте в браузере другого устройства; '
-                      'при первом входе браузер предупредит о самоподписанном сертификате — это ожидаемо: нажмите «Дополнительно → Перейти». В брандмауэре Windows разрешите доступ для частной сети.')
+        note = QLabel('Работает, пока программа открыта на этом компьютере. Доступ только из локальной сети, по логину и паролю; интернет не используется. Страницы выглядят так же, как в программе '
+                      '(тема и цвет берутся из настроек). Чтобы браузер не писал «подключение не защищено», один раз установите сертификат ПТО на каждое устройство: откройте на нём адрес «Страница сертификата» '
+                      '(там пошаговая инструкция). Если телефон не заходит — нажмите «Разрешить в брандмауэре» и «Проверить доступ».')
         note.setWordWrap(True)
         lay.addWidget(note)
         row = QHBoxLayout()
@@ -112,6 +113,13 @@ class WebAccessBox(QGroupBox):
         row.addWidget(apply)
         row.addStretch()
         lay.addLayout(row)
+        tools = QHBoxLayout()
+        for text, fn in (('Разрешить в брандмауэре', self.open_firewall), ('Проверить доступ', self.check), ('Сохранить сертификат ПТО…', self.save_certificate), ('Скопировать адрес', self.copy_address)):
+            b = QPushButton(text)
+            b.clicked.connect(fn)
+            tools.addWidget(b)
+        tools.addStretch()
+        lay.addLayout(tools)
         self.status = QLabel('')
         self.status.setWordWrap(True)
         self.status.setTextInteractionFlags(self.status.textInteractionFlags() | __import__('PyQt6.QtCore', fromlist=['Qt']).Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -127,10 +135,44 @@ class WebAccessBox(QGroupBox):
         wg.apply_settings(db, DATA_DIR)
         self.refresh()
 
+    def ports(self):
+        return [self.port.value(), self.port.value() + 1]
+
+    def open_firewall(self):
+        if not web_tls.open_firewall(self.ports()):
+            QMessageBox.information(self, 'Брандмауэр', 'Это действие нужно только в Windows. Команда для ручного запуска от имени администратора:\n\n' + web_tls.firewall_command(self.ports()))
+            return
+        QMessageBox.information(self, 'Брандмауэр', 'Windows сейчас спросит разрешение администратора — нажмите «Да». Будет создано правило «PTO Web» (вход по TCP на порты '
+                                f'{self.ports()[0]} и {self.ports()[1]}, только из вашей локальной сети). Потом нажмите «Проверить доступ».')
+
+    def check(self):
+        icons = {'ok': '✔', 'warn': '⚠', 'err': '✖'}
+        lines = [f'{icons[level]} {text}' for level, text in web_tls.diagnose(wg.RUNNING, wg.RUNNING.installer.port if wg.RUNNING and wg.RUNNING.installer else None)]
+        QMessageBox.information(self, 'Проверка веб-доступа', '\n\n'.join(lines))
+
+    def save_certificate(self):
+        if not wg.RUNNING or not wg.RUNNING.https:
+            QMessageBox.information(self, 'Сертификат', 'Включите веб-доступ с HTTPS и нажмите «Применить».')
+            return
+        path, _ = QFileDialog.getSaveFileName(self, 'Сохранить сертификат ПТО', 'pto-ca.crt', 'Сертификат (*.crt *.cer)')
+        if path:
+            with open(path, 'wb') as f:
+                f.write(web_tls.ca_der(DATA_DIR / 'web_cert'))
+            QMessageBox.information(self, 'Сертификат', 'Сохранено. Установите файл как «центр сертификации» на устройстве (на телефоне проще открыть «Страницу сертификата» в браузере).\n'
+                                    'Отпечаток SHA-256: ' + web_tls.ca_fingerprint(DATA_DIR / 'web_cert'))
+
+    def copy_address(self):
+        urls = wg.urls()
+        if urls:
+            QApplication.clipboard().setText(urls[0])
+
     def refresh(self):
         if wg.LAST_ERROR:
             self.status.setText('Не удалось запустить: ' + wg.LAST_ERROR + ' (возможно, порт занят — выберите другой).')
         elif wg.RUNNING:
-            self.status.setText('Работает. Откройте в браузере: ' + '   '.join(wg.urls()))
+            text = 'Работает. Откройте в браузере: ' + '   '.join(wg.urls())
+            if wg.install_urls():
+                text += '\nСтраница сертификата (один раз на устройство, обычный http): ' + '   '.join(wg.install_urls())
+            self.status.setText(text)
         else:
             self.status.setText('Выключен.')
