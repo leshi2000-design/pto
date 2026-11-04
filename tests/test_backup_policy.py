@@ -80,7 +80,9 @@ def test_estimate_and_guard(db, tmp_path, monkeypatch):
 def test_service_backup_db_modes(db, tmp_path, monkeypatch):
     from smetagaz import services
     monkeypatch.setattr(services, 'db', db)
-    svc = services.AutoBackupService.__new__(services.AutoBackupService)
+    svc = services.AutoBackupService()
+    svc.timer.stop()
+    svc._stopped = True                                   # периодические проверки не запускаются: проверяем backup_db напрямую
     from datetime import datetime
     folder = tmp_path / 'backups'
     folder.mkdir()

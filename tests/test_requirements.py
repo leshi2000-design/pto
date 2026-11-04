@@ -24,7 +24,7 @@ def test_requirements_not_empty_and_cover_all_imports():
     declared = required_names()
     assert len(declared) >= 10, 'requirements.txt пуст или почти пуст'
     used = {}
-    for path in list((ROOT / 'smetagaz').glob('*.py')) + [ROOT / 'run.py', ROOT / 'run_server.py']:
+    for path in list((ROOT / 'smetagaz').glob('*.py')) + [ROOT / 'run.py', ROOT / 'run_server.py', ROOT / 'pto_overlay.py']:
         tree = ast.parse(path.read_text(encoding='utf-8'))
         for node in ast.walk(tree):
             mods = []
@@ -33,7 +33,7 @@ def test_requirements_not_empty_and_cover_all_imports():
             elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
                 mods = [node.module.split('.')[0]]
             for m in mods:
-                if m not in sys.stdlib_module_names and m != 'smetagaz' and m not in OPTIONAL:
+                if m not in sys.stdlib_module_names and m not in ('smetagaz', 'pto_overlay') and m not in OPTIONAL:
                     used.setdefault(m, path.name)
     unknown = {m: f for m, f in used.items() if m not in PACKAGE_OF}
     assert not unknown, f'сторонние модули без записи в таблице пакетов теста: {unknown}'
