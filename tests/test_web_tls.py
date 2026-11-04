@@ -64,6 +64,8 @@ def test_install_page_and_certificate_download(tmp_path):
 
 
 def test_start_from_settings_https_with_installer_and_diagnostics(db, tmp_path):
+    if getattr(db, 'is_remote', False):
+        pytest.skip('веб-шлюз запускается только на компьютере с локальной базой')
     db.set_setting('web_enabled', '1')
     db.set_setting('web_https', '1')
     db.set_setting('web_port', '0')

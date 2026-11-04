@@ -180,6 +180,8 @@ def test_https_gateway_sets_secure_cookie(db, tmp_path):
 
 
 def test_apply_settings_and_urls(db, tmp_path):
+    if getattr(db, 'is_remote', False):
+        pytest.skip('веб-шлюз запускается только на компьютере с локальной базой')
     db.set_setting('web_enabled', '1')
     db.set_setting('web_https', '0')
     db.set_setting('web_port', '0')
