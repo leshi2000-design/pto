@@ -703,10 +703,11 @@ class EstimateEditorDialog(QDialog):
         d = QDialog(self)
         d.setWindowTitle(title)
         form = QFormLayout(d)
-        qty = QDoubleSpinBox()
-        qty.setDecimals(3)
-        qty.setRange(0.001, 1000000.0)
-        qty.setValue(1.0)
+        qty = QLineEdit()                                                  # количество не подставляется: поле пустое, вводят сами (пусто — 0, заполнят в таблице сметы)
+        qty.setPlaceholderText('введите количество')
+        from PyQt6.QtCore import QRegularExpression
+        from PyQt6.QtGui import QRegularExpressionValidator
+        qty.setValidator(QRegularExpressionValidator(QRegularExpression(r'^\d{0,9}([.,]\d{0,3})?$')))
         section = QComboBox()
         section.addItem('— в конец сметы —', None)
         for sid, name in ed.sections(db, self.estimate_id):
@@ -726,8 +727,14 @@ class EstimateEditorDialog(QDialog):
         bar.addWidget(cancel_btn)
         bar.addWidget(ok_btn)
         form.addRow(bar)
+        qty.setFocus()
         if d.exec() == QDialog.DialogCode.Accepted:
-            return qty.value(), section.currentData(), True
+            text = qty.text().strip().replace(',', '.')
+            try:
+                value = float(text) if text not in ('', '.') else 0.0
+            except ValueError:
+                value = 0.0
+            return value, section.currentData(), True
         return 0.0, None, False
 
     def section_of_row(self, row):

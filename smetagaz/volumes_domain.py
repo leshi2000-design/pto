@@ -7,11 +7,18 @@ from datetime import datetime
 
 OWNERS = {'contracts': 'Монтаж ГСВ', 'gsn_projects': 'Монтаж ГСН', 'smr_contracts': 'СМР (юрлица)', 'ip_contracts': 'СМР (ИП)', 'fl_contracts': 'СМР (физлица)'}
 KINDS = ('Работа', 'Материал')
+ACT_OWNERS = {'smr_contracts': 'smr_acts', 'ip_contracts': 'ip_acts', 'fl_contracts': 'fl_acts'}       # разделы, где договор имеет акты выполненных работ
 
 
 def migrate(db):
     db.execute("""CREATE TABLE IF NOT EXISTS volumes(id INTEGER PRIMARY KEY, owner_type TEXT NOT NULL, owner_id INTEGER NOT NULL, kind TEXT NOT NULL DEFAULT 'Материал',
         name TEXT NOT NULL, unit TEXT DEFAULT '', quantity REAL NOT NULL DEFAULT 0, catalog_id INTEGER, note TEXT DEFAULT '', sort_order INTEGER DEFAULT 0)""")
+    if 'act_id' not in {r[1] for r in db.fetchall('PRAGMA table_info(volumes)')}:
+        db.execute('ALTER TABLE volumes ADD COLUMN act_id INTEGER')              # объёмы делятся по актам выполненных работ; пусто — «без акта»
+    for owner in ACT_OWNERS:                                                     # удалили акт — его объёмы не пропадают, а переходят в «без акта»
+        acts_table = ACT_OWNERS[owner]
+        if db.fetchone('SELECT 1 FROM sqlite_master WHERE type=? AND name=?', ('table', acts_table)):
+            db.execute(f"CREATE TRIGGER IF NOT EXISTS volumes_act_cleanup_{acts_table} AFTER DELETE ON {acts_table} BEGIN UPDATE volumes SET act_id=NULL WHERE owner_type='{owner}' AND act_id=old.id; END")
     db.execute('CREATE INDEX IF NOT EXISTS idx_volumes_owner ON volumes(owner_type,owner_id)')
     for table in OWNERS:         # удалённый договор не оставляет объёмов (номера записей могут использоваться повторно)
         if db.fetchone('SELECT 1 FROM sqlite_master WHERE type=? AND name=?', ('table', table)):
@@ -23,15 +30,50 @@ def _check(owner):
         raise ValueError('В этом разделе вкладка «Объёмы» не предусмотрена')
 
 
+def has_acts(owner):
+    return owner in ACT_OWNERS
+
+
+def acts(db, owner, oid):
+    """Акты договора для выбора в объёмах: [(id, подпись)] по дате; для разделов без актов — пусто."""
+    if not has_acts(owner):
+        return []
+    rows = db.fetchall(f'SELECT id,act_number,act_date FROM {ACT_OWNERS[owner]} WHERE contract_id=? ORDER BY act_date,id', (oid,))
+    out = []
+    for aid, number, day in rows:
+        label = 'Акт № ' + (str(number).strip() or 'б/н')
+        if day:
+            y, m, d = (str(day)[:10].split('-') + ['', ''])[:3]
+            label += f' от {d}.{m}.{y}' if d and m else f' от {day}'
+        out.append((aid, label))
+    return out
+
+
 def items(db, owner, oid):
+    """Объёмы договора по порядку: сначала по актам (в порядке дат актов), затем «без акта»; act_id — номер акта или None."""
     _check(owner)
-    cur = db.execute('SELECT id,kind,name,unit,quantity,catalog_id,note FROM volumes WHERE owner_type=? AND owner_id=? ORDER BY sort_order,id', (owner, oid))
-    return [dict(zip([c[0] for c in cur.description], r)) for r in cur.fetchall()]
+    cur = db.execute('SELECT id,kind,name,unit,quantity,catalog_id,note,act_id FROM volumes WHERE owner_type=? AND owner_id=? ORDER BY sort_order,id', (owner, oid))
+    rows = [dict(zip([c[0] for c in cur.description], r)) for r in cur.fetchall()]
+    order = {aid: i for i, (aid, _l) in enumerate(acts(db, owner, oid))}
+    rows.sort(key=lambda r: (order.get(r['act_id'], len(order) if r['act_id'] is None else len(order) + 1), 0))      # устойчивая сортировка: внутри акта порядок строк сохраняется
+    return rows
+
+
+def grouped(db, owner, oid):
+    """[(act_id|None, подпись, [объёмы])]: ВСЕ акты договора (и пустые) по порядку, затем «Без акта» (если там что-то есть)."""
+    rows = items(db, owner, oid)
+    out = [(aid, label, [r for r in rows if r['act_id'] == aid]) for aid, label in acts(db, owner, oid)]
+    loose = [r for r in rows if r['act_id'] is None or r['act_id'] not in {a for a, _l, _r in out}]
+    if loose or not out:
+        out.append((None, 'Без акта' if out else 'Объёмы договора', loose))
+    return out
 
 
 def save_items(db, owner, oid, rows):
-    """Заменяет объёмы договора. rows: [{kind, name, unit, quantity, catalog_id, note}]; пустые строки пропускаются."""
+    """Заменяет объёмы договора. rows: [{kind, name, unit, quantity, catalog_id, note, act_id}]; пустые строки пропускаются.
+    act_id — акт этого договора (для СМР: объёмы делятся по актам); чужой или несуществующий акт — ошибка."""
     _check(owner)
+    valid_acts = {aid for aid, _l in acts(db, owner, oid)}
     clean = []
     for r in rows:
         name = str(r.get('name') or '').strip()
@@ -42,13 +84,28 @@ def save_items(db, owner, oid, rows):
             raise ValueError('Укажите наименование работы или материала')
         if qty < 0:
             raise ValueError(f'«{name}»: количество не может быть отрицательным')
+        act_id = r.get('act_id') or None
+        if act_id is not None and (not has_acts(owner) or int(act_id) not in valid_acts):
+            raise ValueError(f'«{name}»: выбран акт, которого нет в этом договоре')
         kind = r.get('kind') if r.get('kind') in KINDS else 'Материал'
-        clean.append((kind, name, str(r.get('unit') or '').strip(), qty, r.get('catalog_id') or None, str(r.get('note') or '').strip()))
+        clean.append((kind, name, str(r.get('unit') or '').strip(), qty, r.get('catalog_id') or None, str(r.get('note') or '').strip(), int(act_id) if act_id else None))
     with db.transaction():
         db.execute('DELETE FROM volumes WHERE owner_type=? AND owner_id=?', (owner, oid))
         for i, row in enumerate(clean):
-            db.execute('INSERT INTO volumes(owner_type,owner_id,kind,name,unit,quantity,catalog_id,note,sort_order) VALUES(?,?,?,?,?,?,?,?,?)', (owner, oid, *row, i))
+            db.execute('INSERT INTO volumes(owner_type,owner_id,kind,name,unit,quantity,catalog_id,note,act_id,sort_order) VALUES(?,?,?,?,?,?,?,?,?,?)', (owner, oid, *row, i))
     return len(clean)
+
+
+def totals(db, owner, oid):
+    """Общие объёмы договора (по всем актам): одинаковые позиции суммируются. [{kind,name,unit,quantity,catalog_id}]."""
+    merged = {}
+    for r in items(db, owner, oid):
+        key = (r['kind'], str(r['name']).strip().casefold(), str(r['unit'] or '').strip().casefold())
+        if key in merged:
+            merged[key]['quantity'] += r['quantity']
+        else:
+            merged[key] = dict(kind=r['kind'], name=r['name'], unit=r['unit'], quantity=r['quantity'], catalog_id=r['catalog_id'], note='')
+    return list(merged.values())
 
 
 def estimate_id(db, owner, oid):
@@ -86,7 +143,7 @@ def build_estimate(db, owner, oid, replace=False):
     Цены берутся из справочника (по ссылке или по названию), позиции вне справочника получают цену 0 — её вводят в смете. Возвращает (id сметы, [названия без цены])."""
     from . import estimates_domain as ed
     _check(owner)
-    rows = [r for r in items(db, owner, oid) if r['quantity'] > 0]
+    rows = [r for r in totals(db, owner, oid) if r['quantity'] > 0]          # смета договора — по общим объёмам всех актов
     if not rows:
         raise ValueError('Внесите объёмы работ и материалов (количество больше нуля)')
     unpriced = []
