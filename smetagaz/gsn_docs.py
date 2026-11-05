@@ -10,7 +10,7 @@ from datetime import datetime
 
 from . import gsv_project_domain as gd
 from . import gsn_domain as gn
-from .gsv_project_domain import get_initials_first
+from .gsv_project_domain import get_initials_first, get_initials_last
 from .gsvm_docs import apply_format, money, norm_tag, tag_text, FORMATS  # noqa: F401  (общий разбор формата и имени тега)
 
 TEMPLATES_DIR = gd.TEMPLATES_DIR / 'gsn'
@@ -40,7 +40,7 @@ MAIN_KINDS = [k for k, v in DOC_KINDS.items() if v[2] == 'main']
 
 STATIC_SOURCES = [
     ('contract.number', 'Номер договора'), ('contract.date', 'Дата заключения договора'), ('contract.signed', 'Договор подписан (да / нет)'),
-    ('client.name', 'Клиент: ФИО полностью'), ('client.short', 'Клиент: инициалы и фамилия'), ('client.phone', 'Клиент: телефоны'), ('client.address', 'Клиент: адрес'),
+    ('client.name', 'Клиент: ФИО полностью'), ('client.short', 'Клиент: инициалы и фамилия (И.О. Фамилия)'), ('client.short_last', 'Клиент: фамилия и инициалы (Фамилия И.О.)'), ('client.phone', 'Клиент: телефоны'), ('client.address', 'Клиент: адрес'),
     ('client.passport', 'Клиент: паспорт (серия, номер)'), ('client.passport_issuer', 'Клиент: кем выдан паспорт'), ('client.passport_date', 'Клиент: дата выдачи паспорта'),
     ('object.name', 'Наименование объекта (по проекту и ТУ)'), ('object.address', 'Адрес объекта'), ('notes', 'Примечания по объекту'),
     ('project.code', 'Шифр проекта'), ('project.designer', 'Проектировщик'), ('project.date', 'Дата проекта (месяц и год)'), ('project.tu', 'Технические условия (ТУ)'),
@@ -59,7 +59,7 @@ STATIC_SOURCES = [
 BUILTIN_TAGS = [
     ('НОМЕР_ДОГОВОРА', 'contract.number', 'text'), ('ДАТА_ДОГОВОРА', 'contract.date', 'date_long'), ('ДАТА_ДОГОВОРА_С', 'contract.date', 'date_short'),
     ('ДАТА_ДОГОВОРА_КАВ', 'contract.date', 'date_quoted'), ('ДОГОВОР_ПОДПИСАН', 'contract.signed', 'text'),
-    ('КЛИЕНТ', 'client.name', 'text'), ('КЛИЕНТ_СОКР', 'client.short', 'text'), ('ТЕЛЕФОН', 'client.phone', 'text'), ('АДРЕС_КЛИЕНТА', 'client.address', 'text'),
+    ('КЛИЕНТ', 'client.name', 'text'), ('КЛИЕНТ_СОКР', 'client.short', 'text'), ('КЛИЕНТ_ФАМИЛИЯ_ИО', 'client.short_last', 'text'), ('ТЕЛЕФОН', 'client.phone', 'text'), ('АДРЕС_КЛИЕНТА', 'client.address', 'text'),
     ('ПАСПОРТ', 'client.passport', 'text'), ('КЕМ_ВЫДАН', 'client.passport_issuer', 'text'), ('ДАТА_ВЫДАЧИ', 'client.passport_date', 'date_short'),
     ('ОБЪЕКТ', 'object.name', 'text'), ('АДРЕС', 'object.address', 'text'), ('ПРИМЕЧАНИЕ', 'notes', 'text'),
     ('ШИФР_ПРОЕКТА', 'project.code', 'text'), ('НОМЕР_ПРОЕКТА', 'project.code', 'text'), ('ПРОЕКТИРОВЩИК', 'project.designer', 'text'),
@@ -183,7 +183,7 @@ def context(db, cid):
         pipes.append(f'стальной надземный {gn.STEEL_DIAMETER} — {_num(above)} м')
     ctx = {
         'contract.number': c.get('contract_number') or '', 'contract.date': c.get('contract_date') or '', 'contract.signed': 'да' if c.get('contract_signed') else 'нет',
-        'client.name': name, 'client.short': get_initials_first(name) if name else '', 'client.phone': client.get('phone') or c.get('phone') or '',
+        'client.name': name, 'client.short': get_initials_first(name) if name else '', 'client.short_last': get_initials_last(name) if name else '', 'client.phone': client.get('phone') or c.get('phone') or '',
         'client.address': client.get('address') or c.get('client_address') or '', 'client.passport': client.get('passport') or c.get('passport') or '',
         'client.passport_issuer': client.get('passport_issuer') or c.get('passport_issuer') or '', 'client.passport_date': client.get('passport_date') or c.get('passport_issue_date') or '',
         'object.name': c.get('title') or '', 'object.address': c.get('address') or '', 'notes': c.get('notes') or '',
@@ -215,11 +215,31 @@ def context(db, cid):
     return ctx
 
 
+MIN_PICKET_TAGS = 40
+
+
+def picket_tags(db, cid):
+    """Теги пикетов: ПИКЕТ_1 … ПИКЕТ_N (название), ПИКЕТ_N_РАССТОЯНИЕ, ПИКЕТ_N_ПРИМЕЧАНИЕ; ПИКЕТЫ — все названия по строкам, ПИКЕТОВ_ВСЕГО.
+    Тегов не меньше MIN_PICKET_TAGS: лишние (пикетов меньше) — пустые; строка шаблона с такими тегами при формировании документа удаляется."""
+    rows = gn.pickets(db, cid)
+    tags = {'ПИКЕТЫ': '\n'.join(r['name'] for r in rows), 'ПИКЕТОВ_ВСЕГО': str(len(rows)) if rows else ''}
+    for i in range(1, max(MIN_PICKET_TAGS, len(rows)) + 1):
+        r = rows[i - 1] if i <= len(rows) else None
+        tags[f'ПИКЕТ_{i}'] = r['name'] if r else ''
+        tags[f'ПИКЕТ_{i}_РАССТОЯНИЕ'] = _num(r['distance']) if r and r['distance'] is not None else ''
+        tags[f'ПИКЕТ_{i}_ПРИМЕЧАНИЕ'] = r['note'] if r else ''
+    return tags
+
+
+def picket_drop_tags(db, cid):
+    return {k for k in picket_tags(db, cid) if k.startswith('ПИКЕТ_')}
+
+
 def tag_map(db, cid):
     """{ИМЯ_ТЕГА: значение} — только включённые теги; пустые значения заменяются текстом «если пусто»."""
     sync_tags(db)
     ctx = context(db, cid)
-    result = {}
+    result = picket_tags(db, cid)
     for _id, name, source, fmt, empty_text, _auto, enabled, _note in db.fetchall("SELECT id,name,source,fmt,empty_text,coalesce(auto_key,''),enabled,note FROM gsn_tags"):
         if not enabled:
             continue
@@ -326,7 +346,7 @@ def generate(db, cid, kind, destination=None):
     number = tags.get('НОМЕР_ДОГОВОРА') or str(cid)
     out = os.path.join(folder, gd.safe_name(f'{prefix}_{number.replace("/", "-")}').replace(' ', '_') + '.' + ext)
     out = str(destination) if destination else out
-    out = gd.render_file(template_path(db, kind), out, tags, normalize=norm_tag)
+    out = gd.render_file(template_path(db, kind), out, tags, normalize=norm_tag, drop_tags=picket_drop_tags(db, cid))
     db.execute('INSERT OR REPLACE INTO gsn_docs(contract_id,kind,file_path,data_hash,generated_at,linked) VALUES(?,?,?,?,?,0)',
                (cid, kind, out, data_hash(db, cid), datetime.now().isoformat(timespec='seconds')))
     return out

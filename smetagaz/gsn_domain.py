@@ -40,6 +40,8 @@ def migrate(db):
              empty_text TEXT DEFAULT '', auto_key TEXT UNIQUE, enabled INTEGER NOT NULL DEFAULT 1, note TEXT DEFAULT '')""",
         """CREATE TABLE IF NOT EXISTS gsn_contract_items(contract_id INTEGER NOT NULL REFERENCES gsn_projects(id) ON DELETE CASCADE, role TEXT NOT NULL,
              item_id INTEGER REFERENCES gsn_items(id) ON DELETE SET NULL, PRIMARY KEY(contract_id,role))""",
+        """CREATE TABLE IF NOT EXISTS gsn_pickets(id INTEGER PRIMARY KEY, contract_id INTEGER NOT NULL REFERENCES gsn_projects(id) ON DELETE CASCADE,
+             position INTEGER NOT NULL DEFAULT 0, name TEXT NOT NULL DEFAULT '', distance REAL, note TEXT DEFAULT '')""",
         """CREATE TABLE IF NOT EXISTS gsn_attest_rules(document_id INTEGER PRIMARY KEY REFERENCES welding_documents(id) ON DELETE CASCADE,
              mode TEXT NOT NULL CHECK(mode IN ('always','steel','pe')))""",
     ):
@@ -48,6 +50,46 @@ def migrate(db):
     db.execute('UPDATE gsn_projects SET steel_under_length=steel_length WHERE coalesce(steel_under_length,0)=0 AND coalesce(steel_above_length,0)=0 AND coalesce(steel_length,0)>0')
     # для уже существующих договоров стартовые значения сроков и «подписан»
     db.execute("UPDATE gsn_projects SET work_start_date=contract_date WHERE coalesce(work_start_date,'')='' AND coalesce(contract_date,'')<>''")
+
+
+# --- ПИКЕТЫ -----------------------------------------------------------------------------------
+
+def pickets(db, cid):
+    """Пикеты объекта по порядку: [{'id','name','distance','note'}]; distance — метры от начала трассы (None, если не задано)."""
+    return [dict(id=r[0], name=r[1] or '', distance=r[2], note=r[3] or '') for r in
+            db.fetchall('SELECT id,name,distance,note FROM gsn_pickets WHERE contract_id=? ORDER BY position,id', (cid,))]
+
+
+def clean_pickets(rows):
+    """Проверка и приведение строк пикетов: пустые строки пропускаются; у пикета должно быть название; расстояние — неотрицательное число (запятая допустима)."""
+    out = []
+    for i, r in enumerate(rows, 1):
+        name = str(r.get('name') or '').strip()
+        raw = str(r.get('distance') if r.get('distance') is not None else '').strip().replace(' ', '').replace(',', '.')
+        note = str(r.get('note') or '').strip()
+        if not (name or raw or note):
+            continue
+        if not name:
+            raise ValueError(f'Пикет, строка {i}: укажите название (например, ПК1)')
+        distance = None
+        if raw:
+            try:
+                distance = round(float(raw), 2)
+            except ValueError:
+                raise ValueError(f'Пикет «{name}»: расстояние «{r.get("distance")}» — не число') from None
+            if distance < 0 or distance != distance:
+                raise ValueError(f'Пикет «{name}»: расстояние не может быть отрицательным')
+        out.append(dict(name=name, distance=distance, note=note))
+    return out
+
+
+def save_pickets(db, cid, rows):
+    """Заменяет пикеты объекта (порядок строк сохраняется)."""
+    rows = clean_pickets(rows)
+    with db.transaction():
+        db.execute('DELETE FROM gsn_pickets WHERE contract_id=?', (cid,))
+        for pos, r in enumerate(rows):
+            db.execute('INSERT INTO gsn_pickets(contract_id,position,name,distance,note) VALUES(?,?,?,?,?)', (cid, pos, r['name'], r['distance'], r['note']))
 
 
 # --- НОМЕР, ПАПКА ----------------------------------------------------------------------------

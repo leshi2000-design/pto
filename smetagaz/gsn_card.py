@@ -12,6 +12,7 @@ from .gsv_domain import get_client
 from . import gsn_domain as gn
 from . import gsn_docs as dd
 from .gsn_tabs import GsnPipelineTab, GsnIdTab, TemplatesTab
+from .gsn_pickets_ui import GsnPicketsTab
 from .gsvm_tabs import STATE_TEXT, open_file, print_files
 from .edit_lock_ui import guarded
 
@@ -183,6 +184,8 @@ class GsnContractDialog(QDialog):
         # остальные вкладки
         self.pipeline_tab = GsnPipelineTab(self)
         self.tabs.addTab(self.pipeline_tab, 'Трубопроводы и оборудование')
+        self.pickets_tab = GsnPicketsTab(self)
+        self.tabs.addTab(self.pickets_tab, 'Пикеты')
         self.id_tab = GsnIdTab(self)
         self.tabs.addTab(self.id_tab, 'Исполнительная документация')
         from .volumes_ui import VolumesTab
@@ -255,6 +258,7 @@ class GsnContractDialog(QDialog):
         for w in self.lock_widgets:
             w.setEnabled(not locked)
         self.pipeline_tab.set_enabled_inputs(not locked)
+        self.pickets_tab.set_enabled_inputs(not locked)
         self.edit_button.setVisible(bool(self.contract_id))
         self.edit_button.setText('Изменить' if locked else 'Заблокировать')
 
@@ -297,8 +301,10 @@ class GsnContractDialog(QDialog):
             self.client_form.fill(client or dict(name=c['client_name'], phone=c['phone'], address=c.get('client_address'), passport=c['passport'],
                                                  passport_issuer=c.get('passport_issuer'), passport_date=c.get('passport_issue_date')), c['client_id'])
             self.pipeline_tab.fill(c, gn.chosen_items(db, self.contract_id))
+            self.pickets_tab.load(self.contract_id)
         else:
             self.pipeline_tab.fill({}, {})
+            self.pickets_tab.load(None)
         self.refresh_estimate_ui()
         self.refresh_docs()
 
@@ -314,8 +320,10 @@ class GsnContractDialog(QDialog):
     def save_data(self, silent=False):
         try:
             client = self.client_form.values()
+            picket_rows = self.pickets_tab.rows()                 # ошибки ввода пикетов — до сохранения договора
             cid, client_id = gn.save_card(db, self.values(), client, self.client_form.client_id, self.contract_id, self.pipeline_tab.items())
             self.contract_id = cid
+            gn.save_pickets(db, cid, picket_rows)
             self.client_form.client_id = client_id
             self.client_form.info.setText(f'Клиент №{client_id}. Данные сохранены.')
             self.status.setText(f'Сохранено · договор {self.number.text() or cid} · клиент №{client_id}')

@@ -39,6 +39,14 @@ def get_initials_first(full_name: str) -> str:
     if len(parts) == 2: return f"{parts[1][0].upper()}. {parts[0]}"
     return f"{parts[1][0].upper()}.{parts[2][0].upper()}. {parts[0]}"
 
+def get_initials_last(full_name: str) -> str:
+    """«Иванов Иван Иванович» -> «Иванов И.И.» (фамилия, затем инициалы)."""
+    parts = full_name.strip().split()
+    if not parts: return "—"
+    if len(parts) == 1: return parts[0]
+    if len(parts) == 2: return f"{parts[0]} {parts[1][0].upper()}."
+    return f"{parts[0]} {parts[1][0].upper()}.{parts[2][0].upper()}."
+
 def format_cost_rubles(amount: float) -> str:
     int_part = int(amount)
     cents_part = int(round((amount - int_part) * 100))
@@ -249,7 +257,8 @@ TAGS = [
     ('ДАТА_АКТА_П', 'Дата акта: 12 ноября 2026г.'),
     ('ДАТА_АКТА_С', 'Дата акта: 12.11.2026г.'),
     ('КЛИЕНТ', 'Полное наименование клиента (ФИО)'),
-    ('КЛИЕНТ_СОКР', 'Инициалы и фамилия, например Иванов И.И.'),
+    ('КЛИЕНТ_СОКР', 'Инициалы и фамилия, например И.И. Иванов'),
+    ('КЛИЕНТ_ФАМИЛИЯ_ИО', 'Фамилия и инициалы, например Иванов И.И.'),
     ('СТОИМОСТЬ', 'Стоимость цифрами'),
     ('СУММА_ПРОПИСЬЮ', 'Сумма прописью'),
     ('ТЕЛЕФОН', 'Телефоны клиента с пояснениями'),
@@ -338,7 +347,7 @@ def project_tags(db, pid):
         'ДАТА_ЗАКЛЮЧЕНИЯ_П': date_long(p.get('contract_date')), 'ДАТА_ЗАКЛЮЧЕНИЯ_С': date_short(p.get('contract_date')),
         'СРОК_ИСПОЛНЕНИЯ_П': date_long(p.get('due_date')), 'СРОК_ИСПОЛНЕНИЯ_С': date_short(p.get('due_date')),
         'ДАТА_АКТА_П': date_long(p.get('act_date')), 'ДАТА_АКТА_С': date_short(p.get('act_date')),
-        'КЛИЕНТ': name, 'КЛИЕНТ_СОКР': get_initials_first(name) if name else '',
+        'КЛИЕНТ': name, 'КЛИЕНТ_СОКР': get_initials_first(name) if name else '', 'КЛИЕНТ_ФАМИЛИЯ_ИО': get_initials_last(name) if name else '',
         'СТОИМОСТЬ': money(cost), 'СУММА_ПРОПИСЬЮ': num_to_words_byn(cost),
         'ТЕЛЕФОН': client.get('phone') or p.get('phone') or '', 'ПАСПОРТ': client.get('passport') or p.get('passport') or '',
         'ДАТА_ВЫДАЧИ': date_short(client.get('passport_date')).rstrip('г.') if client.get('passport_date') else '',
@@ -516,9 +525,56 @@ def _walk_paragraphs(container):
         yield Paragraph(p, container)
 
 
-def render_docx(template, out_path, tags, normalize=None):
+def drop_empty_lines(doc, tags, drop_tags, normalize=None):
+    """Удаляет из документа строки (абзацы и строки таблиц), в которых есть теги из drop_tags и ВСЕ теги строки пусты. Остальные строки не меняются
+    (строка, где рядом с пустым тегом есть заполненный другой тег, остаётся — на месте пустого тега пустое место).
+    Строка таблицы удаляется целиком; абзац — вместе с номером и текстом перед тегом («3 Регулятор {РЕГУЛЯТОР}» исчезает полностью).
+    Единственный абзац ячейки не удаляется (в ячейке должен остаться абзац) — такая строка таблицы удаляется как строка. Возвращает число удалённых строк."""
+    from docx.oxml.ns import qn
+    if not drop_tags:
+        return 0
+    normalize = normalize or tag_key
+    drop = {normalize(t) for t in drop_tags}
+
+    def dropped(text):
+        every = {normalize(m.group(1) or m.group(2)) for m in _TAG_ANY.finditer(text)}
+        found = every & drop
+        # строка удаляется, если в ней есть такой тег и все теги строки пусты; строка с другими заполненными данными остаётся (на месте пустого тега — пустое место)
+        return bool(found) and all(not str(tags.get(k, '')).strip() for k in every)
+
+    def text_of(element):
+        return ''.join(t.text or '' for t in element.iter(qn('w:t')))
+    removed = 0
+    body = doc.element
+    for row in list(body.iter(qn('w:tr'))):
+        if row.getparent() is None:
+            continue
+        if dropped(text_of(row)):
+            table = row.getparent()
+            table.remove(row)
+            removed += 1
+            if table.tag == qn('w:tbl') and not table.findall(qn('w:tr')):
+                parent = table.getparent()
+                if parent is not None:
+                    parent.remove(table)
+                    if parent.tag == qn('w:tc') and not parent.findall(qn('w:p')):
+                        from docx.oxml import OxmlElement
+                        parent.append(OxmlElement('w:p'))
+    for p in list(body.iter(qn('w:p'))):
+        parent = p.getparent()
+        if parent is None or not dropped(text_of(p)):
+            continue
+        if parent.tag == qn('w:tc') and len(parent.findall(qn('w:p'))) == 1:
+            continue
+        parent.remove(p)
+        removed += 1
+    return removed
+
+
+def render_docx(template, out_path, tags, normalize=None, drop_tags=None):
     import docx
     doc = docx.Document(template)
+    drop_empty_lines(doc, tags, drop_tags, normalize)
     for paragraph in _walk_paragraphs(doc):
         _fill_paragraph(paragraph, tags, normalize)
     for section in doc.sections:
@@ -528,7 +584,7 @@ def render_docx(template, out_path, tags, normalize=None):
     _save_atomic(lambda p: doc.save(p), out_path)
 
 
-def render_file(template, out_base, tags, normalize=None, payments=None):
+def render_file(template, out_base, tags, normalize=None, payments=None, drop_tags=None):
     """Универсальная подстановка: формат результата повторяет формат шаблона (Word .docx или Excel .xlsx). Возвращает путь итогового файла."""
     ext = os.path.splitext(str(template))[1].lower()
     if ext not in TEMPLATE_EXTS:
@@ -540,7 +596,7 @@ def render_file(template, out_base, tags, normalize=None, payments=None):
     if ext == '.xlsx':
         render_xlsx(template, out, tags, payments or [], normalize=normalize)
     else:
-        render_docx(template, out, tags, normalize=normalize)
+        render_docx(template, out, tags, normalize=normalize, drop_tags=drop_tags)
     return out
 
 

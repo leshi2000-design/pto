@@ -11,7 +11,7 @@ from datetime import datetime
 
 from . import gsv_project_domain as gd
 from . import gsvm_domain as md
-from .gsv_project_domain import MONTHS_GENITIVE, get_initials_first, num_to_words_byn
+from .gsv_project_domain import MONTHS_GENITIVE, get_initials_first, get_initials_last, num_to_words_byn
 
 TEMPLATES_DIR = gd.TEMPLATES_DIR / 'gsvm'
 MONTHS_NOMINATIVE = ['', 'январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь']
@@ -51,7 +51,7 @@ def tag_text(text):
 
 STATIC_SOURCES = [
     ('contract.number', 'Номер договора'), ('contract.date', 'Дата договора'), ('client.name', 'Клиент: ФИО полностью'),
-    ('client.short', 'Клиент: инициалы и фамилия'), ('client.passport', 'Клиент: паспорт (серия, номер)'),
+    ('client.short', 'Клиент: инициалы и фамилия (И.О. Фамилия)'), ('client.short_last', 'Клиент: фамилия и инициалы (Фамилия И.О.)'), ('client.passport', 'Клиент: паспорт (серия, номер)'),
     ('client.passport_date', 'Клиент: дата выдачи паспорта'), ('client.passport_issuer', 'Клиент: кем выдан паспорт'),
     ('client.phone', 'Клиент: телефоны'), ('client.address', 'Клиент: адрес'), ('object.name', 'Наименование объекта газоснабжения'),
     ('object.address', 'Адрес объекта'), ('notes', 'Примечания по объекту'), ('work.start', 'Начало работ'), ('work.end', 'Окончание работ'),
@@ -64,7 +64,7 @@ STATIC_SOURCES = [
 ]
 BUILTIN_TAGS = [
     ('НОМЕР_ДОГОВОРА', 'contract.number', 'text'), ('ДАТА_ДОГОВОРА', 'contract.date', 'date_long'), ('ДАТА_ДОГОВОРА_С', 'contract.date', 'date_short'),
-    ('КЛИЕНТ', 'client.name', 'text'), ('КЛИЕНТ_СОКР', 'client.short', 'text'), ('ПАСПОРТ', 'client.passport', 'text'),
+    ('КЛИЕНТ', 'client.name', 'text'), ('КЛИЕНТ_СОКР', 'client.short', 'text'), ('КЛИЕНТ_ФАМИЛИЯ_ИО', 'client.short_last', 'text'), ('ПАСПОРТ', 'client.passport', 'text'),
     ('ДАТА_ВЫДАЧИ', 'client.passport_date', 'date_short'), ('КЕМ_ВЫДАН', 'client.passport_issuer', 'text'), ('ТЕЛЕФОН', 'client.phone', 'text'),
     ('АДРЕС_КЛИЕНТА', 'client.address', 'text'), ('ОБЪЕКТ', 'object.name', 'text'), ('АДРЕС', 'object.address', 'text'),
     ('ПРИМЕЧАНИЕ', 'notes', 'text'), ('НАЧАЛО_РАБОТ', 'work.start', 'date_long'), ('ОКОНЧАНИЕ_РАБОТ', 'work.end', 'date_long'),
@@ -84,12 +84,17 @@ def available_sources(db):
     result = list(STATIC_SOURCES)
     for kind in equipment_kinds(db):
         label = md.EQUIPMENT_LABELS.get(kind, kind)
-        result += [(f'equipment:{kind}:model', f'Оборудование «{label}»: тип / модель'), (f'equipment:{kind}:serial', f'Оборудование «{label}»: серийный номер')]
+        result += [(f'equipment:{kind}:full', f'Оборудование «{label}»: модель и заводской номер (для актов ревизии)'),
+                   (f'equipment:{kind}:model', f'Оборудование «{label}»: тип / модель'), (f'equipment:{kind}:serial', f'Оборудование «{label}»: серийный номер')]
     for pid, name in db.fetchall('SELECT id,name FROM gsv_pipelines ORDER BY name'):
         result += [(f'pipeline:{pid}:name', f'Трубопровод «{name}»: наименование'), (f'pipeline:{pid}:name_cert', f'Трубопровод «{name}»: наименование и сертификат'),
                    (f'pipeline:{pid}:cert', f'Трубопровод «{name}»: номер сертификата'), (f'pipeline:{pid}:diameter', f'Трубопровод «{name}»: диаметр'),
                    (f'pipeline:{pid}:qty', f'Трубопровод «{name}»: количество, м'), (f'pipeline:{pid}:joints', f'Трубопровод «{name}»: количество стыков')]
     return result
+
+
+# короткие теги приборов для актов ревизии (кроме полного имени вида «СЧЁТЧИК_ГАЗА»)
+DEVICE_ALIASES = {md._norm('Счётчик газа'): ('СЧЕТЧИК',), md._norm('Регулятор давления газа'): ('РЕГУЛЯТОР',)}
 
 
 def equipment_kinds(db):
@@ -115,6 +120,9 @@ def sync_tags(db):
         add(f'b:{name}', name, source, fmt)
     for kind in equipment_kinds(db):
         base = tag_text(kind)
+        add(f'e:{kind}:full', base, f'equipment:{kind}:full', 'text', 'Модель и заводской номер («Модель, зав. № 123»); пусто, если такого оборудования в объекте нет — в актах ревизии строка с тегом тогда удаляется')
+        for alias in DEVICE_ALIASES.get(md._norm(kind), ()):
+            add(f'e:{kind}:alias:{alias}', alias, f'equipment:{kind}:full', 'text', f'Короткое имя тега «{base}»: модель и заводской номер; пусто, если оборудования нет')
         add(f'e:{kind}:model', f'{base}_МОДЕЛЬ', f'equipment:{kind}:model', 'text', 'Пусто, если такого оборудования в объекте нет')
         add(f'e:{kind}:serial', f'{base}_СЕРИЙНЫЙ_НОМЕР', f'equipment:{kind}:serial', 'text', 'Пусто, если такого оборудования в объекте нет')
     for pid, pname in db.fetchall('SELECT id,name FROM gsv_pipelines ORDER BY id'):
@@ -202,6 +210,23 @@ def apply_format(value, fmt):
     return value
 
 
+def equipment_text(e):
+    """«Модель, зав. № 123»; без номера — только модель; без модели — «зав. № 123»."""
+    model, serial = str(e.get('model') or '').strip(), str(e.get('serial') or '').strip()
+    return ', '.join(x for x in (model, f'зав. № {serial}' if serial else '') if x)
+
+
+REVISION_KINDS = ('device_revision', 'equipment_revision')
+
+
+def drop_tags(db, kind):
+    """Теги, при пустом значении которых строка удаляется из документа: в актах ревизии — все теги оборудования (счётчик, сигнализатор, регулятор и т. д.)."""
+    if kind not in REVISION_KINDS:
+        return set()
+    sync_tags(db)
+    return {name for (name,) in db.fetchall("SELECT name FROM gsvm_tags WHERE enabled=1 AND source LIKE 'equipment:%'")}
+
+
 def context(db, cid):
     """Исходные значения источников по договору (даты — ГГГГ-ММ-ДД, суммы — числа)."""
     cur = db.execute('SELECT * FROM contracts WHERE id=?', (cid,))
@@ -221,7 +246,7 @@ def context(db, cid):
     cost = float(c.get('contract_amount') or 0)
     ctx = {
         'contract.number': c.get('contract_number') or '', 'contract.date': c.get('contract_date') or '', 'client.name': name,
-        'client.short': (name if is_org else get_initials_first(name)) if name else '', 'client.passport': client.get('passport') or c.get('passport_series_number') or '',
+        'client.short': (name if is_org else get_initials_first(name)) if name else '', 'client.short_last': (name if is_org else get_initials_last(name)) if name else '', 'client.passport': client.get('passport') or c.get('passport_series_number') or '',
         'client.passport_date': client.get('passport_date') or c.get('passport_issue_date') or '',
         'client.passport_issuer': client.get('passport_issuer') or c.get('passport_issued_by') or '',
         'client.phone': client.get('phone') or c.get('client_phone') or '', 'client.address': client.get('address') or c.get('client_address') or '',
@@ -235,13 +260,14 @@ def context(db, cid):
     from . import legal_tags
     ctx.update({f'legal.{k}': v for k, v in legal_tags.raw(db, c.get('le_client_id')).items()})
     if c.get('le_client_id'):                      # заказчик — юрлицо: клиентские теги заполняются его данными
-        ctx.update({'client.name': ctx['legal.full_name'], 'client.short': ctx['legal.name'], 'client.address': ctx['legal.legal_address'], 'client.phone': ctx['legal.phone'],
+        ctx.update({'client.name': ctx['legal.full_name'], 'client.short': ctx['legal.name'], 'client.short_last': ctx['legal.name'], 'client.address': ctx['legal.legal_address'], 'client.phone': ctx['legal.phone'],
                     'client.passport': '', 'client.passport_date': '', 'client.passport_issuer': ''})
     eq = md.equipment(db, cid)
     for kind in equipment_kinds(db):
         mine = [e for e in eq if md._norm(e['kind']) == md._norm(kind)]
         ctx[f'equipment:{kind}:model'] = '; '.join(e['model'] for e in mine if e['model'])
         ctx[f'equipment:{kind}:serial'] = '; '.join(e['serial'] for e in mine if e['serial'])
+        ctx[f'equipment:{kind}:full'] = '; '.join(equipment_text(e) for e in mine if equipment_text(e))
     joint_by_pipeline = {}
     for j in md.joints(db, cid):
         if j['pipeline_id']:
@@ -397,7 +423,7 @@ def generate(db, cid, kind, destination=None):
     out = os.path.join(folder, gd.safe_name(f'{prefix}_{number.replace("/", "-")}').replace(' ', '_') + '.' + ext)
     out = str(destination) if destination else out
     template = template_path(db, kind)
-    out = gd.render_file(template, out, tags, normalize=norm_tag, payments=payments(db, cid))
+    out = gd.render_file(template, out, tags, normalize=norm_tag, payments=payments(db, cid), drop_tags=drop_tags(db, kind))
     db.execute('INSERT OR REPLACE INTO gsvm_docs(contract_id,kind,file_path,data_hash,generated_at,linked) VALUES(?,?,?,?,?,0)',
                (cid, kind, out, data_hash(db, cid), datetime.now().isoformat(timespec='seconds')))
     return out
