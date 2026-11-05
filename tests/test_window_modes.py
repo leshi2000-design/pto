@@ -105,3 +105,34 @@ def test_main_window_compact_sidebar_and_geometry(tmp_path, monkeypatch):
     again.show()
     assert (again.width(), again.height()) == (770, 560)
     db.close()
+
+
+def test_settings_are_split_into_tabs(tmp_path, monkeypatch):
+    import importlib
+    import sys
+    from smetagaz.database import DatabaseManager
+    db = DatabaseManager(tmp_path / 's.db')
+    db.init_db()
+    for name in ('notes_view', 'gsn_catalog', 'tasks_view', 'today_view', 'workspace_view', 'main_window', 'gsv_view', 'contract_card', 'payments_view', 'settings_view'):
+        importlib.import_module('smetagaz.' + name)
+    for name, mod in list(sys.modules.items()):
+        if name.startswith('smetagaz') and getattr(mod, 'db', None) is not None and mod.db.__class__.__name__ == 'DatabaseManager':
+            monkeypatch.setattr(mod, 'db', db, raising=False)
+    QApplication.instance() or QApplication([])
+    from smetagaz import settings_view as sv
+    view = sv.SettingsView(None)
+    assert [view.tabs.tabText(i) for i in range(view.tabs.count())] == ['Внешний вид', 'Документы', 'Резервные копии', 'Сеть и доступ', 'Система']
+    # на каждой вкладке свои разделы, ничего не потеряно
+    from PyQt6.QtWidgets import QGroupBox
+    titles = {i: [g.title() for g in view.tabs.widget(i).findChildren(QGroupBox)] for i in range(5)}
+    assert any('Название программы' in t for t in titles[0])
+    assert any('экспорта' in t for t in titles[1]) and any('Папки договоров' in t for t in titles[1]) and any('Номера разделов' in t for t in titles[1])
+    assert any('Копия вне компьютера' in t for t in titles[2]) and any('Ручная копия' in t for t in titles[2]) and any('Excel' in t for t in titles[2])
+    assert any('Сетевая работа' == t for t in titles[3]) and any('Веб-доступ' in t for t in titles[3]) and any('Пароль' in t for t in titles[3])
+    assert any('Обновление' in t for t in titles[4]) and any('целостности' in t for t in titles[4])
+    # выбранная вкладка запоминается
+    view.tabs.setCurrentIndex(3)
+    again = sv.SettingsView(None)
+    assert again.tabs.currentIndex() == 3
+    assert hasattr(view, 'off_enabled') and hasattr(view, 'inp_app_name') and hasattr(view, 'table_tabs') and hasattr(view, 'folder_edits')       # поля прежние — сохранение работает как раньше
+    db.close()

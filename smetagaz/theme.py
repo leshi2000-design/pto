@@ -216,6 +216,7 @@ def apply(app, dark=False, family='Segoe UI', size=10, accent=''):
     QPushButton#navButton {{ text-align:left; background:transparent; color:{c['text2']}; border:0; border-radius:8px; padding:8px 12px; min-height:22px; font-weight:400; }}
     QPushButton#navButton:hover {{ background:{c['hover']}; color:{c['text']}; }}
     QPushButton#navButton:checked {{ background:{c['sel']}; color:{c['accent_fg'] if not dark else '#FFFFFF'}; font-weight:600; }}
+    QLabel[role="muted"] {{ color:{c['muted']}; }}
     QLabel#navSection {{ color:{c['muted']}; font-size:11px; font-weight:600; letter-spacing:1px; padding:10px 14px 2px 14px; background:transparent; }}
     QFrame#navDivider {{ background:transparent; border:0; max-height:0px; }}
 

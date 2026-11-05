@@ -1,5 +1,5 @@
 """Настройки веб-доступа (прототип): включение, порт, HTTPS, пользователи."""
-from PyQt6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QMessageBox, QPushButton, QSpinBox,
+from PyQt6.QtWidgets import (QGridLayout, QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QMessageBox, QPushButton, QSpinBox,
                              QVBoxLayout, QWidget)
 
 from . import web_gateway as wg, web_tls
@@ -113,12 +113,13 @@ class WebAccessBox(QGroupBox):
         row.addWidget(apply)
         row.addStretch()
         lay.addLayout(row)
-        tools = QHBoxLayout()
-        for text, fn in (('Разрешить в брандмауэре', self.open_firewall), ('Проверить доступ', self.check), ('Сохранить сертификат ПТО…', self.save_certificate), ('Скопировать адрес', self.copy_address), ('Ярлык на рабочий стол', self.desktop_shortcut), ('Сохранить скрипт установки…', self.save_setup_script)):
+        tools = QGridLayout()                                   # кнопки в сетке по три в ряд — окно не растягивается вширь
+        buttons = (('Разрешить в брандмауэре', self.open_firewall), ('Проверить доступ', self.check), ('Сохранить сертификат ПТО…', self.save_certificate),
+                   ('Скопировать адрес', self.copy_address), ('Ярлык на рабочий стол', self.desktop_shortcut), ('Сохранить скрипт установки…', self.save_setup_script))
+        for i, (text, fn) in enumerate(buttons):
             b = QPushButton(text)
             b.clicked.connect(fn)
-            tools.addWidget(b)
-        tools.addStretch()
+            tools.addWidget(b, i // 3, i % 3)
         lay.addLayout(tools)
         self.status = QLabel('')
         self.status.setWordWrap(True)

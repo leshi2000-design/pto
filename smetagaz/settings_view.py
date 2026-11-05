@@ -9,7 +9,7 @@ from datetime import datetime
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
                               QFrame, QMessageBox, QFileDialog, QColorDialog, QLineEdit,
                               QDoubleSpinBox, QGridLayout, QGroupBox, QFontComboBox, QSpinBox,
-                              QScrollArea, QTableWidgetItem, QCheckBox, QHeaderView)
+                              QScrollArea, QTableWidgetItem, QCheckBox, QHeaderView, QTabWidget)
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtCore import Qt
 
@@ -22,9 +22,13 @@ import tempfile
 from PyQt6.QtWidgets import QInputDialog
 from PyQt6.QtCore import QTimer
 from .database import db
+from .config import DATA_DIR
 from .section_codes_ui import SectionCodesBox
 from .invoice_ui import OcrSettingsBox
 from .widgets import ReorderTableWidget
+
+
+PASSWORD_NOTE = 'Пароль входа защищает интерфейс. Базы на диске не зашифрованы. Для защиты диска используйте шифрование средствами ОС.'
 
 
 class SettingsView(QWidget):
@@ -33,46 +37,100 @@ class SettingsView(QWidget):
         self.main_window = main_window
 
         main_layout = QVBoxLayout(self)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        self.tabs = QTabWidget()
+        self.tabs.setDocumentMode(True)
+        main_layout.addWidget(self.tabs)
+        self.pages = {}
 
-        container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.setSpacing(15)
-        self.backup_status=QLabel(db.get_setting('backup_status','Резервных копий пока нет'))
-        self.backup_status.setWordWrap(True);layout.addWidget(self.backup_status)
-        from . import backup_policy
-        self.backup_space=QLabel();self.backup_space.setWordWrap(True)
-        free_button=QPushButton('Освободить место: оставить минимум автоматических копий');free_button.clicked.connect(self.free_backup_space)
-        row=QHBoxLayout();row.addWidget(self.backup_space,1);row.addWidget(free_button);layout.addLayout(row)
-        self.refresh_backup_space()
-        from .web_settings_ui import WebAccessBox
-        layout.addWidget(WebAccessBox())
-        update_box=QHBoxLayout()
-        update_box.addWidget(QLabel('Обновление программы — установкой ZIP-архива (файлы программы не заменяются).'),1)
-        update_zip=QPushButton('Обновить программу из ZIP…');update_zip.clicked.connect(lambda:__import__('smetagaz.update_ui',fromlist=['x']).ZipUpdateDialog(self).exec())
-        update_box.addWidget(update_zip);layout.addLayout(update_box)
-        from .network_ui import NetworkDialog
-        net_box = QGroupBox('Сетевая работа')
-        net_layout = QHBoxLayout(net_box)
+        def page(title, key):
+            """Страница настроек: вкладка с прокруткой (длинные страницы не растягивают окно) и аккуратными отступами."""
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.Shape.NoFrame)
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            container = QWidget()
+            lay = QVBoxLayout(container)
+            lay.setContentsMargins(18, 16, 18, 16)
+            lay.setSpacing(14)
+            scroll.setWidget(container)
+            self.tabs.addTab(scroll, title)
+            self.pages[key] = lay
+            return lay
+
+        def group(title, content=None, layout=None):
+            """Раздел страницы: рамка с заголовком; layout — внутренняя раскладка."""
+            box = QGroupBox(title)
+            inner = layout or QVBoxLayout()
+            box.setLayout(inner)
+            return box, inner
+
+        def note(text, wrap=True):
+            label = QLabel(text)
+            label.setWordWrap(wrap)
+            label.setProperty('role', 'muted')
+            return label
+        self._group, self._note = group, note
+        look = page('Внешний вид', 'look')
+        docs = page('Документы', 'docs')
+        backups = page('Резервные копии', 'backups')
+        access = page('Сеть и доступ', 'access')
+        system = page('Система', 'system')
+
         remote = getattr(db, 'is_remote', False)
         self.can_admin = not remote or db.role == 'admin'
+        self.job = None
+
+        # --- Резервные копии: состояние
+        box_state, state = group('Состояние резервных копий')
+        self.backup_status = QLabel(db.get_setting('backup_status', 'Резервных копий пока нет'))
+        self.backup_status.setWordWrap(True)
+        state.addWidget(self.backup_status)
+        from . import backup_policy
+        self.backup_space = QLabel()
+        self.backup_space.setWordWrap(True)
+        free_button = QPushButton('Освободить место: оставить минимум автоматических копий')
+        free_button.clicked.connect(self.free_backup_space)
+        row = QHBoxLayout()
+        row.addWidget(self.backup_space, 1)
+        row.addWidget(free_button)
+        state.addLayout(row)
+        backups.addWidget(box_state)
+        self.refresh_backup_space()
+
+        # --- Сеть и доступ
+        from .network_ui import NetworkDialog
         side = getattr(db, 'side_by_side', False)
+        net_box, net_layout = group('Сетевая работа', layout=QHBoxLayout())
         net_layout.addWidget(QLabel(f'Режим: клиент, вы вошли как {db.user}' if remote else
                                     ('Режим: локально, параллельно с ПТО Сервером этого компьютера' if side else 'Режим: локальная база на этом компьютере')), 1)
         btn_net = QPushButton('Сетевая работа…')
         btn_net.clicked.connect(lambda: NetworkDialog(db, self).exec())
         net_layout.addWidget(btn_net)
-        layout.addWidget(net_box)
-        btn_password=QPushButton('Установить / изменить пароль входа')
-        btn_password.clicked.connect(self.change_password);layout.addWidget(btn_password)
+        access.addWidget(net_box)
+        pw_box, pw = group('Пароль входа')
+        btn_password = QPushButton('Установить / изменить пароль входа')
+        btn_password.clicked.connect(self.change_password)
         btn_password.setEnabled(self.can_admin)
-        self.job=None
-        layout.addWidget(QLabel('Пароль входа защищает интерфейс. Базы на диске не зашифрованы.\nДля защиты диска используйте шифрование средствами ОС.'))
+        pw.addWidget(btn_password)
+        pw.addWidget(note(PASSWORD_NOTE))
+        access.addWidget(pw_box)
+        from .web_settings_ui import WebAccessBox
+        access.addWidget(WebAccessBox())
+        access.addStretch()
+
+        # --- Система: обновление
+        upd_box, upd = group('Обновление программы')
+        upd.addWidget(note('Обновление — установкой ZIP-архива с новой версией (файлы программы не заменяются, откат — в том же окне).'))
+        update_zip = QPushButton('Обновить программу из ZIP…')
+        update_zip.clicked.connect(lambda: __import__('smetagaz.update_ui', fromlist=['x']).ZipUpdateDialog(self).exec())
+        upd.addWidget(update_zip)
+        from . import __version__ as _version
+        upd.addWidget(note(f'Установлена версия {_version}. Папка данных: {DATA_DIR}'))
+        system.addWidget(upd_box)
 
         # 1. Интерфейс: Название и вкладки
-        box_app = QGroupBox("Внешний вид: Название программы и Вкладки (Требуется перезапуск)")
+        box_app = QGroupBox("Название программы, цвет и модули меню (изменения вступают в силу после перезапуска)")
         l_app = QGridLayout(box_app)
         l_app.addWidget(QLabel("Название программы:"), 0, 0)
         self.inp_app_name = QLineEdit(db.get_setting("app_name", "ПТО"))
@@ -98,7 +156,8 @@ class SettingsView(QWidget):
         btn_app_save.clicked.connect(self.save_app_settings)
         l_app.addWidget(btn_app_save, 4, 0, 1, 3)
 
-        layout.addWidget(box_app)
+        look.addWidget(box_app)
+        look.addStretch()
 
         # 3. Настройки экспорта
         box_export = QGroupBox("Настройки экспорта документов (PDF, Excel, Word)")
@@ -123,12 +182,10 @@ class SettingsView(QWidget):
         btn_exp_save = QPushButton("Сохранить настройки экспорта")
         btn_exp_save.clicked.connect(self.save_export_settings)
         exp_layout.addWidget(btn_exp_save, 4, 0, 1, 4)
-        layout.addWidget(box_export)
+        docs.addWidget(box_export)
 
         # 4. БД
-        box_db = QFrame()
-        box_db_layout = QVBoxLayout(box_db)
-        box_db_layout.addWidget(QLabel("Управление базой данных:"))
+        box_db, box_db_layout = self._group("Ручная копия базы и восстановление")
         btn_backup = QPushButton("Создать резервную копию БД вручную")
         btn_restore = QPushButton("Восстановить из копии")
         btn_restore.setProperty("type", "danger")
@@ -136,13 +193,13 @@ class SettingsView(QWidget):
         btn_restore.clicked.connect(self.do_restore)
         box_db_layout.addWidget(btn_backup)
         box_db_layout.addWidget(btn_restore)
-        layout.addWidget(box_db)
+        backups.addWidget(box_db)
         if getattr(db, 'is_remote', False) or getattr(db, 'side_by_side', False):
             box_db.setEnabled(False)
             box_db.setToolTip('Резервные копии и восстановление выполняет ПТО Сервер: пока он работает, база не должна подменяться')
 
-        ocr_box = OcrSettingsBox(); ocr_box.setEnabled(self.can_admin); layout.addWidget(ocr_box)
-        codes_box = SectionCodesBox(); codes_box.setEnabled(self.can_admin); layout.addWidget(codes_box)
+        ocr_box = OcrSettingsBox(); ocr_box.setEnabled(self.can_admin); docs.addWidget(ocr_box)
+        codes_box = SectionCodesBox(); codes_box.setEnabled(self.can_admin); docs.addWidget(codes_box)
 
         # 4. Папки договоров: где создаются новые папки (по разделам)
         box_folders = QGroupBox("Папки договоров (где создавать новые папки)")
@@ -165,7 +222,8 @@ class SettingsView(QWidget):
             buttons.addWidget(pick_btn)
             buttons.addWidget(reset_btn)
             fl.addLayout(buttons, row, 2)
-        layout.addWidget(box_folders)
+        docs.addWidget(box_folders)
+        docs.addStretch()
         box_folders.setEnabled(self.can_admin)
 
         # 4a. Копия вне компьютера
@@ -219,7 +277,7 @@ class SettingsView(QWidget):
         off.addWidget(self.off_status, 7, 0, 1, 3)
         off.addWidget(QLabel("Раз в месяц программа сама расшифровывает самую свежую копию, восстанавливает её во временную папку и проверяет базы. Пароль хранится в настройках: "
                              "он защищает копию в облаке и на чужом диске, но не от человека с доступом к этому компьютеру."), 8, 0, 1, 3)
-        layout.addWidget(box_off)
+        backups.addWidget(box_off)
         if getattr(db, 'is_remote', False):          # копии делает сервер; настроить их можно только с самого компьютера-сервера (пароль копий защищён средствами этого компьютера)
             from .network_ui import is_loopback
             if not (is_loopback(db.cfg['host']) and db.role == 'admin'):
@@ -228,8 +286,7 @@ class SettingsView(QWidget):
         self.off_refresh()
 
         # 5. Excel-снимок реестров договоров, отдельно от обычных бэкапов.
-        box_excel = QFrame()
-        box_excel_layout = QVBoxLayout(box_excel)
+        box_excel, box_excel_layout = self._group("Снимки реестров в Excel")
         box_excel_layout.addWidget(QLabel("Реестры договоров (ГСВ и ГСН) в Excel — обновляется автоматически каждый час, файл перезаписывается:"))
         self.contracts_excel_status = QLabel(db.get_setting('contracts_excel_status', 'Ещё не обновлялся'))
         self.contracts_excel_status.setWordWrap(True)
@@ -247,20 +304,22 @@ class SettingsView(QWidget):
         excel_bar.addWidget(btn_excel_folder)
         excel_bar.addStretch()
         box_excel_layout.addLayout(excel_bar)
-        layout.addWidget(box_excel)
+        backups.addWidget(box_excel)
+        backups.addStretch()
 
         # 6. Проверка целостности базы.
-        box_integrity = QFrame()
-        box_integrity_layout = QVBoxLayout(box_integrity)
+        box_integrity, box_integrity_layout = self._group("Проверка целостности базы")
         box_integrity_layout.addWidget(QLabel("Проверка целостности базы: договоры без клиента, оплаты без договора, пропавшие файлы, папки и шаблоны."))
         btn_integrity = QPushButton("Проверить базу…")
         btn_integrity.clicked.connect(lambda: __import__("smetagaz.integrity_view", fromlist=["x"]).IntegrityDialog(self).exec())
         box_integrity_layout.addWidget(btn_integrity)
-        layout.addWidget(box_integrity)
-
-        layout.addStretch()
-        scroll.setWidget(container)
-        main_layout.addWidget(scroll)
+        system.addWidget(box_integrity)
+        system.addStretch()
+        for label in self.findChildren(QLabel):          # длинные пояснения переносятся по строкам, а не раздвигают окно
+            if len(label.text()) > 45:
+                label.setWordWrap(True)
+        self.tabs.setCurrentIndex(int(db.get_setting('settings_tab', '0') or 0) % self.tabs.count())          # открывается на той вкладке, где работали в прошлый раз
+        self.tabs.currentChanged.connect(lambda i: db.set_setting('settings_tab', str(i)))
 
     def load_tabs_config(self):
         tabs_json = db.get_setting("tabs_config", "[]")
