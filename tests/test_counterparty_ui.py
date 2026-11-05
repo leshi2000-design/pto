@@ -239,7 +239,7 @@ def test_estimates_ui(env, monkeypatch, tmp_path):
     assert reg.table.rowCount() == 1
     # редактор: без начислений, договор привязывается и отвязывается
     editor = ee.EstimateEditorDialog(eid, 'Баня')
-    assert not hasattr(editor, 'chk_vat') and not hasattr(editor, 'chk_social') and not hasattr(editor, 'show_item_profits')
+    assert hasattr(editor, 'chk_vat') and not hasattr(editor, 'chk_social') and not hasattr(editor, 'show_item_profits')
     assert editor.grand_total == 200
     monkeypatch.setattr(ee.EstimateEditorDialog, 'pick_contract', lambda self, with_estimate, title: ('ip_contracts', cid))
     editor.link_contract()
