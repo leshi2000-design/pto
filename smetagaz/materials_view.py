@@ -103,16 +103,8 @@ class MaterialsTable(QTableWidget):
         act_none.triggered.connect(lambda: self.parent_view.move_materials_to_cat(mat_ids, None))
         move_menu.addAction(act_none)
 
-        roots = db.fetchall("SELECT id, name FROM categories WHERE parent_id IS NULL ORDER BY name")
-        for r_id, r_name in roots:
-            act_root = QAction(f"📁 {r_name}", self)
-            act_root.triggered.connect(lambda checked, cat_id=r_id, ids=mat_ids: self.parent_view.move_materials_to_cat(ids, cat_id))
-            move_menu.addAction(act_root)
-            subs = db.fetchall("SELECT id, name FROM categories WHERE parent_id=? ORDER BY name", (r_id,))
-            for s_id, s_name in subs:
-                act_sub = QAction(f"   📂 {s_name}", self)
-                act_sub.triggered.connect(lambda checked, cat_id=s_id, ids=mat_ids: self.parent_view.move_materials_to_cat(ids, cat_id))
-                move_menu.addAction(act_sub)
+        from .folder_tree_ui import fill_move_menu
+        fill_move_menu(move_menu, db, "categories", lambda cat_id, ids=mat_ids: self.parent_view.move_materials_to_cat(ids, cat_id))
         menu.exec(self.viewport().mapToGlobal(pos))
 
 class MaterialsView(QWidget):
@@ -281,12 +273,10 @@ class MaterialsView(QWidget):
             self.load_categories()
 
     def delete_category(self, cat_id):
-        if QMessageBox.question(self, "Удаление", "Удалить раздел и все его подразделы?\n(Материалы внутри переместятся в 'Без раздела')") == QMessageBox.StandardButton.Yes:
-            db.execute("UPDATE materials SET category_id=NULL WHERE category_id=?", (cat_id,))
-            subs = db.fetchall("SELECT id FROM categories WHERE parent_id=?", (cat_id,))
-            for s in subs:
-                db.execute("UPDATE materials SET category_id=NULL WHERE category_id=?", (s[0],))
-            db.execute("DELETE FROM categories WHERE id=? OR parent_id=?", (cat_id, cat_id))
+        if QMessageBox.question(self, "Удаление", "Удалить раздел и все его подразделы (на любой глубине)?\n(Материалы внутри переместятся в 'Без раздела')") == QMessageBox.StandardButton.Yes:
+            from . import folder_tree
+            folder_tree.delete_branch(db, "categories", cat_id)
+            self.selected_category_id = None
             self.load_categories()
             self.load_data()
 
@@ -303,22 +293,8 @@ class MaterialsView(QWidget):
         self.load_data()
 
     def load_categories(self):
-        self.tree.clear()
-        all_item = QTreeWidgetItem([" Все материалы"])
-        all_item.setData(0, Qt.ItemDataRole.UserRole, None)
-        self.tree.addTopLevelItem(all_item)
-        roots = db.fetchall("SELECT id, name FROM categories WHERE parent_id IS NULL ORDER BY name")
-        for r_id, r_name in roots:
-            r_item = QTreeWidgetItem([f"📁 {r_name}"])
-            r_item.setData(0, Qt.ItemDataRole.UserRole, r_id)
-            self.tree.addTopLevelItem(r_item)
-            subs = db.fetchall("SELECT id, name FROM categories WHERE parent_id=? ORDER BY name", (r_id,))
-            for s_id, s_name in subs:
-                s_item = QTreeWidgetItem([f"   📂 {s_name}"])
-                s_item.setData(0, Qt.ItemDataRole.UserRole, s_id)
-                r_item.addChild(s_item)
-        self.tree.expandAll()
-        self.tree.setCurrentItem(all_item)
+        from .folder_tree_ui import fill_tree
+        fill_tree(self.tree, db, "categories", " Все материалы")
 
     def on_category_selected(self, item, column):
         self.selected_category_id = item.data(0, Qt.ItemDataRole.UserRole)
@@ -330,7 +306,9 @@ class MaterialsView(QWidget):
         if self.selected_category_id is None:
             rows = self.pager.fetch("SELECT id, name, item_type, unit, price, note, url FROM materials ORDER BY name COLLATE NOCASE, id")
         else:
-            rows = self.pager.fetch("SELECT id, name, item_type, unit, price, note, url FROM materials WHERE category_id=? ORDER BY name COLLATE NOCASE, id", (self.selected_category_id,))
+            from . import folder_tree
+            ids = folder_tree.descendants(db, "categories", self.selected_category_id)          # раздел показывает и материалы всех его подразделов
+            rows = self.pager.fetch(f"SELECT id, name, item_type, unit, price, note, url FROM materials WHERE category_id IN ({','.join('?' * len(ids))}) ORDER BY name COLLATE NOCASE, id", tuple(ids))
 
         self.table.setRowCount(len(rows))
         for r, (mat_id, name, itype, unit, price, note, url) in enumerate(rows):

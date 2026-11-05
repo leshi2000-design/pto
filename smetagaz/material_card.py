@@ -186,12 +186,8 @@ class MaterialCardDialog(QDialog):
     def load_categories(self):
         self.combo_category.clear()
         self.combo_category.addItem(" Без раздела", None)
-        roots = db.fetchall("SELECT id, name FROM categories WHERE parent_id IS NULL ORDER BY name")
-        for r_id, r_name in roots:
-            self.combo_category.addItem(f"📁 {r_name}", r_id)
-            subs = db.fetchall("SELECT id, name FROM categories WHERE parent_id=? ORDER BY name", (r_id,))
-            for s_id, s_name in subs:
-                self.combo_category.addItem(f"   📂 {s_name}", s_id)
+        from .folder_tree_ui import fill_combo
+        fill_combo(self.combo_category, db, "categories")
 
     def load_material_data(self):
         cert=db.fetchone("SELECT certificate_id FROM materials WHERE id=?",(self.material_id,));self.certificate_id=cert[0] if cert else None;self.refresh_certificate()

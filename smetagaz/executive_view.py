@@ -114,17 +114,8 @@ class CertificatesTable(QTableWidget):
         act_none.triggered.connect(lambda: self.parent_view.move_certs_to_folder(cert_ids, None))
         move_menu.addAction(act_none)
 
-        roots = db.fetchall("SELECT id, name FROM certificate_folders WHERE parent_id IS NULL ORDER BY name")
-        for r_id, r_name in roots:
-            act_root = QAction(f"📁 {r_name}", self)
-            act_root.triggered.connect(lambda checked, f_id=r_id, ids=cert_ids: self.parent_view.move_certs_to_folder(ids, f_id))
-            move_menu.addAction(act_root)
-            subs = db.fetchall("SELECT id, name FROM certificate_folders WHERE parent_id=? ORDER BY name", (r_id,))
-            for s_id, s_name in subs:
-                act_sub = QAction(f"   📂 {s_name}", self)
-                act_sub.triggered.connect(lambda checked, f_id=s_id, ids=cert_ids: self.parent_view.move_certs_to_folder(ids, f_id))
-                move_menu.addAction(act_sub)
-
+        from .folder_tree_ui import fill_move_menu
+        fill_move_menu(move_menu, db, "certificate_folders", lambda f_id, ids=cert_ids: self.parent_view.move_certs_to_folder(ids, f_id))
         menu.exec(self.viewport().mapToGlobal(pos))
 
 
@@ -197,12 +188,8 @@ class CertificateEditDialog(QDialog):
     def load_folders(self):
         self.cmb_folder.clear()
         self.cmb_folder.addItem(" Без папки", None)
-        roots = db.fetchall("SELECT id, name FROM certificate_folders WHERE parent_id IS NULL ORDER BY name")
-        for r_id, r_name in roots:
-            self.cmb_folder.addItem(f"📁 {r_name}", r_id)
-            subs = db.fetchall("SELECT id, name FROM certificate_folders WHERE parent_id=? ORDER BY name", (r_id,))
-            for s_id, s_name in subs:
-                self.cmb_folder.addItem(f"   📂 {s_name}", s_id)
+        from .folder_tree_ui import fill_combo
+        fill_combo(self.cmb_folder, db, "certificate_folders")
 
     def browse_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Выберите скан сертификата (PDF, JPG, PNG)", "", "Все файлы (*.*)")
@@ -351,12 +338,10 @@ class CertificatesTab(QWidget):
             self.load_folders()
 
     def delete_folder(self, folder_id):
-        if QMessageBox.question(self, "Удаление", "Удалить папку и все подпапки?\n(Сертификаты переместятся в 'Все сертификаты')") == QMessageBox.StandardButton.Yes:
-            db.execute("UPDATE certificates SET folder_id=NULL WHERE folder_id=?", (folder_id,))
-            subs = db.fetchall("SELECT id FROM certificate_folders WHERE parent_id=?", (folder_id,))
-            for s in subs:
-                db.execute("UPDATE certificates SET folder_id=NULL WHERE folder_id=?", (s[0],))
-            db.execute("DELETE FROM certificate_folders WHERE id=? OR parent_id=?", (folder_id, folder_id))
+        if QMessageBox.question(self, "Удаление", "Удалить папку и все подпапки (на любой глубине)?\n(Сертификаты переместятся в 'Все сертификаты')") == QMessageBox.StandardButton.Yes:
+            from . import folder_tree
+            folder_tree.delete_branch(db, "certificate_folders", folder_id)
+            self.selected_folder_id = None
             self.load_folders()
             self.load_data()
 
@@ -373,22 +358,8 @@ class CertificatesTab(QWidget):
         self.load_data()
 
     def load_folders(self):
-        self.tree.clear()
-        all_item = QTreeWidgetItem([" Все сертификаты"])
-        all_item.setData(0, Qt.ItemDataRole.UserRole, None)
-        self.tree.addTopLevelItem(all_item)
-        roots = db.fetchall("SELECT id, name FROM certificate_folders WHERE parent_id IS NULL ORDER BY name")
-        for r_id, r_name in roots:
-            r_item = QTreeWidgetItem([f"📁 {r_name}"])
-            r_item.setData(0, Qt.ItemDataRole.UserRole, r_id)
-            self.tree.addTopLevelItem(r_item)
-            subs = db.fetchall("SELECT id, name FROM certificate_folders WHERE parent_id=? ORDER BY name", (r_id,))
-            for s_id, s_name in subs:
-                s_item = QTreeWidgetItem([f"   📂 {s_name}"])
-                s_item.setData(0, Qt.ItemDataRole.UserRole, s_id)
-                r_item.addChild(s_item)
-        self.tree.expandAll()
-        self.tree.setCurrentItem(all_item)
+        from .folder_tree_ui import fill_tree
+        fill_tree(self.tree, db, "certificate_folders", " Все сертификаты")
 
     def on_folder_selected(self, item, column):
         self.selected_folder_id = item.data(0, Qt.ItemDataRole.UserRole)
@@ -404,8 +375,10 @@ class CertificatesTab(QWidget):
         conditions = []
 
         if self.selected_folder_id is not None:
-            conditions.append("folder_id = ?")
-            params.append(self.selected_folder_id)
+            from . import folder_tree
+            ids = folder_tree.descendants(db, "certificate_folders", self.selected_folder_id)          # папка показывает и сертификаты всех подпапок
+            conditions.append(f"folder_id IN ({','.join('?' * len(ids))})")
+            params.extend(ids)
 
         if q:
             conditions.append("(LOWER(name) LIKE ? OR LOWER(cert_number) LIKE ?)")

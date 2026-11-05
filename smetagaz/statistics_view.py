@@ -129,12 +129,8 @@ class StatisticsView(QWidget):
 
     def load_categories_to_combo(self):
         self.combo_cat.addItem("📁 Все разделы", None)
-        roots = db.fetchall("SELECT id, name FROM categories WHERE parent_id IS NULL ORDER BY name")
-        for r_id, r_name in roots:
-            self.combo_cat.addItem(f"📁 {r_name}", r_id)
-            subs = db.fetchall("SELECT id, name FROM categories WHERE parent_id=? ORDER BY name", (r_id,))
-            for s_id, s_name in subs:
-                self.combo_cat.addItem(f"   📂 {s_name}", s_id)
+        from .folder_tree_ui import fill_combo
+        fill_combo(self.combo_cat, db, "categories")
 
     def on_period_change(self):
         idx = self.combo_period.currentIndex()
@@ -241,9 +237,8 @@ class StatisticsView(QWidget):
 
         valid_cats = set()
         if sel_cat is not None:
-            valid_cats.add(sel_cat)
-            subs = db.fetchall("SELECT id FROM categories WHERE parent_id=?", (sel_cat,))
-            for s in subs: valid_cats.add(s[0])
+            from . import folder_tree
+            valid_cats.update(folder_tree.descendants(db, "categories", sel_cat))
 
         for row in range(self.table.rowCount()):
             name_item = self.table.item(row, 0)

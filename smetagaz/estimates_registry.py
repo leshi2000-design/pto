@@ -100,16 +100,8 @@ class EstimatesTable(QTableWidget):
         act_none.triggered.connect(lambda: self.parent_view.move_estimate_to_folder(est_id, None))
         move_menu.addAction(act_none)
 
-        roots = db.fetchall("SELECT id, name FROM estimate_folders WHERE parent_id IS NULL ORDER BY name")
-        for r_id, r_name in roots:
-            act_root = QAction(f"📁 {r_name}", self)
-            act_root.triggered.connect(lambda checked, f_id=r_id: self.parent_view.move_estimate_to_folder(est_id, f_id))
-            move_menu.addAction(act_root)
-            subs = db.fetchall("SELECT id, name FROM estimate_folders WHERE parent_id=? ORDER BY name", (r_id,))
-            for s_id, s_name in subs:
-                act_sub = QAction(f"   📂 {s_name}", self)
-                act_sub.triggered.connect(lambda checked, f_id=s_id: self.parent_view.move_estimate_to_folder(est_id, f_id))
-                move_menu.addAction(act_sub)
+        from .folder_tree_ui import fill_move_menu
+        fill_move_menu(move_menu, db, "estimate_folders", lambda f_id: self.parent_view.move_estimate_to_folder(est_id, f_id))
 
         menu.addSeparator()
         act_del = QAction("Удалить", self)
@@ -272,12 +264,10 @@ class EstimatesView(QWidget):
             self.load_folders()
 
     def delete_folder(self, folder_id):
-        if QMessageBox.question(self, "Удаление", "Удалить папку и все подпапки?\n(Сами сметы не будут удалены, а переместятся в 'Все сметы')") == QMessageBox.StandardButton.Yes:
-            db.execute("UPDATE estimates SET folder_id=NULL WHERE folder_id=?", (folder_id,))
-            subs = db.fetchall("SELECT id FROM estimate_folders WHERE parent_id=?", (folder_id,))
-            for s in subs:
-                db.execute("UPDATE estimates SET folder_id=NULL WHERE folder_id=?", (s[0],))
-            db.execute("DELETE FROM estimate_folders WHERE id=? OR parent_id=?", (folder_id, folder_id))
+        if QMessageBox.question(self, "Удаление", "Удалить папку и все подпапки (на любой глубине)?\n(Сами сметы не будут удалены, а переместятся в 'Все сметы')") == QMessageBox.StandardButton.Yes:
+            from . import folder_tree
+            folder_tree.delete_branch(db, "estimate_folders", folder_id)
+            self.selected_folder_id = None
             self.load_folders()
             self.load_data()
 
@@ -291,22 +281,8 @@ class EstimatesView(QWidget):
         self.load_data()
 
     def load_folders(self):
-        self.tree.clear()
-        all_item = QTreeWidgetItem([" Все сметы"])
-        all_item.setData(0, Qt.ItemDataRole.UserRole, None)
-        self.tree.addTopLevelItem(all_item)
-        roots = db.fetchall("SELECT id, name FROM estimate_folders WHERE parent_id IS NULL ORDER BY name")
-        for r_id, r_name in roots:
-            r_item = QTreeWidgetItem([f"📁 {r_name}"])
-            r_item.setData(0, Qt.ItemDataRole.UserRole, r_id)
-            self.tree.addTopLevelItem(r_item)
-            subs = db.fetchall("SELECT id, name FROM estimate_folders WHERE parent_id=? ORDER BY name", (r_id,))
-            for s_id, s_name in subs:
-                s_item = QTreeWidgetItem([f"   📂 {s_name}"])
-                s_item.setData(0, Qt.ItemDataRole.UserRole, s_id)
-                r_item.addChild(s_item)
-        self.tree.expandAll()
-        self.tree.setCurrentItem(all_item)
+        from .folder_tree_ui import fill_tree
+        fill_tree(self.tree, db, "estimate_folders", " Все сметы")
 
     def on_folder_selected(self, item, column):
         self.selected_folder_id = item.data(0, Qt.ItemDataRole.UserRole)
@@ -332,8 +308,10 @@ class EstimatesView(QWidget):
         conditions = []
 
         if self.selected_folder_id is not None:
-            conditions.append("folder_id = ?")
-            params.append(self.selected_folder_id)
+            from . import folder_tree
+            ids = folder_tree.descendants(db, "estimate_folders", self.selected_folder_id)          # папка показывает и сметы всех подпапок
+            conditions.append(f"folder_id IN ({','.join('?' * len(ids))})")
+            params.extend(ids)
 
         if curr_status != "Все сметы":
             conditions.append("statuses LIKE ?")
