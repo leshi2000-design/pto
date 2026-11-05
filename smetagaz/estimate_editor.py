@@ -186,8 +186,10 @@ class EstimateEditorDialog(QDialog):
         main_h = QHBoxLayout()
 
         self.table = ReorderTableWidget()
-        self.table.setColumnCount(6)
-        self.table.setHorizontalHeaderLabels(["Наименование позиции", "Тип", "Ед.", "Кол-во", "Цена (руб)", "Сумма (руб)"])
+        self.table.setColumnCount(8)
+        self.table.setHorizontalHeaderLabels(["Наименование позиции", "Тип", "Ед.", "Кол-во", "Цена (руб)", "Сумма (руб)", "НДС (руб)", "Сумма с НДС (руб)"])
+        self.table.setColumnHidden(6, True)                    # колонки НДС видны, только когда включён НДС «на каждую позицию»
+        self.table.setColumnHidden(7, True)
         self.table_manager = SmartTableManager(self.table, main_col=0)
         self.table.order_changed.connect(self.save_rows_order)
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -218,6 +220,27 @@ class EstimateEditorDialog(QDialog):
         adj_layout.addWidget(QLabel("На итог:"), 2, 0)
         adj_layout.addWidget(self.spin_total_adj, 2, 1)
         right_panel.addWidget(adj_group)
+
+        vat_group = QGroupBox("НДС")
+        vat_layout = QVBoxLayout(vat_group)
+        self.chk_vat = QCheckBox("Начислять НДС")
+        self.spin_vat = QDoubleSpinBox()
+        self.spin_vat.setRange(0.0, 100.0)
+        self.spin_vat.setDecimals(2)
+        self.spin_vat.setValue(20.0)
+        self.spin_vat.setSuffix(" %")
+        self.cmb_vat_mode = QComboBox()
+        for key, label in ed.VAT_MODES.items():
+            self.cmb_vat_mode.addItem(label, key)
+        self.cmb_vat_mode.setToolTip("1) На всю смету: позиции без НДС, на общую стоимость начисляется НДС.\n2) На каждую позицию: в строках появляются колонки «НДС» и «Сумма с НДС», итог = сумма позиций с НДС.")
+        row_vat = QHBoxLayout()
+        row_vat.addWidget(self.chk_vat)
+        row_vat.addWidget(self.spin_vat)
+        vat_layout.addLayout(row_vat)
+        vat_layout.addWidget(self.cmb_vat_mode)
+        for w in (self.chk_vat, self.spin_vat, self.cmb_vat_mode):
+            (w.toggled if w is self.chk_vat else w.valueChanged if w is self.spin_vat else w.currentIndexChanged).connect(self.save_vat)
+        right_panel.addWidget(vat_group)
 
         self.totals_lbl = QLabel()
         self.totals_lbl.setStyleSheet("font-size: 11pt; line-height: 1.5;")
@@ -549,8 +572,23 @@ class EstimateEditorDialog(QDialog):
             self.meta_cache = {
                 'mat_adj': float(mat_adj or 0.0), 'work_adj': float(work_adj or 0.0), 'tot_adj': float(tot_adj or 0.0)
             }
+            on, rate, mode = ed.vat_settings(db, self.estimate_id)
+            self.chk_vat.setChecked(on)
+            self.spin_vat.setValue(float(rate))
+            self.cmb_vat_mode.setCurrentIndex(max(0, self.cmb_vat_mode.findData(mode)))
         self._updating = False
         self.refresh_contract_info()
+
+    def save_vat(self, *_):
+        """Галочка НДС, ставка и способ начисления: пересчитывает итог и перерисовывает таблицу."""
+        if self._updating:
+            return
+        self.spin_vat.setEnabled(self.chk_vat.isChecked())
+        self.cmb_vat_mode.setEnabled(self.chk_vat.isChecked())
+        ed.set_vat(db, self.estimate_id, self.chk_vat.isChecked(), self.spin_vat.value(), self.cmb_vat_mode.currentData())
+        self.load_items()
+        if self.parent() and hasattr(self.parent(), 'load_data'):
+            self.parent().load_data()
 
     def save_meta(self):
         if self._updating: return
@@ -588,6 +626,11 @@ class EstimateEditorDialog(QDialog):
 
         rows = db.fetchall("SELECT id, name, item_type, unit, quantity, price, sum FROM estimate_items WHERE estimate_id=? ORDER BY sort_order ASC, id ASC", (self.estimate_id,))
         section_sums = ed.section_totals(db, self.estimate_id)
+        vat_on, _vat_rate, vat_mode = ed.vat_settings(db, self.estimate_id)
+        vat_items = vat_on and vat_mode == 'items'
+        vat_parts = ed.item_amounts(db, self.estimate_id) if vat_items else {}
+        self.table.setColumnHidden(6, not vat_items)
+        self.table.setColumnHidden(7, not vat_items)
         from .theme import accent_fg
         band = QColor(accent_fg())
         band.setAlpha(46)
@@ -604,7 +647,7 @@ class EstimateEditorDialog(QDialog):
                 part = section_sums.get(item_id, {})
                 subtotal = part.get('materials', 0.0) + part.get('works', 0.0)
                 tip = f"Позиций: {part.get('count', 0)} · материалы {part.get('materials', 0.0):,.2f} · работы {part.get('works', 0.0):,.2f}".replace(',', ' ')
-                for col_idx in range(6):
+                for col_idx in range(8):
                     cell = item_name if col_idx == 0 else (i_type if col_idx == 1 else QTableWidgetItem(f"{subtotal:,.2f}".replace(',', ' ') if col_idx == 5 else ''))
                     font = cell.font()
                     font.setBold(True)
@@ -639,6 +682,12 @@ class EstimateEditorDialog(QDialog):
                 i_sm.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 i_sm.setFlags(i_sm.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self.table.setItem(r, 5, i_sm)
+                part = vat_parts.get(item_id)
+                for col_idx, key in ((6, 'vat'), (7, 'with_vat')):
+                    cell = QTableWidgetItem(f"{float(part[key]):,.2f}".replace(",", " ") if part and vat_items else "")
+                    cell.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                    cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    self.table.setItem(r, col_idx, cell)
 
                 self.base_dir_total += sm_val
                 if itype == "Работа": self.base_work_total += sm_val
@@ -858,12 +907,15 @@ class EstimateEditorDialog(QDialog):
         t_text += f"<span style='color: #605E5C;'>— Материалы{m_str}: {self.adj_mat_total:,.2f} руб.</span><br>"
         w_str = f" (с учетом {work_adj}%)" if work_adj != 0 else ""
         t_text += f"<span style='color: #605E5C;'>— Работы{w_str}: {self.adj_work_total:,.2f} руб.</span><br>"
+        no_vat = float(t['total_no_vat'])
         if tot_adj != 0:
             t_text += f"<br>Промежуточный итог: {self.adj_subtotal:,.2f} руб.<br>"
-            t_text += f"Скидка/Надбавка ({tot_adj}%): {(self.grand_total - self.adj_subtotal):,.2f} руб.<br>"
+            t_text += f"Скидка/Надбавка ({tot_adj}%): {(no_vat - self.adj_subtotal):,.2f} руб.<br>"
+        if t['vat_enabled']:
+            t_text += f"<br>Итого без НДС: {no_vat:,.2f} руб.<br>НДС {float(t['vat_rate']):g}%: {float(t['vat']):,.2f} руб.<br>"
 
         self.totals_lbl.setText(t_text.replace(",", " "))
-        self.lbl_grand_total.setText(f"ВСЕГО: {self.grand_total:,.2f} руб.".replace(",", " "))
+        self.lbl_grand_total.setText((f"ВСЕГО с НДС: {self.grand_total:,.2f} руб." if t['vat_enabled'] else f"ВСЕГО: {self.grand_total:,.2f} руб.").replace(",", " "))
         if hasattr(self, 'pay_table'):
             self.load_payments()
 
@@ -872,7 +924,11 @@ class EstimateEditorDialog(QDialog):
         path, _ = QFileDialog.getSaveFileName(self, "Экспорт сметы в PDF", f"Смета_{safe_title}.pdf", "PDF (*.pdf)")
         if path:
             meta = db.fetchone("SELECT date, coalesce(nullif(client_name,''),party_name), client_phone FROM estimates WHERE id=?", (self.estimate_id,))
-            items = db.fetchall("SELECT item_type, name, unit, quantity, price, sum FROM estimate_items WHERE estimate_id=? ORDER BY sort_order ASC", (self.estimate_id,))
+            items = db.fetchall("SELECT item_type, name, unit, quantity, price, sum, id FROM estimate_items WHERE estimate_id=? ORDER BY sort_order ASC", (self.estimate_id,))
+            vt = ed.totals(db, self.estimate_id)
+            vat_items = vt['vat_enabled'] and vt['vat_mode'] == 'items'
+            vat_parts = ed.item_amounts(db, self.estimate_id) if vat_items else {}
+            span = 7 if vat_items else 5                                        # столбцов до колонки «Сумма»
 
             accent = db.get_setting("accent_color", "#0284C7")
             font = db.get_setting("export_font", "Segoe UI")
@@ -884,30 +940,36 @@ class EstimateEditorDialog(QDialog):
             tot_adj = self.meta_cache.get('tot_adj', 0.0)
 
             rows_html = ""
-            for itype, name, unit, qty, price, sm in items:
+            for itype, name, unit, qty, price, sm, item_id in items:
                 if itype == "Раздел":
-                    rows_html += f"<tr><td colspan='6' style='background-color: #e2e8f0; color: black; font-weight: bold; padding: 8px;'>{name}</td></tr>"
+                    rows_html += f"<tr><td colspan='{span + 1}' style='background-color: #e2e8f0; color: black; font-weight: bold; padding: 8px;'>{name}</td></tr>"
                 else:
                     q_v = float(qty) if qty else 0.0
                     p_v = float(price) if price else 0.0
                     s_v = float(sm) if sm else 0.0
-                    rows_html += f"<tr><td style='color: black;'>{name}</td><td style='color: black;'>{itype}</td><td align='center' style='color: black;'>{unit}</td><td align='right' style='color: black;'>{q_v:.3f}</td><td align='right' style='color: black;'>{p_v:,.2f}</td><td align='right' style='color: black;'>{s_v:,.2f}</td></tr>"
+                    part = vat_parts.get(item_id)
+                    vat_cells = (f"<td align='right' style='color: black;'>{float(part['vat']):,.2f}</td><td align='right' style='color: black;'>{float(part['with_vat']):,.2f}</td>" if part else "<td></td><td></td>") if vat_items else ""
+                    rows_html += f"<tr><td style='color: black;'>{name}</td><td style='color: black;'>{itype}</td><td align='center' style='color: black;'>{unit}</td><td align='right' style='color: black;'>{q_v:.3f}</td><td align='right' style='color: black;'>{p_v:,.2f}</td><td align='right' style='color: black;'>{s_v:,.2f}</td>{vat_cells}</tr>"
 
-            rows_html += f"<tr style='font-weight: bold;'><td colspan='5' align='right'>Прямые затраты (базовые):</td><td align='right'>{self.base_dir_total:,.2f}</td></tr>"
+            rows_html += f"<tr style='font-weight: bold;'><td colspan='{span}' align='right'>Прямые затраты (базовые):</td><td align='right'>{self.base_dir_total:,.2f}</td></tr>"
 
             if mat_adj != 0:
-                rows_html += f"<tr><td colspan='5' align='right' style='color: #605E5C;'>В т.ч. материалы (база):</td><td align='right' style='color: #605E5C;'>{self.base_mat_total:,.2f}</td></tr>"
-                rows_html += f"<tr><td colspan='5' align='right'>Скидка/Надбавка на материалы ({mat_adj}%):</td><td align='right'>{(self.adj_mat_total - self.base_mat_total):,.2f}</td></tr>"
+                rows_html += f"<tr><td colspan='{span}' align='right' style='color: #605E5C;'>В т.ч. материалы (база):</td><td align='right' style='color: #605E5C;'>{self.base_mat_total:,.2f}</td></tr>"
+                rows_html += f"<tr><td colspan='{span}' align='right'>Скидка/Надбавка на материалы ({mat_adj}%):</td><td align='right'>{(self.adj_mat_total - self.base_mat_total):,.2f}</td></tr>"
 
             if work_adj != 0:
-                rows_html += f"<tr><td colspan='5' align='right' style='color: #605E5C;'>В т.ч. работы (база):</td><td align='right' style='color: #605E5C;'>{self.base_work_total:,.2f}</td></tr>"
-                rows_html += f"<tr><td colspan='5' align='right'>Скидка/Надбавка на работы ({work_adj}%):</td><td align='right'>{(self.adj_work_total - self.base_work_total):,.2f}</td></tr>"
+                rows_html += f"<tr><td colspan='{span}' align='right' style='color: #605E5C;'>В т.ч. работы (база):</td><td align='right' style='color: #605E5C;'>{self.base_work_total:,.2f}</td></tr>"
+                rows_html += f"<tr><td colspan='{span}' align='right'>Скидка/Надбавка на работы ({work_adj}%):</td><td align='right'>{(self.adj_work_total - self.base_work_total):,.2f}</td></tr>"
 
             if tot_adj != 0:
-                rows_html += f"<tr style='font-weight: bold;'><td colspan='5' align='right'>Промежуточный итог:</td><td align='right'>{self.adj_subtotal:,.2f}</td></tr>"
-                rows_html += f"<tr><td colspan='5' align='right'>Итоговая скидка/надбавка ({tot_adj}%):</td><td align='right'>{(self.grand_total - self.adj_subtotal):,.2f}</td></tr>"
+                rows_html += f"<tr style='font-weight: bold;'><td colspan='{span}' align='right'>Промежуточный итог:</td><td align='right'>{self.adj_subtotal:,.2f}</td></tr>"
+                rows_html += f"<tr><td colspan='{span}' align='right'>Итоговая скидка/надбавка ({tot_adj}%):</td><td align='right'>{(float(vt['total_no_vat']) - self.adj_subtotal):,.2f}</td></tr>"
 
-            rows_html += f"<tr style='font-weight: bold; font-size: {int(f_size)+1}px; background-color: #e2e8f0;'><td colspan='5' align='right'>ВСЕГО ПО СМЕТЕ:</td><td align='right'>{self.grand_total:,.2f}</td></tr>"
+            if vt['vat_enabled']:
+                rows_html += f"<tr style='font-weight: bold;'><td colspan='{span}' align='right'>Итого без НДС:</td><td align='right'>{float(vt['total_no_vat']):,.2f}</td></tr>"
+                rows_html += f"<tr><td colspan='{span}' align='right'>НДС {float(vt['vat_rate']):g}%{' (сумма по позициям)' if vat_items else ''}:</td><td align='right'>{float(vt['vat']):,.2f}</td></tr>"
+
+            rows_html += f"<tr style='font-weight: bold; font-size: {int(f_size)+1}px; background-color: #e2e8f0;'><td colspan='{span}' align='right'>{'ВСЕГО ПО СМЕТЕ (с НДС):' if vt['vat_enabled'] else 'ВСЕГО ПО СМЕТЕ:'}</td><td align='right'>{self.grand_total:,.2f}</td></tr>"
 
             html = f"""
             <html><head><meta charset="utf-8"></head>
@@ -917,7 +979,7 @@ class EstimateEditorDialog(QDialog):
                 <p><b>Дата:</b> {meta[0]} | <b>Заказчик:</b> {meta[1] or '—'} | <b>Телефон:</b> {meta[2] or '—'}</p>
                 <table border="1" cellpadding="6" cellspacing="0" style="border-collapse: collapse; width: 100%; border: 1px solid #cbd5e1; font-size: {f_size}px; margin-top: 15px;">
                     <tr style="background-color: {accent}; color: white;">
-                        <th>Наименование</th><th>Тип</th><th>Ед.</th><th>Кол-во</th><th>Цена (руб)</th><th>Сумма (руб)</th>
+                        <th>Наименование</th><th>Тип</th><th>Ед.</th><th>Кол-во</th><th>Цена (руб)</th><th>Сумма (руб)</th>{'<th>НДС (руб)</th><th>Сумма с НДС (руб)</th>' if vat_items else ''}
                     </tr>
                     {rows_html}
                 </table>
@@ -951,15 +1013,19 @@ class EstimateEditorDialog(QDialog):
 
                 ws.append([f"СМЕТА НА ОБЪЕКТ: {self.title}"])
                 ws.append([])
-                headers = ["Наименование позиции", "Тип", "Ед.", "Кол-во", "Цена (руб)", "Сумма (руб)"]
+                vt = ed.totals(db, self.estimate_id)
+                vat_items = vt['vat_enabled'] and vt['vat_mode'] == 'items'
+                vat_parts = ed.item_amounts(db, self.estimate_id) if vat_items else {}
+                headers = ["Наименование позиции", "Тип", "Ед.", "Кол-во", "Цена (руб)", "Сумма (руб)"] + (["НДС (руб)", "Сумма с НДС (руб)"] if vat_items else [])
                 ws.append(headers)
 
-                items = db.fetchall("SELECT item_type, name, unit, quantity, price, sum FROM estimate_items WHERE estimate_id=? ORDER BY sort_order ASC", (self.estimate_id,))
-                for itype, name, unit, qty, price, sm in items:
+                items = db.fetchall("SELECT item_type, name, unit, quantity, price, sum, id FROM estimate_items WHERE estimate_id=? ORDER BY sort_order ASC", (self.estimate_id,))
+                for itype, name, unit, qty, price, sm, item_id in items:
                     if itype == "Раздел":
-                        ws.append([name, "Раздел", "", "", "", ""])
+                        ws.append([name, "Раздел", "", "", "", ""] + (["", ""] if vat_items else []))
                     else:
-                        ws.append([name, itype, unit, qty, price, sm])
+                        part = vat_parts.get(item_id)
+                        ws.append([name, itype, unit, qty, price, sm] + ([float(part['vat']), float(part['with_vat'])] if part else []))
 
                 ws.append([])
                 ws.append(["", "", "", "", "Прямые затраты (базовые):", self.base_dir_total])
@@ -977,9 +1043,12 @@ class EstimateEditorDialog(QDialog):
                 tot_adj = self.meta_cache.get('tot_adj', 0.0)
                 if tot_adj != 0:
                     ws.append(["", "", "", "", "Промежуточный итог:", self.adj_subtotal])
-                    ws.append(["", "", "", "", f"Итоговая скидка/надбавка ({tot_adj}%):", self.grand_total - self.adj_subtotal])
+                    ws.append(["", "", "", "", f"Итоговая скидка/надбавка ({tot_adj}%):", float(vt['total_no_vat']) - self.adj_subtotal])
 
-                ws.append(["", "", "", "", "ВСЕГО ПО СМЕТЕ:", self.grand_total])
+                if vt['vat_enabled']:
+                    ws.append(["", "", "", "", "Итого без НДС:", float(vt['total_no_vat'])])
+                    ws.append(["", "", "", "", f"НДС {float(vt['vat_rate']):g}%:", float(vt['vat'])])
+                ws.append(["", "", "", "", "ВСЕГО ПО СМЕТЕ (с НДС):" if vt['vat_enabled'] else "ВСЕГО ПО СМЕТЕ:", self.grand_total])
                 ws.cell(row=ws.max_row, column=5).font = font_bold
                 ws.cell(row=ws.max_row, column=6).font = font_bold
 

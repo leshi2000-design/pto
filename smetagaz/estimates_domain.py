@@ -5,7 +5,7 @@
 """
 import re
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from . import board_domain as board
 from .gsvm_docs import FORMATS, apply_format
@@ -13,8 +13,9 @@ from .gsvm_docs import FORMATS, apply_format
 # разделы, у которых есть связь со сметой (столбец estimate_id)
 CONTRACT_TABLES = {'contracts': 'Монтаж ГСВ', 'gsv_projects': 'Проект ГСВ', 'gsn_projects': 'Монтаж ГСН', 'smr_contracts': 'СМР (юрлица)', 'to_contracts': 'ТО (юрлица)', 'ip_contracts': 'СМР (ИП)', 'fl_contracts': 'СМР (физлица)'}
 # значения прежних начислений в контексте шаблонов сохранены нулями, чтобы уже подключённые шаблоны не ломались
-LEGACY_ZERO_KEYS = ('social_total', 'overhead_total', 'profit_total', 'vat_total')
-HIDDEN_KEYS = {'has_overhead', 'overhead_pct', 'has_profit', 'profit_pct', 'has_vat', 'vat_pct', 'has_social', 'social_pct', *LEGACY_ZERO_KEYS}
+LEGACY_ZERO_KEYS = ('social_total', 'overhead_total', 'profit_total')
+HIDDEN_KEYS = {'has_overhead', 'overhead_pct', 'has_profit', 'profit_pct', 'has_vat', 'vat_pct', 'vat_mode', 'has_social', 'social_pct', *LEGACY_ZERO_KEYS}
+VAT_MODES = {'total': 'НДС на всю смету (позиции без НДС, НДС начисляется на итог)', 'items': 'НДС на каждую позицию (НДС виден в строке, итог = сумма позиций с НДС)'}
 
 
 def D(value):
@@ -25,7 +26,7 @@ def D(value):
 
 def migrate(db):
     cols = {r[1] for r in db.fetchall('PRAGMA table_info(estimates)')}
-    for name, ddl in (('le_client_id', 'INTEGER'), ('party_name', "TEXT DEFAULT ''")):
+    for name, ddl in (('le_client_id', 'INTEGER'), ('party_name', "TEXT DEFAULT ''"), ('vat_mode', "TEXT DEFAULT 'total'")):
         if name not in cols:
             db.execute(f'ALTER TABLE estimates ADD COLUMN {name} {ddl}')
     db.execute("""CREATE TABLE IF NOT EXISTS est_tags(id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, source TEXT NOT NULL, fmt TEXT NOT NULL DEFAULT 'text',
@@ -40,8 +41,53 @@ def migrate(db):
 
 # --- ИТОГ ------------------------------------------------------------------------------------
 
+def money2(value):
+    return D(value).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+
+def vat_settings(db, eid):
+    """(включено, ставка %, режим 'total' | 'items') — НДС сметы."""
+    row = db.fetchone("SELECT coalesce(has_vat,0),coalesce(vat_pct,20),coalesce(vat_mode,'total') FROM estimates WHERE id=?", (eid,))
+    if not row:
+        return False, Decimal(20), 'total'
+    return bool(row[0]), D(row[1]), row[2] if row[2] in VAT_MODES else 'total'
+
+
+def set_vat(db, eid, enabled, rate=20, mode='total'):
+    """Включает/выключает начисление НДС сметы. Режимы: 'total' — позиции без НДС, НДС на итог; 'items' — НДС на каждую позицию, итог = сумма позиций с НДС."""
+    if mode not in VAT_MODES:
+        raise ValueError('Неизвестный способ начисления НДС')
+    rate = D(rate)
+    if rate < 0 or rate > 100:
+        raise ValueError('Ставка НДС — от 0 до 100 %')
+    old = vat_settings(db, eid)
+    db.execute('UPDATE estimates SET has_vat=?,vat_pct=?,vat_mode=? WHERE id=?', (int(bool(enabled)), float(rate), mode, eid))
+    recalc(db, eid)
+    if old != (bool(enabled), rate, mode):            # смена НДС меняет итог — договор, связанный со сметой, получит отметку «смета изменена»
+        db.execute('INSERT INTO estimate_changes(estimate_id,action,item_name,detail) VALUES(?,?,?,?)',
+                   (eid, 'Изменено', 'НДС', ('включён: ' + VAT_MODES[mode] + f', {rate}%') if enabled else 'выключен'))
+
+
+def item_amounts(db, eid):
+    """{id позиции: {'base','vat','with_vat'}} — суммы позиций (не разделов) с учётом скидок/наценок сметы; НДС по каждой позиции считается только в режиме 'items'
+    (иначе vat = 0, with_vat = base). Суммы округляются до копейки."""
+    row = db.fetchone('SELECT coalesce(mat_adj_pct,0),coalesce(work_adj_pct,0),coalesce(total_adj_pct,0) FROM estimates WHERE id=?', (eid,)) or (0, 0, 0)
+    mat_adj, work_adj, tot_adj = D(row[0]), D(row[1]), D(row[2])
+    enabled, rate, mode = vat_settings(db, eid)
+    out = {}
+    for iid, itype, amount in db.fetchall('SELECT id,item_type,coalesce(sum,0) FROM estimate_items WHERE estimate_id=?', (eid,)):
+        if itype == 'Раздел':
+            continue
+        adj = work_adj if itype == 'Работа' else mat_adj
+        base = money2(D(amount) * (1 + adj / 100) * (1 + tot_adj / 100))
+        vat = money2(base * rate / 100) if enabled and mode == 'items' else Decimal(0)
+        out[iid] = dict(base=base, vat=vat, with_vat=base + vat)
+    return out
+
+
 def totals(db, eid):
-    """База и итоги сметы с учётом скидок/наценок. Итого = (материалы + работы) с наценкой на итог; начислений нет."""
+    """База и итоги сметы с учётом скидок/наценок. Без НДС: итого = (материалы + работы) с наценкой на итог.
+    С НДС: режим 'total' — НДС = ставка от итога; режим 'items' — НДС по каждой позиции, итог = сумма позиций с НДС. 'total' — итог к оплате (с НДС), 'total_no_vat' — без НДС."""
     sums = {'mat': Decimal(0), 'work': Decimal(0)}
     for itype, amount in db.fetchall('SELECT item_type,coalesce(sum,0) FROM estimate_items WHERE estimate_id=?', (eid,)):
         if itype == 'Раздел':
@@ -52,9 +98,20 @@ def totals(db, eid):
     adj_mat = sums['mat'] * (1 + mat_adj / 100)
     adj_work = sums['work'] * (1 + work_adj / 100)
     subtotal = adj_mat + adj_work
-    total = subtotal * (1 + tot_adj / 100)
+    total_no_vat = subtotal * (1 + tot_adj / 100)
+    enabled, rate, mode = vat_settings(db, eid)
+    vat = Decimal(0)
+    total = total_no_vat
+    if enabled and mode == 'items':
+        parts = item_amounts(db, eid).values()
+        total_no_vat = sum((p['base'] for p in parts), Decimal(0))
+        vat = sum((p['vat'] for p in parts), Decimal(0))
+        total = total_no_vat + vat
+    elif enabled:
+        vat = money2(total_no_vat * rate / 100)
+        total = total_no_vat + vat
     return dict(base_mat=sums['mat'], base_work=sums['work'], base=sums['mat'] + sums['work'], adj_mat=adj_mat, adj_work=adj_work, subtotal=subtotal,
-                total=total, mat_adj=mat_adj, work_adj=work_adj, tot_adj=tot_adj)
+                total=total, total_no_vat=total_no_vat, vat=vat, vat_enabled=enabled, vat_rate=rate, vat_mode=mode, mat_adj=mat_adj, work_adj=work_adj, tot_adj=tot_adj)
 
 
 def recalc(db, eid):
@@ -120,7 +177,7 @@ def margin_summary(db, eid):
     factor = 1 + t['tot_adj'] / 100
     sale_mat, sale_work = t['adj_mat'] * factor, t['adj_work'] * factor
     out = dict(cost_materials=cost['mat'], cost_works=cost['work'], cost_total=cost['mat'] + cost['work'], sale_base=t['base'], sale_materials=sale_mat,
-               sale_works=sale_work, sale_total=t['total'], margin_materials=sale_mat - cost['mat'], margin_works=sale_work - cost['work'])
+               sale_works=sale_work, sale_total=t['total_no_vat'], margin_materials=sale_mat - cost['mat'], margin_works=sale_work - cost['work'])
     out['margin_total'] = out['sale_total'] - out['cost_total']
     out['margin_pct'] = (out['margin_total'] / out['sale_total'] * 100) if out['sale_total'] else Decimal(0)
     return out
@@ -301,7 +358,7 @@ SOURCE_LABELS = {
     'has_contract': 'Есть ли договор (Да / Нет)',
     'materials_total': 'Материалы: итого (с учётом скидок/наценок)', 'works_total': 'Работы: итого (с учётом скидок/наценок)', 'subtotal': 'Итого до наценки на итог',
     'calculated_total': 'Итого по расчёту', 'mat_adj_pct': 'Скидка/наценка на материалы, %', 'work_adj_pct': 'Скидка/наценка на работы, %',
-    'total_adj_pct': 'Скидка/наценка на итог, %',
+    'total_adj_pct': 'Скидка/наценка на итог, %', 'vat_total': 'НДС: сумма по смете', 'vat_rate': 'НДС: ставка, %', 'total_no_vat': 'Итого без НДС', 'vat_mode_text': 'НДС: способ начисления',
     'work_wage_total': 'Работы: ЗП (расшифровка)', 'work_overhead_total': 'Работы: ОХР и ОПР (расшифровка)', 'work_profit_total': 'Работы: плановая прибыль (расшифровка)',
     'work_social_total': 'Работы: СоцСтрах (расшифровка)', 'work_other_total': 'Работы: другие затраты (расшифровка)', 'work_tax_total': 'Работы: налог на прибыль (расшифровка)',
     'materials_margin_total': 'Материалы: маржа по позициям', 'grand_total': 'Расшифровка: материалы + работы',
@@ -312,7 +369,7 @@ BUILTIN_TAGS = [
     ('объект', 'title', 'text'), ('клиент', 'client_label', 'text'), ('телефон', 'client_phone', 'text'), ('адрес_клиента', 'client_address', 'text'),
     ('дата_сметы', 'date', 'date_long'), ('дата_сметы_кратко', 'date', 'date_short'), ('составил', 'prepared_by', 'text'), ('организация', 'company', 'text'),
     ('итого', 'total', 'money'), ('итого_прописью', 'total', 'money_words'), ('материалы', 'materials_total', 'money'), ('работы', 'works_total', 'money'),
-    ('оплачено', 'paid', 'money'), ('долг', 'debt', 'money'),
+    ('итого_без_ндс', 'total_no_vat', 'money'), ('ндс', 'vat_total', 'money'), ('ндс_процент', 'vat_rate', 'number2'), ('оплачено', 'paid', 'money'), ('долг', 'debt', 'money'),
     ('договор_номер', 'contract_number', 'text'), ('договор_дата', 'contract_date', 'date_long'), ('договор_раздел', 'contract_section', 'text'), ('есть_договор', 'has_contract', 'text'),
     ('скидка_материалы', 'mat_adj_pct', 'number2'), ('скидка_работы', 'work_adj_pct', 'number2'), ('скидка_итог', 'total_adj_pct', 'number2'),
     ('зп_итого', 'work_wage_total', 'money'), ('охр_итого', 'work_overhead_total', 'money'), ('прибыль_итого', 'work_profit_total', 'money'),
@@ -322,7 +379,7 @@ BUILTIN_TAGS = [
     ('маржа_процент', 'margin_pct', 'number2'),
 ]
 TABLE_TAGS = {
-    'items': ('Позиции сметы', ['index', 'name', 'item_type', 'unit', 'quantity', 'price', 'amount']),
+    'items': ('Позиции сметы', ['index', 'name', 'item_type', 'unit', 'quantity', 'price', 'amount', 'vat', 'amount_vat']),
     'works': ('Работы (расшифровка)', ['index', 'name', 'unit', 'quantity', 'price', 'amount', 'purchase_price', 'cost_sum', 'margin_sum', 'has_breakdown', 'wage_unit', 'overhead_unit',
                                        'profit_unit', 'social_unit', 'other_unit', 'tax_unit', 'wage_sum', 'overhead_sum', 'profit_sum', 'social_sum', 'other_sum', 'tax_sum']),
     'materials': ('Материалы и маржа', ['index', 'name', 'unit', 'quantity', 'price', 'purchase_price', 'amount', 'cost_sum', 'margin_unit', 'margin_sum']),
@@ -406,6 +463,9 @@ def extend_context(db, kind, eid, ctx, tables):
             ctx['contract_number'], ctx['contract_date'] = r[0] or '', r[1] or ''
     for key in LEGACY_ZERO_KEYS:
         ctx[key] = Decimal(0)
+    vt = totals(db, eid)
+    ctx['vat_total'], ctx['vat_rate'], ctx['total_no_vat'] = vt['vat'], vt['vat_rate'] if vt['vat_enabled'] else '', vt['total_no_vat'] if vt['vat_enabled'] else ''
+    ctx['vat_mode_text'] = VAT_MODES[vt['vat_mode']] if vt['vat_enabled'] else ''
     for key, value in margin_summary(db, eid).items():
         ctx[key] = value
     works, materials, info = breakdown(db, eid)
@@ -415,7 +475,13 @@ def extend_context(db, kind, eid, ctx, tables):
         tables.setdefault('works', works)
         tables.setdefault('materials', materials)
     else:
-        tables.setdefault('items', rows(db, 'SELECT name,item_type,unit,quantity,price,sum amount FROM estimate_items WHERE estimate_id=? ORDER BY sort_order,id', (eid,)))
+        amounts = item_amounts(db, eid)
+        items = rows(db, 'SELECT id,name,item_type,unit,quantity,price,sum amount FROM estimate_items WHERE estimate_id=? ORDER BY sort_order,id', (eid,))
+        for r in items:
+            part = amounts.get(r['id'])
+            r['vat'] = part['vat'] if part and vt['vat_enabled'] and vt['vat_mode'] == 'items' else ''
+            r['amount_vat'] = part['with_vat'] if part and vt['vat_enabled'] and vt['vat_mode'] == 'items' else ''
+        tables.setdefault('items', items)
         tables.setdefault('payments', rows(db, 'SELECT date,amount FROM payments WHERE estimate_id=? ORDER BY date,id', (eid,)))
     ctx.setdefault('total', db.fetchone('SELECT total FROM estimates WHERE id=?', (eid,))[0] or 0)
     ctx.setdefault('debt', D(ctx.get('total')) - D(ctx.get('paid')))
