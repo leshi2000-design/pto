@@ -38,13 +38,20 @@ def acts(db, owner, oid):
     """Акты договора для выбора в объёмах: [(id, подпись)] по дате; для разделов без актов — пусто."""
     if not has_acts(owner):
         return []
-    rows = db.fetchall(f'SELECT id,act_number,act_date FROM {ACT_OWNERS[owner]} WHERE contract_id=? ORDER BY act_date,id', (oid,))
+    from . import contracts_core as cc
+    mod = cc.CONTRACT_TABLES[owner]
+    names = {o['id']: o['name'] for o in cc.objects(db, mod, oid)}
+    order = {o['id']: i for i, o in enumerate(cc.objects(db, mod, oid))}
+    rows = db.fetchall(f'SELECT id,act_number,act_date,{"object_id" if cc.has_objects(mod) else "NULL"} FROM {ACT_OWNERS[owner]} WHERE contract_id=? ORDER BY act_date,id', (oid,))
+    rows = sorted(rows, key=lambda r: order.get(r[3], len(order)))                     # акты по объектам (порядок объектов), внутри объекта — по дате
     out = []
-    for aid, number, day in rows:
+    for aid, number, day, object_id in rows:
         label = 'Акт № ' + (str(number).strip() or 'б/н')
         if day:
             y, m, d = (str(day)[:10].split('-') + ['', ''])[:3]
             label += f' от {d}.{m}.{y}' if d and m else f' от {day}'
+        if object_id in names:
+            label += f' · {names[object_id]}'
         out.append((aid, label))
     return out
 

@@ -315,7 +315,7 @@ class LegalClientsRegistry(QWidget):
 # --- Акт ---------------------------------------------------------------------------------------
 
 class ActDialog(QDialog):
-    def __init__(self, mod, contract_id, act_id=None, parent=None):
+    def __init__(self, mod, contract_id, act_id=None, parent=None, object_id=None):
         super().__init__(parent)
         self.mod, self.contract_id, self.act_id = mod, contract_id, act_id
         self.setWindowTitle('Акт выполненных работ')
@@ -332,6 +332,13 @@ class ActDialog(QDialog):
         self.note = QLineEdit()
         for label, w in (('№ акта', self.number), ('Дата акта', self.date), ('Сумма (итого)', self.amount)):
             form.addRow(label, w)
+        self.object_box = None
+        if cc.has_objects(mod) and cc.objects(db, mod, contract_id):          # акт составляется по одному из объектов работ договора
+            self.object_box = QComboBox()
+            self.object_box.addItem('— без объекта —', None)
+            for o in cc.objects(db, mod, contract_id):
+                self.object_box.addItem(cc.object_label(o), o['id'])
+            form.insertRow(0, 'Объект работ', self.object_box)
         self.vat_included = self.vat_rate = self.vat_info = None
         if mod in VAT_MODS:
             contract = cc.contract(db, mod, contract_id)
@@ -367,12 +374,16 @@ class ActDialog(QDialog):
             self.desc.setPlainText(a['description'] or '')
             self.signed.setChecked(bool(a['signed']))
             self.note.setText(a['note'] or '')
+            if self.object_box is not None:
+                self.object_box.setCurrentIndex(max(0, self.object_box.findData(a.get('object_id'))))
             if self.vat_included is not None:
                 self.vat_included.setChecked(bool(a.get('vat_included')))
                 self.vat_rate.setValue(float(a.get('vat_rate') or 0) or float(cc.contract(db, mod, contract_id).get('vat_rate') or 20))
         else:
             self.date.set_value(QDate.currentDate().toString('yyyy-MM-dd'))
             self.desc.setPlainText(cc.contract(db, mod, contract_id).get('subject') or '')
+            if self.object_box is not None and object_id:
+                self.object_box.setCurrentIndex(max(0, self.object_box.findData(object_id)))
         self.refresh_vat()
 
     def refresh_vat(self, *_):
@@ -392,7 +403,8 @@ class ActDialog(QDialog):
             self.act_id = cc.save_act(db, self.mod, dict(contract_id=self.contract_id, act_number=self.number.text(), act_date=self.date.value(), amount=self.amount.value(),
                                                          description=self.desc.toPlainText(), note=self.note.text(), signed=self.signed.isChecked(),
                                                          vat_included=bool(self.vat_included and self.vat_included.isChecked()),
-                                                         vat_rate=self.vat_rate.value() if self.vat_included is not None and self.vat_included.isChecked() else 0), self.act_id)
+                                                         vat_rate=self.vat_rate.value() if self.vat_included is not None and self.vat_included.isChecked() else 0,
+                                                         **({'object_id': self.object_box.currentData()} if self.object_box is not None else {})), self.act_id)
         except Exception as e:
             warn(self, str(e))
             return
@@ -414,6 +426,7 @@ class ContractDialog(QDialog):
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs, 1)
         self.build_main()
+        self.build_objects()
         self.build_acts()
         self.build_docs()
         if cc.cfg(mod)['contracts'] in vd.OWNERS:
@@ -757,7 +770,16 @@ class ContractDialog(QDialog):
 
     def save(self):
         try:
+            object_rows = self.object_rows()
+            if object_rows is not None:                       # ошибки в объектах (пустое название, повтор) — до сохранения договора
+                for r in object_rows:
+                    if (r['address'].strip() or r['note'].strip()) and not r['name'].strip():
+                        raise ValueError('Укажите название объекта (например, «Котельная №1»)')
+                if len({r['name'].strip().casefold() for r in object_rows if r['name'].strip()}) != len([r for r in object_rows if r['name'].strip()]):
+                    raise ValueError('Названия объектов не должны повторяться')
             self.contract_id = cc.save_contract(db, self.mod, self.values(), self.contract_id)
+            if object_rows is not None:
+                cc.save_objects(db, self.mod, self.contract_id, object_rows)
         except Exception as e:
             warn(self, str(e))
             return False
@@ -773,6 +795,86 @@ class ContractDialog(QDialog):
         """Вкладки «Акты и справки» и «Документы» доступны всегда: у нового договора он сначала сохраняется (если данные не заполнены — возврат на «Договор»)."""
         if index > 0 and not self.contract_id and not self.save():
             self.tabs.setCurrentIndex(0)
+
+    # --- объекты работ (СМР юрлиц: по договору работы идут на нескольких объектах, акты составляются по объектам)
+    def build_objects(self):
+        self.objects_table = None
+        if not cc.has_objects(self.mod):
+            return
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        hint = QLabel('Объекты работ по договору: если работы выполняются на нескольких объектах, внесите их здесь. Акты составляются по объектам и на вкладке «Акты и справки» '
+                      'делятся по объектам; теги актов {ОБЪЕКТ_АКТА} и {АДРЕС_ОБЪЕКТА_АКТА} подставляют объект акта. Объекты сохраняются вместе с договором.')
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        self.objects_table = make_table(['Название объекта', 'Адрес', 'Примечание', 'Актов', 'Сумма актов'], (240, 260, 200, 70))
+        self.objects_table.setEditTriggers(QAbstractItemView.EditTrigger.AllEditTriggers)
+        layout.addWidget(self.objects_table, 1)
+        bar = QHBoxLayout()
+        for text, fn in (('＋ Объект', self.add_object), ('Удалить', self.remove_object), ('Вверх', lambda: self.move_object(-1)), ('Вниз', lambda: self.move_object(1))):
+            b = QPushButton(text)
+            b.clicked.connect(fn)
+            bar.addWidget(b)
+        bar.addStretch()
+        layout.addLayout(bar)
+        self.tabs.addTab(page, 'Объекты работ')
+
+    def refresh_objects(self):
+        if self.objects_table is None:
+            return
+        stats = {g[0]: (len(g[2]), g[3]) for g in cc.acts_by_object(db, self.mod, self.contract_id)} if self.contract_id else {}
+        self.objects_table.setRowCount(0)
+        for o in (cc.objects(db, self.mod, self.contract_id) if self.contract_id else []):
+            self.add_object_row(o['name'], o['address'], o['note'], o['id'], *stats.get(o['id'], (0, 0.0)))
+
+    def add_object_row(self, name='', address='', note='', object_id=None, count=0, total=0.0):
+        r = self.objects_table.rowCount()
+        self.objects_table.insertRow(r)
+        first = QTableWidgetItem(name)
+        first.setData(Qt.ItemDataRole.UserRole, object_id)
+        self.objects_table.setItem(r, 0, first)
+        self.objects_table.setItem(r, 1, QTableWidgetItem(address))
+        self.objects_table.setItem(r, 2, QTableWidgetItem(note))
+        for col, text in ((3, str(count)), (4, money(total))):
+            cell = QTableWidgetItem(text)
+            cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            cell.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.objects_table.setItem(r, col, cell)
+        return r
+
+    def add_object(self):
+        r = self.add_object_row()
+        self.objects_table.setCurrentCell(r, 0)
+        self.objects_table.editItem(self.objects_table.item(r, 0))
+
+    def remove_object(self):
+        r = self.objects_table.currentRow()
+        if r < 0:
+            return
+        count = self.objects_table.item(r, 3).text()
+        if count not in ('', '0') and QMessageBox.question(self, 'Удаление объекта', f'По объекту составлено актов: {count}. Акты не удаляются — они станут «без объекта». Удалить объект?') != QMessageBox.StandardButton.Yes:
+            return
+        self.objects_table.removeRow(r)
+
+    def move_object(self, delta):
+        r = self.objects_table.currentRow()
+        t = r + delta
+        if r < 0 or not 0 <= t < self.objects_table.rowCount():
+            return
+        for c in range(self.objects_table.columnCount()):
+            a, b = self.objects_table.takeItem(r, c), self.objects_table.takeItem(t, c)
+            self.objects_table.setItem(r, c, b)
+            self.objects_table.setItem(t, c, a)
+        self.objects_table.setCurrentCell(t, 0)
+
+    def object_rows(self):
+        if self.objects_table is None:
+            return None
+        out = []
+        for r in range(self.objects_table.rowCount()):
+            cell = lambda c: self.objects_table.item(r, c).text() if self.objects_table.item(r, c) else ''
+            out.append(dict(id=self.objects_table.item(r, 0).data(Qt.ItemDataRole.UserRole), name=cell(0), address=cell(1), note=cell(2)))
+        return out
 
     # --- акты
     def build_acts(self):
@@ -803,11 +905,30 @@ class ContractDialog(QDialog):
         self.tabs.addTab(page, 'Акты и справки')
 
     def refresh_acts(self):
-        rows = cc.acts(db, self.mod, self.contract_id) if self.contract_id else []
+        groups = cc.acts_by_object(db, self.mod, self.contract_id) if self.contract_id else [(None, '', [], 0.0)]
+        rows = []                                             # (None, заголовок объекта, число актов, сумма) или (акт, ...)
+        for object_id, label, mine, total in groups:
+            if label:
+                rows.append((None, label, len(mine), total, object_id))
+            rows.extend((a, '', 0, 0.0, object_id) for a in mine)
+        self.acts_table.clearSpans()
         self.acts_table.setRowCount(len(rows))
-        contract_row = cc.contract(db, self.mod, self.contract_id) if rows else {}
+        all_acts = [a for a, *_ in rows if a]
+        contract_row = cc.contract(db, self.mod, self.contract_id) if all_acts else {}
         shift = 1 if self.mod in VAT_MODS else 0
-        for r, a in enumerate(rows):
+        columns = self.acts_table.columnCount()
+        for r, (a, label, count, total, object_id) in enumerate(rows):
+            if a is None:                                     # заголовок группы: объект работ, число актов и сумма
+                head = QTableWidgetItem(f'Объект: {label}  ·  актов: {count}' + (f' на сумму {money(total)}' if count else '  ·  актов пока нет'))
+                head.setData(Qt.ItemDataRole.UserRole + 1, ('object', object_id))
+                head.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                font = head.font()
+                font.setBold(True)
+                head.setFont(font)
+                head.setBackground(self.palette().alternateBase())
+                self.acts_table.setItem(r, 0, head)
+                self.acts_table.setSpan(r, 0, 1, columns)
+                continue
             self.acts_table.setItem(r, 0, item(a['act_number'], a['id']))
             self.acts_table.setItem(r, 1, item(date_short(a['act_date']).rstrip('г.')))
             self.acts_table.setItem(r, 2, item(money(a['amount']), right=True))
@@ -821,11 +942,21 @@ class ContractDialog(QDialog):
                 it.setForeground(QColor(color))
                 self.acts_table.setItem(r, c, it)
             self.acts_table.setItem(r, 6 + shift, item(a['description']))
-        total = sum(float(a['amount'] or 0) for a in rows)
-        self.acts_sum.setText(f'Актов: {len(rows)} · на сумму {money(total)} из {money(self.amount.value())}')
+        total = sum(float(a['amount'] or 0) for a in all_acts)
+        self.acts_sum.setText(f'Актов: {len(all_acts)} · на сумму {money(total)} из {money(self.amount.value())}')
+
+    def selected_object(self):
+        """Объект работ, к которому относится выбранная строка таблицы актов (акт или заголовок группы), — для нового акта."""
+        r = self.acts_table.currentRow()
+        while r >= 0:
+            marker = self.acts_table.item(r, 0).data(Qt.ItemDataRole.UserRole + 1) if self.acts_table.item(r, 0) else None
+            if marker and marker[0] == 'object':
+                return marker[1]
+            r -= 1
+        return None
 
     def add_act(self):
-        if self.ensure_saved() and ActDialog(self.mod, self.contract_id, parent=self).exec():
+        if self.ensure_saved() and ActDialog(self.mod, self.contract_id, parent=self, object_id=self.selected_object()).exec():
             self.refresh_all()
 
     def edit_act(self, *_):
@@ -1099,6 +1230,7 @@ class ContractDialog(QDialog):
 
     def refresh_all(self):
         self.refresh_vat()
+        self.refresh_objects()
         self.refresh_acts()
         self.refresh_docs()
         self.refresh_estimate()

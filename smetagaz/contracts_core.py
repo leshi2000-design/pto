@@ -21,11 +21,12 @@ from .gsvm_docs import FORMATS, apply_format, money, norm_tag, tag_text
 
 MODS = {
     'le': dict(title='Прочие (юр.лица)', contracts='le_contracts', acts='le_acts', tags='le_tags', docs='le_docs', section='Прочие', code='04', party='legal', estimate=False),
-    'smr': dict(title='СМР (юрлица)', contracts='smr_contracts', acts='smr_acts', tags='smr_tags', docs='smr_docs', section='СМР', code='05', party='legal', estimate=True),
+    'smr': dict(title='СМР (юрлица)', contracts='smr_contracts', acts='smr_acts', tags='smr_tags', docs='smr_docs', section='СМР', code='05', party='legal', estimate=True, objects=True),
     'to': dict(title='ТО (юрлица)', contracts='to_contracts', acts='to_acts', tags='to_tags', docs='to_docs', section='ТО', code='06', party='legal', estimate=True),
     'ip': dict(title='СМР (ИП)', contracts='ip_contracts', acts='ip_acts', tags='ip_tags', docs='ip_docs', section='СМР ИП', code='07', party='person', estimate=True),
     'fl': dict(title='СМР (физлица)', contracts='fl_contracts', acts='fl_acts', tags='fl_tags', docs='fl_docs', section='СМР физ', code='08', party='person', estimate=True),
 }
+OBJECT_MODS = tuple(m for m, c in MODS.items() if c.get('objects'))        # разделы, где у договора есть несколько объектов работ (акты делятся по объектам)
 ESTIMATE_MODS = tuple(m for m, c in MODS.items() if c['estimate'])
 CONTRACT_TABLES = {c['contracts']: m for m, c in MODS.items()}      # таблица договоров -> раздел
 DOC_KINDS = {
@@ -95,6 +96,14 @@ def migrate(db):
     for c in MODS.values():                                            # НДС в актах, сумма договора по актам, признак годового договора
         _add(db, c['contracts'], [('amount_from_acts', 'INTEGER DEFAULT 0'), ('annual', 'INTEGER DEFAULT 0'), ('status_manual', "TEXT DEFAULT ''")])
         _add(db, c['acts'], [('vat_rate', 'REAL DEFAULT 0')])
+    for mod in OBJECT_MODS:
+        c = MODS[mod]
+        table = f"{mod}_objects"
+        db.execute(f"""CREATE TABLE IF NOT EXISTS {table}(id INTEGER PRIMARY KEY, contract_id INTEGER NOT NULL REFERENCES {c['contracts']}(id) ON DELETE CASCADE,
+            name TEXT NOT NULL DEFAULT '', address TEXT DEFAULT '', note TEXT DEFAULT '', sort_order INTEGER NOT NULL DEFAULT 0)""")
+        db.execute(f'CREATE INDEX IF NOT EXISTS idx_{table}_contract ON {table}(contract_id)')
+        _add(db, c['acts'], [('object_id', 'INTEGER')])                      # объект работ, по которому составлен акт (пусто — «без объекта»)
+        db.execute(f"CREATE TRIGGER IF NOT EXISTS cleanup_act_object_{table} AFTER DELETE ON {table} BEGIN UPDATE {c['acts']} SET object_id=NULL WHERE object_id=old.id; END")
     _move_person_contracts_to_ip(db)
     if db.fetchone("SELECT 1 FROM sqlite_master WHERE type='table' AND name='notes'"):
         for table in ('to_contracts', 'ip_contracts', 'fl_contracts'):
@@ -164,6 +173,71 @@ def act(db, mod, aid):
 def acts(db, mod, cid):
     cur = db.execute(f"SELECT * FROM {cfg(mod)['acts']} WHERE contract_id=? ORDER BY act_date,id", (cid,))
     return [dict(zip([c[0] for c in cur.description], r)) for r in cur.fetchall()]
+
+
+def has_objects(mod):
+    return mod in OBJECT_MODS
+
+
+def objects(db, mod, cid):
+    """Объекты работ договора по порядку: [{'id','name','address','note'}]; для разделов без объектов — пусто."""
+    if not has_objects(mod) or not cid:
+        return []
+    cur = db.execute(f'SELECT id,name,address,note FROM {mod}_objects WHERE contract_id=? ORDER BY sort_order,id', (cid,))
+    return [dict(zip(('id', 'name', 'address', 'note'), r)) for r in cur.fetchall()]
+
+
+def object_label(o):
+    return ', '.join(x for x in (str(o.get('name') or '').strip(), str(o.get('address') or '').strip()) if x) or 'Объект'
+
+
+def save_objects(db, mod, cid, rows):
+    """Заменяет объекты работ договора (по порядку строк): строки с id обновляются, без id — добавляются, пропавшие — удаляются (их акты становятся «без объекта»).
+    rows: [{id|None, name, address, note}]; пустые строки пропускаются; название обязательно."""
+    if not has_objects(mod):
+        raise ValueError('В этом разделе объекты работ не предусмотрены')
+    existing = {o['id'] for o in objects(db, mod, cid)}
+    clean = []
+    for r in rows:
+        name, address, note = (str(r.get(k) or '').strip() for k in ('name', 'address', 'note'))
+        if not (name or address or note):
+            continue
+        if not name:
+            raise ValueError('Укажите название объекта (например, «Котельная №1»)')
+        rid = int(r['id']) if r.get('id') else None
+        if rid and rid not in existing:
+            raise ValueError('Объект не относится к этому договору')
+        clean.append((rid, name, address, note))
+    if len({n.casefold() for _i, n, _a, _t in clean}) != len(clean):
+        raise ValueError('Названия объектов не должны повторяться')
+    with db.transaction():
+        keep = {rid for rid, *_ in clean if rid}
+        for gone in existing - keep:
+            db.execute(f'DELETE FROM {mod}_objects WHERE id=?', (gone,))
+        for pos, (rid, name, address, note) in enumerate(clean):
+            if rid:
+                db.execute(f'UPDATE {mod}_objects SET name=?,address=?,note=?,sort_order=? WHERE id=?', (name, address, note, pos, rid))
+            else:
+                db.execute(f'INSERT INTO {mod}_objects(contract_id,name,address,note,sort_order) VALUES(?,?,?,?,?)', (cid, name, address, note, pos))
+    return len(clean)
+
+
+def acts_by_object(db, mod, cid):
+    """Акты договора, разделённые по объектам работ: [(id объекта | None, подпись, [акты], сумма актов)]. Объекты — по порядку (в том числе без актов), затем «Без объекта» (если там есть акты).
+    Если у договора объектов нет (или раздел без объектов) — одна группа (None, '', все акты)."""
+    all_acts = acts(db, mod, cid)
+    objs = objects(db, mod, cid)
+    if not objs:
+        return [(None, '', all_acts, sum(float(a.get('amount') or 0) for a in all_acts))]
+    groups = []
+    known = {o['id'] for o in objs}
+    for o in objs:
+        mine = [a for a in all_acts if a.get('object_id') == o['id']]
+        groups.append((o['id'], object_label(o), mine, sum(float(a.get('amount') or 0) for a in mine)))
+    loose = [a for a in all_acts if a.get('object_id') not in known]
+    if loose:
+        groups.append((None, 'Без объекта', loose, sum(float(a.get('amount') or 0) for a in loose)))
+    return groups
 
 
 def legal(db, lid):
@@ -515,7 +589,7 @@ STATIC_SOURCES = [
     ('party.phone', 'Контрагент: телефон'), ('party.email', 'Контрагент: e-mail'), ('party.passport', 'Физлицо: паспорт'), ('party.passport_issuer', 'Физлицо: кем выдан'),
     ('party.passport_date', 'Физлицо: дата выдачи'), ('party.address', 'Контрагент: адрес'),
     ('act.number', 'Акт: номер'), ('act.date', 'Акт: дата'), ('act.amount', 'Акт: сумма (итого)'), ('act.amount_net', 'Акт: сумма без НДС'), ('act.vat', 'Акт: сумма НДС'),
-    ('act.description', 'Акт: описание работ'),
+    ('act.description', 'Акт: описание работ'), ('act.object', 'Акт: объект работ (если не выбран — объект договора)'), ('act.object_address', 'Акт: адрес объекта работ'),
     ('estimate.materials', 'Смета: стоимость материалов'), ('estimate.works', 'Смета: стоимость работ'),
 ]
 BUILTIN_TAGS = [
@@ -534,7 +608,7 @@ BUILTIN_TAGS = [
     ('ДАТА_ВЫДАЧИ', 'party.passport_date', 'date_short'), ('АДРЕС_КОНТРАГЕНТА', 'party.address', 'text'),
     ('НОМЕР_АКТА', 'act.number', 'text'), ('ДАТА_АКТА', 'act.date', 'date_long'), ('ДАТА_АКТА_С', 'act.date', 'date_short'),
     ('СУММА_АКТА', 'act.amount', 'money'), ('СУММА_АКТА_ПРОПИСЬЮ', 'act.amount', 'money_words'), ('СУММА_АКТА_БЕЗ_НДС', 'act.amount_net', 'money'),
-    ('СУММА_АКТА_НДС', 'act.vat', 'money'), ('ОПИСАНИЕ_РАБОТ', 'act.description', 'text'), ('МЕСЯЦ_РАБОТ', 'act.date', 'month_name'), ('МЕСЯЦ_РАБОТ_ГОД', 'act.date', 'month_year'),
+    ('СУММА_АКТА_НДС', 'act.vat', 'money'), ('ОПИСАНИЕ_РАБОТ', 'act.description', 'text'), ('ОБЪЕКТ_АКТА', 'act.object', 'text'), ('АДРЕС_ОБЪЕКТА_АКТА', 'act.object_address', 'text'), ('МЕСЯЦ_РАБОТ', 'act.date', 'month_name'), ('МЕСЯЦ_РАБОТ_ГОД', 'act.date', 'month_year'),
     ('СТОИМОСТЬ_МАТЕРИАЛОВ', 'estimate.materials', 'money'), ('СТОИМОСТЬ_РАБОТ', 'estimate.works', 'money'),
 ]
 
@@ -611,10 +685,12 @@ def context(db, mod, cid, act_id=None):
     if act_id:
         a = act(db, mod, act_id)
         a_net, a_vat, a_gross = act_amounts(c, a)
+        obj = next((o for o in objects(db, mod, cid) if o['id'] == a.get('object_id')), None)
         ctx.update({'act.number': a.get('act_number') or '', 'act.date': a.get('act_date') or '', 'act.amount': a_gross, 'act.amount_net': a_net, 'act.vat': a_vat,
-                    'act.description': a.get('description') or ''})
+                    'act.description': a.get('description') or '', 'act.object': (obj['name'] if obj else c.get('object_name')) or '',
+                    'act.object_address': (obj['address'] if obj else c.get('object_address')) or ''})
     else:
-        ctx.update({'act.number': '', 'act.date': '', 'act.amount': '', 'act.amount_net': '', 'act.vat': '', 'act.description': ''})
+        ctx.update({'act.number': '', 'act.date': '', 'act.amount': '', 'act.amount_net': '', 'act.vat': '', 'act.description': '', 'act.object': '', 'act.object_address': ''})
     return ctx
 
 
@@ -813,6 +889,11 @@ def save_act(db, mod, values, aid=None):
         raise ValueError('Ставка НДС — от 0 до 100 %')
     if data['amount'] < 0:
         raise ValueError('Сумма акта не может быть отрицательной')
+    if has_objects(mod) and 'object_id' in values:                              # акт составляется по объекту работ этого договора
+        oid = values.get('object_id') or None
+        if oid is not None and int(oid) not in {o['id'] for o in objects(db, mod, cid)}:
+            raise ValueError('Выбранный объект не относится к этому договору')
+        data['object_id'] = int(oid) if oid else None
     if not data['act_number']:
         n = db.fetchone(f"SELECT count(*) FROM {c['acts']} WHERE contract_id=?", (cid,))[0] + 1
         data['act_number'] = str(n)
