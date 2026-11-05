@@ -135,6 +135,7 @@ class MainWindow(QMainWindow):
         root_layout.setSpacing(0)
 
         sidebar = QFrame()
+        self.sidebar = sidebar
         sidebar.setFixedWidth(264);sidebar.setObjectName("sidebar")
         self.sidebar_layout = QVBoxLayout(sidebar)
 
@@ -397,11 +398,42 @@ class MainWindow(QMainWindow):
         base = self.windowTitle().split('  ·  новых ошибок')[0]
         self.setWindowTitle(f'{base}  ·  новых ошибок: {n}  (Дополнительно → Журнал ошибок)' if n else base)
 
+    COMPACT_BELOW = 980          # уже этого окно показывает меню только значками: влезает в половину экрана (Win + стрелка)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.set_compact_sidebar(event.size().width() < self.COMPACT_BELOW)
+
+    def set_compact_sidebar(self, compact):
+        """В узком окне боковое меню сворачивается до значков (названия — во всплывающих подсказках), в широком возвращается."""
+        if getattr(self, '_compact', None) == compact or not hasattr(self, 'sidebar'):
+            return
+        self._compact = compact
+        self.sidebar.setFixedWidth(64 if compact else 264)
+        for btn in getattr(self, 'tabs_buttons', []):
+            if compact:
+                btn.setProperty('_full_text', btn.text())
+                btn.setText('')
+            elif btn.property('_full_text') is not None:
+                btn.setText(btn.property('_full_text'))
+        for label in self.sidebar.findChildren(QLabel, 'navSection') + self.sidebar.findChildren(QLabel, 'brand'):
+            label.setVisible(not compact)
+        for b in self.sidebar.findChildren(QPushButton):
+            if b.property('type') == 'primary' and b not in getattr(self, 'tabs_buttons', []):
+                if compact:
+                    b.setProperty('_full_text', b.text())
+                    b.setText('🔍')
+                    b.setToolTip('Поиск · Ctrl+K')
+                elif b.property('_full_text') is not None:
+                    b.setText(b.property('_full_text'))
+
     def closeEvent(self, event):
         """Закрытие без зависания: окно скрывается сразу, нужная копия (если последней больше 30 минут) делается в фоне, затем программа завершается."""
         if getattr(self, '_closing', False):
             event.ignore()
             return
+        from . import window_modes
+        window_modes.save_geometry(self)
         if getattr(self, '_exit_ready', False) or not self.backup_service.exit_backup_needed():
             from .services import arm_exit_watchdog
             arm_exit_watchdog(15)
@@ -518,7 +550,10 @@ def main():
     db.init_db()
     from .security import login
     if not login(db):return
+    from . import window_modes
+    window_modes.install(app, str(DATA_DIR / 'window_geometry.ini'))
     window = MainWindow()
+    window_modes.attach(window)          # F11, размер и положение главного окна запоминаются
     window.show()
     try:
         from . import web_gateway
