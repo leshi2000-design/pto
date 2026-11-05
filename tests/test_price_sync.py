@@ -94,6 +94,8 @@ def test_material_card_has_link_and_selector(db, monkeypatch):
     card.input_price_selector.setText('.price')
     card.check_price_now()
     assert card.input_price.text() == '12.50'           # цена подставлена с сайта
+    card.input_purchase.setText('8')                      # у материала обязательна и цена закупки
+    card.input_purchase.textEdited.emit('8')
     card.save_data()
     assert db.fetchone('SELECT price,price_selector,url FROM materials WHERE id=?', (mid,)) == (12.5, '.price', 'https://shop.by/a')
     assert db.fetchone('SELECT price_selector FROM price_sources WHERE domain=?', ('shop.by',))[0] == '.price'

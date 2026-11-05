@@ -3,10 +3,11 @@
 """
 from PyQt6.QtWidgets import (QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton, QLabel,
                               QMessageBox, QDialog, QLineEdit, QComboBox, QTextEdit,
-                              QGroupBox, QDoubleSpinBox, QApplication)
+                              QGroupBox, QDoubleSpinBox, QApplication, QCheckBox)
 
 from .database import db
 from .work_pricing import compute_work_price
+from . import material_pricing as mp
 from .edit_lock_ui import guarded
 
 @guarded('material', lambda d: d.material_id, 'Карточка позиции')
@@ -52,6 +53,34 @@ class MaterialCardDialog(QDialog):
         h_opts.addLayout(v_purch)
         h_opts.addLayout(v_price)
         layout.addLayout(h_opts)
+
+        # цена материала: закупка + НДС + надбавка = продажа
+        self.grp_price = QGroupBox("Цена материала: закупка + НДС + надбавка = продажа")
+        pg = QGridLayout(self.grp_price)
+        self.chk_vat = QCheckBox("Начислять НДС на закупку")
+        self.spin_vat = QDoubleSpinBox(); self.spin_vat.setRange(0, 100); self.spin_vat.setDecimals(2); self.spin_vat.setValue(20.0); self.spin_vat.setSuffix(" %")
+        self.lbl_vat = QLabel("НДС: 0.00")
+        self.combo_markup = QComboBox()
+        for key, label in mp.MODES.items():
+            self.combo_markup.addItem(label, key)
+        self.input_markup = QLineEdit(); self.input_markup.setPlaceholderText("надбавка, руб")
+        self.input_markup_pct = QLineEdit(); self.input_markup_pct.setPlaceholderText("надбавка, %")
+        self.lbl_formula = QLabel(); self.lbl_formula.setWordWrap(True)
+        pg.addWidget(self.chk_vat, 0, 0); pg.addWidget(self.spin_vat, 0, 1); pg.addWidget(self.lbl_vat, 0, 2, 1, 2)
+        pg.addWidget(self.combo_markup, 1, 0, 1, 4)
+        pg.addWidget(QLabel("Надбавка, руб:"), 2, 0); pg.addWidget(self.input_markup, 2, 1)
+        pg.addWidget(QLabel("Надбавка, % от закупки:"), 2, 2); pg.addWidget(self.input_markup_pct, 2, 3)
+        pg.addWidget(self.lbl_formula, 3, 0, 1, 4)
+        layout.addWidget(self.grp_price)
+        self._pricing = False
+        self.chk_vat.toggled.connect(lambda *_: self.recalc_price("vat"))
+        self.spin_vat.valueChanged.connect(lambda *_: self.recalc_price("vat"))
+        self.combo_markup.currentIndexChanged.connect(lambda *_: self.recalc_price("mode"))
+        self.input_purchase.textEdited.connect(lambda *_: self.recalc_price("purchase"))
+        self.input_price.textEdited.connect(lambda *_: self.recalc_price("price"))
+        self.input_markup.textEdited.connect(lambda *_: self.recalc_price("markup"))
+        self.input_markup_pct.textEdited.connect(lambda *_: self.recalc_price("markup_pct"))
+        self.combo_type.currentTextChanged.connect(lambda *_: self.refresh_price_group())
 
         self.grp_formula = QGroupBox("Расчёт стоимости работы за 1 единицу")
         f = QGridLayout(self.grp_formula)
@@ -137,6 +166,9 @@ class MaterialCardDialog(QDialog):
         self.lbl_price_state.setText(f"На сайте: {price:.2f} ({how}). Текущая цена в справочнике: {self.input_price.text() or '0'}.")
         if QMessageBox.question(self, "Цена по ссылке", f"На сайте найдена цена {price:.2f}. Подставить её в цену продажи?") == QMessageBox.StandardButton.Yes:
             self.input_price.setText(f"{price:.2f}")
+            if self.combo_markup.currentData() == "manual":          # цена с сайта вводится как продажа — надбавка снова вычисляется по ней
+                self.combo_markup.setCurrentIndex(self.combo_markup.findData("auto"))
+            self.recalc_price("price")
 
     def show_price_history(self):
         from .price_sync_view import PriceHistoryDialog
@@ -163,6 +195,7 @@ class MaterialCardDialog(QDialog):
 
     def load_material_data(self):
         cert=db.fetchone("SELECT certificate_id FROM materials WHERE id=?",(self.material_id,));self.certificate_id=cert[0] if cert else None;self.refresh_certificate()
+        pricing = db.fetchone("SELECT coalesce(vat_on,0), coalesce(vat_pct,20), coalesce(markup_mode,'auto'), coalesce(markup,0) FROM materials WHERE id=?", (self.material_id,)) or (0, 20, 'auto', 0)
         row = db.fetchone("""SELECT category_id, name, unit, price, url, note, item_type, purchase_price,
                               labor_hours, hourly_rate, overhead_pct, profit_pct, other_costs, coalesce(price_selector,''), coalesce(price_status,'')
                               FROM materials WHERE id=?""", (self.material_id,))
@@ -191,11 +224,80 @@ class MaterialCardDialog(QDialog):
             self.spin_overhead_pct.setValue(float(overhead_pct or 0.0))
             self.spin_profit_pct.setValue(float(profit_pct or 0.0))
             self.spin_other_costs.setValue(float(other_costs or 0.0))
+        self._pricing = True
+        self.chk_vat.setChecked(bool(pricing[0]))
+        self.spin_vat.setValue(float(pricing[1]))
+        mode = pricing[2] if pricing[2] in mp.MODES else 'auto'
+        if mode == 'manual':                                   # цену продажи могли изменить в обход карточки (обновление с сайта) — тогда надбавку снова вычисляем по ней
+            expected = mp.calc(float(row[7] or 0) if row else 0, bool(pricing[0]), pricing[1], 'manual', None, pricing[3])['price']
+            if row and abs(float(row[3] or 0) - float(expected)) > 0.005:
+                mode = 'auto'
+        self.combo_markup.setCurrentIndex(max(0, self.combo_markup.findData(mode)))
+        if mode == 'manual':
+            self.input_markup.setText(f"{float(pricing[3]):.2f}")
+        self._pricing = False
         self.refresh_formula_visibility()
         self.update_formula_preview()
+        self.refresh_price_group()
 
     def refresh_formula_visibility(self):
         self.grp_formula.setVisible(self.combo_type.currentText() == "Работа")
+
+    # --- цена материала: закупка + НДС + надбавка = продажа
+    @staticmethod
+    def _num(line):
+        text = line.text().replace(' ', '').replace(',', '.').strip()
+        try:
+            return float(text) if text else 0.0
+        except ValueError:
+            return None
+
+    def refresh_price_group(self):
+        is_material = self.combo_type.currentText() == "Материал"
+        self.grp_price.setVisible(is_material)
+        if is_material:
+            self.recalc_price("mode")
+
+    def recalc_price(self, source):
+        """Пересчёт полей цены. В режиме «авто» вводят закупку и продажу — надбавка считается; в режиме «вручную» вводят закупку и надбавку (руб или %) — продажа считается."""
+        if self._pricing:
+            return
+        self._pricing = True
+        try:
+            mode = self.combo_markup.currentData()
+            manual = mode == "manual"
+            self.input_price.setReadOnly(manual)
+            self.input_markup.setReadOnly(not manual)
+            self.input_markup_pct.setReadOnly(not manual)
+            self.spin_vat.setEnabled(self.chk_vat.isChecked())
+            purchase = self._num(self.input_purchase)
+            if purchase is None:
+                self.lbl_formula.setText("Введите цену закупки числом.")
+                return
+            if manual and source == "markup_pct":
+                pct = self._num(self.input_markup_pct)
+                if pct is None:
+                    return
+                self.input_markup.setText(f"{mp.markup_from_percent(purchase, pct):.2f}")
+            markup = self._num(self.input_markup) if manual else None
+            price = self._num(self.input_price) if not manual else None
+            if (manual and markup is None) or (not manual and price is None):
+                self.lbl_formula.setText("Введите число.")
+                return
+            r = mp.calc(purchase, self.chk_vat.isChecked(), self.spin_vat.value(), mode, price, markup)
+            if manual:
+                self.input_price.setText(f"{r['price']:.2f}")
+                if source != "markup_pct":
+                    self.input_markup_pct.setText(f"{r['markup_pct']:.2f}")
+            else:
+                self.input_markup.setText(f"{r['markup']:.2f}")
+                self.input_markup_pct.setText(f"{r['markup_pct']:.2f}")
+            self.lbl_vat.setText(f"НДС: {r['vat']:.2f} руб.")
+            warn = " — ниже закупки с НДС (убыток)" if r['markup'] < 0 else ""
+            self.lbl_formula.setText(f"Закупка {float(purchase):.2f} + НДС {r['vat']:.2f} + надбавка {r['markup']:.2f} = продажа {r['price']:.2f} руб.{warn}")
+            self.lbl_formula.setStyleSheet("color: #A4262C;" if r['markup'] < 0 else "")
+        finally:
+            self._pricing = False
 
     def current_breakdown(self):
         return compute_work_price(self.spin_labor_hours.value(), self.spin_hourly_rate.value(),
@@ -211,6 +313,7 @@ class MaterialCardDialog(QDialog):
 
     def apply_formula_to_price(self):
         self.input_price.setText(f"{self.current_breakdown()['total']:.2f}")
+        self.recalc_price("price")
 
     def save_data(self):
         name = self.input_name.text().strip()
@@ -230,18 +333,39 @@ class MaterialCardDialog(QDialog):
             QMessageBox.warning(self,"Цена","Введите неотрицательную числовую цену.")
             return
 
+        item_type = self.combo_type.currentText()
+        mode = self.combo_markup.currentData()
+        markup_value = 0.0
+        if item_type == "Материал":
+            if mode == "manual":                            # продажа = закупка + НДС + надбавка (рассчитывается, как на экране)
+                markup_value = self._num(self.input_markup)
+                if markup_value is None:
+                    QMessageBox.warning(self, "Надбавка", "Введите надбавку числом.")
+                    return
+                price = float(mp.calc(purch, self.chk_vat.isChecked(), self.spin_vat.value(), "manual", None, markup_value)['price'])
+            try:
+                mp.validate(item_type, purch, price)
+            except ValueError as e:
+                QMessageBox.warning(self, "Цена материала", str(e))
+                return
+            r = mp.calc(purch, self.chk_vat.isChecked(), self.spin_vat.value(), mode, price, markup_value)
+            markup_value = float(r['markup'])
+            if markup_value < 0 and QMessageBox.question(self, "Цена ниже закупки", f"Цена продажи {price:.2f} меньше закупки с НДС ({purch:.2f} + {float(r['vat']):.2f}). Сохранить с убытком?") != QMessageBox.StandardButton.Yes:
+                return
+
         cat_id = self.combo_category.currentData()
         unit = self.input_unit.text().strip() or "шт"
         url = self.input_url.text().strip()
         note = self.input_note.toPlainText().strip()
-        item_type = self.combo_type.currentText()
 
         db.execute("""UPDATE materials
                       SET category_id=?, name=?, unit=?, price=?, url=?, note=?, item_type=?, purchase_price=?, certificate_id=?,
-                          labor_hours=?, hourly_rate=?, overhead_pct=?, profit_pct=?, other_costs=?
+                          labor_hours=?, hourly_rate=?, overhead_pct=?, profit_pct=?, other_costs=?,
+                          vat_on=?, vat_pct=?, markup_mode=?, markup=?
                       WHERE id=?""", (cat_id, name, unit, price, url, note, item_type, purch, self.certificate_id,
                                        self.spin_labor_hours.value(), self.spin_hourly_rate.value(),
                                        self.spin_overhead_pct.value(), self.spin_profit_pct.value(), self.spin_other_costs.value(),
+                                       int(self.chk_vat.isChecked()) if item_type == "Материал" else 0, self.spin_vat.value(), mode if item_type == "Материал" else 'auto', markup_value,
                                        self.material_id))
         from . import price_sync
         price_sync.remember_selector(db, self.material_id, url, self.input_price_selector.text()) if self.input_price_selector.text().strip() else db.execute("UPDATE materials SET price_selector='' WHERE id=?", (self.material_id,))

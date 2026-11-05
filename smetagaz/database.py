@@ -224,6 +224,9 @@ class DatabaseManager:
             mat_cols = [row[1] for row in c.fetchall()]
             if "item_type" not in mat_cols: c.execute("ALTER TABLE materials ADD COLUMN item_type TEXT DEFAULT 'Материал'")
             if "purchase_price" not in mat_cols: c.execute("ALTER TABLE materials ADD COLUMN purchase_price REAL DEFAULT 0.0")
+            # Цена материала: закупка + НДС + надбавка = продажа (НДС по галочке; надбавка вычисляется или вводится вручную).
+            for col, ddl in (("vat_on", "INTEGER DEFAULT 0"), ("vat_pct", "REAL DEFAULT 20.0"), ("markup_mode", "TEXT DEFAULT 'auto'"), ("markup", "REAL DEFAULT 0.0")):
+                if col not in mat_cols: c.execute(f"ALTER TABLE materials ADD COLUMN {col} {ddl}")
             # Formula-driven price for catalog "Работа" items; see work_pricing.compute_work_price.
             for col in ("labor_hours", "hourly_rate", "overhead_pct", "profit_pct", "other_costs"):
                 if col not in mat_cols: c.execute(f"ALTER TABLE materials ADD COLUMN {col} REAL DEFAULT 0.0")
