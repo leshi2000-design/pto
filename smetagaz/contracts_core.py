@@ -123,7 +123,8 @@ def _move_person_contracts_to_ip(db):
     if db.get_setting('smr_person_moved', '0') == '1':
         return
     cols = [r[1] for r in db.fetchall('PRAGMA table_info(smr_contracts)') if r[1] != 'id']
-    act_cols = [r[1] for r in db.fetchall('PRAGMA table_info(smr_acts)') if r[1] not in ('id', 'contract_id')]
+    ip_act_cols = {r[1] for r in db.fetchall('PRAGMA table_info(ip_acts)')}
+    act_cols = [r[1] for r in db.fetchall('PRAGMA table_info(smr_acts)') if r[1] not in ('id', 'contract_id') and r[1] in ip_act_cols]         # объекта работ у актов СМР (ИП) нет
     with db.transaction():
         for (old,) in db.fetchall("SELECT id FROM smr_contracts WHERE party_type='person' ORDER BY id"):
             row = db.fetchone(f"SELECT {','.join(cols)} FROM smr_contracts WHERE id=?", (old,))
