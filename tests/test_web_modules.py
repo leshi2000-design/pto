@@ -234,3 +234,48 @@ def test_montage_gsv_full_card(db, ed):
 def urllib_encode(form, extra):
     import urllib.parse
     return urllib.parse.urlencode(list(form.items()) + extra)
+
+
+def test_web_acts_statement_all_sections(db, ed, gateway):
+    import io
+    import openpyxl
+    cid, lid, gsv, gsn = seed(db)
+    contract = make_contract(db)
+    db.execute("UPDATE gsv_projects SET act_date='2026-10-12',act_signed=1,cost=250 WHERE id=?", (gsv,))
+    db.execute("UPDATE gsn_projects SET act_date='2026-10-20',act_signed=0,contract_amount=1000 WHERE id=?", (gsn,))
+    db.execute("UPDATE contracts SET acceptance_act_date='2026-09-30',act_signed=1,contract_amount=500 WHERE id=?", (contract,))             # другой месяц
+    smr = cc.save_contract(db, 'smr', dict(contract_date='2026-05-01', party_type='legal', legal_id=lid, object_name='Котельная', amount=1200, status='Действует'))
+    cc.save_act(db, 'smr', dict(contract_id=smr, act_number='1', act_date='2026-10-05', amount=300, signed=True))
+    cc.save_act(db, 'smr', dict(contract_id=smr, act_number='2', act_date='2026-10-25', amount=100, signed=False))
+    to = cc.save_contract(db, 'to', dict(contract_date='2026-05-02', party_type='legal', legal_id=lid, object_name='ТО', amount=50, status='Действует'))
+    cc.save_act(db, 'to', dict(contract_id=to, act_number='1', act_date='2026-10-31', amount=50, signed=True))
+    status, page, _h = ed.request('GET', '/acts?month=2026-10')
+    assert status == 200 and 'Ведомость актов за октябрь 2026' in page
+    for title in ('Проекты ГСВ', 'Монтаж ГСН', 'СМР (юрлица)', 'ТО (юрлица)'):
+        assert title in page, title
+    assert 'Монтаж ГСВ</h2>' not in page                                         # у «Монтаж ГСВ» в октябре актов нет (акт в сентябре) — раздел не расписывается
+    assert '/m/smr/%d' % smr in page and '/m/gsv/%d' % gsv in page and '/m/to/%d' % to in page and '/m/gsn/%d' % gsn in page      # ссылки на карточки договоров
+    assert '300.00' in page.replace(' ', ' ') or '300,00' in page                                                              # сумма акта
+    page_sep = ed.request('GET', '/acts?month=2026-09')[1]
+    assert f'/m/contracts/{contract}' in page_sep and 'Ведомость актов за сентябрь 2026' in page_sep
+    assert 'href="/acts?month=2026-09"' in page and 'href="/acts?month=2026-11"' in page                                            # переход к соседним месяцам
+    assert 'актов нет' in ed.request('GET', '/acts?month=2025-01')[1]
+    assert 'Ведомость актов за' in ed.request('GET', '/acts?month=abc')[1]                                                        # неверный месяц — период по умолчанию
+    import http.client
+    conn = http.client.HTTPConnection('127.0.0.1', gateway.port, timeout=10)
+    conn.request('GET', '/acts.xlsx?month=2026-10', headers={'Cookie': ed.cookie})
+    response = conn.getresponse()
+    raw = response.read()
+    assert response.status == 200 and 'spreadsheetml' in response.getheader('Content-Type') and 'attachment' in response.getheader('Content-Disposition')
+    wb = openpyxl.load_workbook(io.BytesIO(raw))
+    assert wb.sheetnames == ['Подписанные акты', 'Не подписаны']
+    cells = [str(c.value) for row in wb['Подписанные акты'].iter_rows() for c in row if c.value is not None]
+    assert 'Проекты ГСВ' in cells and 'СМР (юрлица)' in cells and 'ТО (юрлица)' in cells and 'ВСЕГО ПО ВСЕМ РАЗДЕЛАМ' in cells and 'Монтаж ГСН' not in cells
+    unsigned = [str(c.value) for row in wb['Не подписаны'].iter_rows() for c in row if c.value is not None]
+    assert 'Монтаж ГСН' in unsigned and 'СМР (юрлица)' in unsigned
+    # доступ: без входа нельзя, наблюдатель видит
+    assert Client(gateway).request('GET', '/acts')[0] == 303
+    wg.add_user(db, 'watcher', 'viewerpass1', 'viewer')
+    v = Client(gateway)
+    v.login('watcher', 'viewerpass1')
+    assert v.request('GET', '/acts?month=2026-10')[0] == 200 and 'Ведомость актов' in ed.request('GET', '/m/clients')[1]            # пункт меню есть везде

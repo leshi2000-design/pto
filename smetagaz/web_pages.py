@@ -4,8 +4,8 @@ import re
 
 from . import icons, status_icons
 
-NAV = [('Услуги', ['gsv', 'contracts', 'gsn', 'ip', 'fl']), ('Клиенты', ['clients', 'contacts']), ('Юрлица', ['legal_entities', 'smr', 'to', 'le_other']), ('Оплаты', ['payments']), ('Сервис', ['setup'])]
-EXTRA = {'payments': ('Журнал оплат', '/payments', 'estimates'), 'setup': ('Ярлык на рабочий стол', '/setup', 'workspace')}
+NAV = [('Услуги', ['gsv', 'contracts', 'gsn', 'ip', 'fl']), ('Клиенты', ['clients', 'contacts']), ('Юрлица', ['legal_entities', 'smr', 'to', 'le_other']), ('Оплаты и ведомости', ['payments', 'acts']), ('Сервис', ['setup'])]
+EXTRA = {'payments': ('Журнал оплат', '/payments', 'estimates'), 'acts': ('Ведомость актов', '/acts', 'docs'), 'setup': ('Ярлык на рабочий стол', '/setup', 'workspace')}
 ROLES_TITLE = {'viewer': 'Только просмотр', 'editor': 'Сотрудник'}
 
 

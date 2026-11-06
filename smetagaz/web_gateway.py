@@ -17,7 +17,7 @@ import time
 import urllib.parse
 from datetime import datetime
 
-from . import web_modules, web_pages as wp, web_payments as wpay
+from . import web_modules, web_pages as wp, web_payments as wpay, web_reports as wrep
 from .web_pages import esc
 
 SESSION_IDLE = 8 * 3600
@@ -337,6 +337,12 @@ class WebGateway:
             return self._send(h, 200, self._setup_page(session, nonce), nonce)
         if route in ('/download/pto-web-setup.bat', '/download/pto.url') and method == 'GET':
             return self._download(h, route.rsplit('/', 1)[1], nonce)
+        if route in ('/acts', '/acts.xlsx') and method == 'GET':
+            year, month = wrep.parse_month((query.get('month') or [''])[0])
+            if route == '/acts.xlsx':
+                return self._send(h, 200, wrep.acts_xlsx(self.db, year, month), nonce, ctype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                                  headers=(('Content-Disposition', f'attachment; filename="acts_{year:04d}-{month:02d}.xlsx"'),))
+            return self._send(h, 200, wrep.acts_page(self.db, year, month, session, self.modules, nonce, name), nonce)
         if route == '/pay' and method == 'POST':
             return self._pay(h, session, nonce)
         if route == '/payments' and method == 'GET':

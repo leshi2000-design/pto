@@ -85,7 +85,7 @@ def _statement(db, section, year, month):
             pay_date = max((norm_date(d) for d, _a, _n in cc.payments(db, mod, cid) if d), default='')
             path = cc.doc_path(db, mod, 'act', aid)
             amount = float(amount or 0)
-            row = dict(id=aid, number=number or '', contract_number=ct['contract_number'] or '', contract_date=norm_date(ct['contract_date']), act_date=act,
+            row = dict(id=aid, contract_id=cid, number=number or '', contract_number=ct['contract_number'] or '', contract_date=norm_date(ct['contract_date']), act_date=act,
                        client=cc.party_label(db, mod, ct), object=ct['object_name'] or '', address=ct['object_address'] or '', amount=amount, paid=paid, rest=float(ct['amount'] or 0) - paid, pay_date=pay_date,
                        file=path if path and os.path.isfile(path) else '')
             result['signed' if signed else 'unsigned'].append(row)
@@ -98,13 +98,80 @@ def _statement(db, section, year, month):
             continue
         paid = _paid(db, section, rid)
         amount = float(amount or 0)
-        row = dict(id=rid, number=number or '', contract_number=contract_number or '', contract_date=norm_date(contract_date), act_date=act, client=client or '',
+        row = dict(id=rid, contract_id=rid, number=number or '', contract_number=contract_number or '', contract_date=norm_date(contract_date), act_date=act, client=client or '',
                    object=obj or '', address=address or '', amount=amount, paid=paid, rest=amount - paid, pay_date=_pay_date(db, section, rid) if paid else '',
                    file=_act_file(db, section, rid))
         result['signed' if signed else 'unsigned'].append(row)
     for rows in result.values():
         rows.sort(key=lambda r: (r['act_date'], r['number']))
     return result
+
+
+def statement_all(db, year, month):
+    """Ведомость актов за месяц по ВСЕМ разделам: [{'section','title','signed','unsigned','signed_sum','unsigned_sum'}] в порядке разделов (разделы без актов тоже перечислены)."""
+    out = []
+    for section, title in SECTIONS.items():
+        data = statement(db, section, year, month)
+        out.append(dict(section=section, title=title, signed=data['signed'], unsigned=data['unsigned'], signed_sum=sum(r['amount'] for r in data['signed']),
+                        unsigned_sum=sum(r['amount'] for r in data['unsigned'])))
+    return out
+
+
+def export_all(db, year, month, path):
+    """Excel-ведомость за месяц по всем разделам: «Подписанные акты» и «Не подписаны» (колонка «Раздел», итоги по разделам и общий итог)."""
+    import openpyxl
+    from openpyxl.styles import Alignment, Font
+    groups = statement_all(db, year, month)
+    wb = openpyxl.Workbook()
+    headers = ['№', 'Раздел', 'Дата акта', '№ договора', 'Дата договора', 'Клиент', 'Объект', 'Адрес', 'Сумма, BYN', 'Оплачено, BYN', 'Дата оплаты', 'Остаток, BYN']
+
+    def fill(sheet, key, title):
+        sheet['A1'] = title
+        sheet['A1'].font = Font(bold=True, size=14)
+        sheet['A2'] = f'Все разделы. Сформировано {datetime.now():%d.%m.%Y %H:%M}'
+        sheet.append([])
+        sheet.append(headers)
+        for c in sheet[4]:
+            c.font = Font(bold=True)
+            c.alignment = Alignment(wrap_text=True, vertical='center')
+        n, total = 0, [0.0, 0.0, 0.0]
+        for g in groups:
+            rows = g[key]
+            for r in rows:
+                n += 1
+                sheet.append([n, g['title'], _fmt(r['act_date']), r['contract_number'], _fmt(r['contract_date']), r['client'], r['object'], r['address'], r['amount'], r['paid'],
+                              _fmt(r.get('pay_date', '')), r['rest']])
+            if rows:
+                sheet.append(['', f'Итого: {g["title"]}', f'актов: {len(rows)}', '', '', '', '', '', sum(r['amount'] for r in rows), sum(r['paid'] for r in rows), '', sum(r['rest'] for r in rows)])
+                for c in sheet[sheet.max_row]:
+                    c.font = Font(bold=True)
+                total = [total[0] + sum(r['amount'] for r in rows), total[1] + sum(r['paid'] for r in rows), total[2] + sum(r['rest'] for r in rows)]
+        sheet.append(['', 'ВСЕГО ПО ВСЕМ РАЗДЕЛАМ', f'актов: {n}', '', '', '', '', '', *total[:2], '', total[2]])
+        for c in sheet[sheet.max_row]:
+            c.font = Font(bold=True)
+        for col, width in zip('ABCDEFGHIJKL', (5, 22, 12, 14, 14, 30, 34, 36, 14, 14, 14, 14)):
+            sheet.column_dimensions[col].width = width
+        for row in sheet.iter_rows(min_row=5):
+            for c in row:
+                if isinstance(c.value, str):
+                    c.data_type = 's'
+                if isinstance(c.value, float):
+                    c.number_format = '#,##0.00'
+    ws = wb.active
+    ws.title = 'Подписанные акты'
+    fill(ws, 'signed', f'Ведомость подписанных актов за {period_label(year, month)}')
+    fill(wb.create_sheet('Не подписаны'), 'unsigned', f'Акты за {period_label(year, month)}, которые ещё не подписаны')
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(suffix='.xlsx', dir=path.parent)
+    os.close(fd)
+    try:
+        wb.save(tmp)
+        os.replace(tmp, path)
+    except Exception:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+    return groups
 
 
 def _fmt(day):
