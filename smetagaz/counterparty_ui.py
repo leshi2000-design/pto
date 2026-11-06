@@ -568,7 +568,8 @@ class ContractDialog(QDialog):
         self.vat_included.toggled.connect(self.refresh_vat)
         r += 1
         self.cmb_status = QComboBox()
-        self.cmb_status.addItems(cc.STATUSES)
+        self.cmb_status.addItems(cc.statuses(self.mod))
+        self.cmb_status.setCurrentText(cc.STATUSES[0])          # новый договор по умолчанию «Действует» («Предварительно» выбирается вручную)
         self.signed = QCheckBox('Договор подписан')
         g.addWidget(QLabel('Статус'), r, 0)
         g.addWidget(self.cmb_status, r, 1)
@@ -586,7 +587,7 @@ class ContractDialog(QDialog):
             g.addWidget(self.status_badge, r, 1)
             self.manual_status = QComboBox()
             self.manual_status.addItem('Определять автоматически', '')
-            for key in cc.VISUAL_KEYS:
+            for key in cc.visual_keys(self.mod):
                 self.manual_status.addItem(status_icons.icon(key), status_icons.title(key), key)
             self.manual_status.setToolTip('Проставьте статус вручную, если автоматический не подходит; «Определять автоматически» возвращает расчёт по сроку и статусу договора')
             g.addWidget(self.manual_status, r, 2, 1, 2)
@@ -712,7 +713,7 @@ class ContractDialog(QDialog):
         key = cc.display_status(dict(status=self.cmb_status.currentText(), start_date=self.start.value(), end_date=self.end.value(), annual=self.annual.isChecked(),
                                     status_manual=self.manual_status.currentData() or ''))
         self.status_badge.setText(f'<span style="color:{status_icons.color(key)}"><b>{status_icons.title(key)}</b></span>')
-        self.status_badge.setToolTip('Завершён — статус «Завершён»; Просрочен — срок окончания прошёл; Годовой — отмечен «Годовой договор» или срок от 360 дней; иначе — В работе.')
+        self.status_badge.setToolTip('Предварительно — статус «Предварительно» (договор с юрлицом ещё не заключён окончательно); Завершён — статус «Завершён»; Просрочен — срок окончания прошёл; Годовой — отмечен «Годовой договор» или срок от 360 дней; иначе — В работе.')
 
     def number_typed(self, text):
         """Пользователь ввёл номер сам: автоматическая подстановка по дате больше его не трогает (пустое поле возвращает автоматику)."""
@@ -1297,13 +1298,13 @@ class ContractsRegistry(QWidget):
         self.cmb_status = QComboBox()
         self.visual = mod in VAT_MODS                              # визуальные статусы со значками (в «СМР (ИП)» остаются прежние)
         if self.visual:
-            for key, text in cc.STATUS_FILTERS:
+            for key, text in cc.status_filters(mod):
                 self.cmb_status.addItem(text if not key else text, key or None)
                 if key:
                     self.cmb_status.setItemIcon(self.cmb_status.count() - 1, status_icons.icon(key))
         else:
             self.cmb_status.addItem('Все статусы', None)
-            for s in cc.STATUSES:
+            for s in cc.statuses(mod):
                 self.cmb_status.addItem(s, s)
         self.cmb_status.currentIndexChanged.connect(self.search_changed)
         bar.addWidget(self.cmb_status)
@@ -1332,7 +1333,7 @@ class ContractsRegistry(QWidget):
             status_btn = QPushButton('Статус…')
             status_btn.setToolTip('Проставить визуальный статус выбранного договора вручную')
             menu = QMenu(status_btn)
-            for key in cc.VISUAL_KEYS:
+            for key in cc.visual_keys(self.mod):
                 menu.addAction(status_icons.icon(key), status_icons.title(key)).triggered.connect(lambda _=False, k=key: self.set_status(k))
             menu.addSeparator()
             menu.addAction('Определять автоматически').triggered.connect(lambda: self.set_status(''))

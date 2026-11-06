@@ -2,8 +2,8 @@
 from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 
-COLORS = {'done': '#15803D', 'work': '#2563EB', 'overdue': '#DC2626', 'annual': '#7C3AED', 'cancelled': '#6B7280'}
-TITLES = {'done': 'Завершён', 'work': 'В работе', 'overdue': 'Просрочен', 'annual': 'Годовой', 'cancelled': 'Расторгнут'}
+COLORS = {'preliminary': '#B45309', 'done': '#15803D', 'work': '#2563EB', 'overdue': '#DC2626', 'annual': '#7C3AED', 'cancelled': '#6B7280'}
+TITLES = {'preliminary': 'Предварительно', 'done': 'Завершён', 'work': 'В работе', 'overdue': 'Просрочен', 'annual': 'Годовой', 'cancelled': 'Расторгнут'}
 _cache = {}
 
 
@@ -30,7 +30,10 @@ def pixmap(key, size=16):
     p.setPen(pen)
     p.setBrush(Qt.BrushStyle.NoBrush)
     s = side / 16.0
-    if key == 'done':
+    if key == 'preliminary':                                                          # три точки: договор ещё в проработке
+        for x in (4.6, 8, 11.4):
+            p.drawPoint(QPointF(x * s, 8 * s))
+    elif key == 'done':
         p.drawPolyline([QPointF(4.2 * s, 8.4 * s), QPointF(7 * s, 11 * s), QPointF(11.8 * s, 5.2 * s)])
     elif key == 'work':
         p.drawEllipse(QRectF(3.8 * s, 3.8 * s, 8.4 * s, 8.4 * s))

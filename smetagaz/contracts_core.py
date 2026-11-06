@@ -35,6 +35,13 @@ DOC_KINDS = {
     'statement': ('Справка о стоимости выполненных работ', 'act', 'Справка'),
 }
 STATUSES = ('Действует', 'Завершён', 'Расторгнут')
+PRELIMINARY = 'Предварительно'                    # договор с юрлицом, который ещё не заключён окончательно (для СМР юрлиц, ТО юрлиц и «Прочих»)
+LEGAL_MODS = tuple(m for m, c in MODS.items() if c['party'] == 'legal')
+
+
+def statuses(mod):
+    """Статусы договора раздела: у договоров с юрлицами добавлен «Предварительно» (первым в списке)."""
+    return (PRELIMINARY, *STATUSES) if mod in LEGAL_MODS else STATUSES
 LEGAL_FIELDS = ('full_name', 'legal_address', 'postal_address', 'bank', 'bic', 'bank_address', 'account', 'okpo', 'head_position', 'head_name', 'head_position_gen', 'head_name_gen', 'basis')
 
 
@@ -456,6 +463,15 @@ def link_estimate(db, cid, eid, mod='smr'):
 
 STATUS_FILTERS = (('', 'Все статусы'), ('work', 'В работе'), ('overdue', 'Просрочен'), ('annual', 'Годовой'), ('done', 'Завершён'), ('cancelled', 'Расторгнут'))
 VISUAL_KEYS = ('work', 'overdue', 'annual', 'done', 'cancelled')
+
+
+def status_filters(mod):
+    """Фильтр реестра по визуальному статусу; у договоров с юрлицами — ещё «Предварительно»."""
+    return STATUS_FILTERS[:1] + (('preliminary', 'Предварительно'),) + STATUS_FILTERS[1:] if mod in LEGAL_MODS else STATUS_FILTERS
+
+
+def visual_keys(mod):
+    return ('preliminary', *VISUAL_KEYS) if mod in LEGAL_MODS else VISUAL_KEYS
 ANNUAL_DAYS = 360                                  # договор на срок от 360 дней считается годовым, даже если признак не отмечен
 
 
@@ -463,9 +479,11 @@ def display_status(row, today=None):
     """Ключ визуального статуса договора: 'done' (Завершён), 'cancelled' (Расторгнут), 'overdue' (срок окончания прошёл, а договор не завершён),
     'annual' (Годовой) или 'work' (В работе)."""
     manual = row.get('status_manual') or ''
-    if manual in VISUAL_KEYS:                       # статус, проставленный вручную, сильнее автоматического
+    if manual in VISUAL_KEYS or manual == 'preliminary':          # статус, проставленный вручную, сильнее автоматического
         return manual
     status = row.get('status') or 'Действует'
+    if status == PRELIMINARY:
+        return 'preliminary'
     if status == 'Завершён':
         return 'done'
     if status == 'Расторгнут':
@@ -490,9 +508,11 @@ def status_condition(key, alias='c', today=None):
 
 def _auto_status_condition(key, alias, today):
     a, day = alias, (today or date.today()).isoformat()
-    active = f"coalesce({a}.status,'Действует') NOT IN ('Завершён','Расторгнут')"
+    active = f"coalesce({a}.status,'Действует') NOT IN ('Завершён','Расторгнут','Предварительно')"
     overdue = f"(coalesce({a}.end_date,'')<>'' AND {a}.end_date<?)"
     annual = f"({a}.annual=1 OR (coalesce({a}.start_date,'')<>'' AND coalesce({a}.end_date,'')<>'' AND julianday({a}.end_date)-julianday({a}.start_date)>={ANNUAL_DAYS}))"
+    if key == 'preliminary':
+        return f"{a}.status='Предварительно'", []
     if key == 'done':
         return f"{a}.status='Завершён'", []
     if key == 'cancelled':
@@ -846,6 +866,10 @@ def save_contract(db, mod, values, cid=None):
               'amount_from_acts', 'annual', 'status_manual']
     fields += ['direction', 'client_id', 'source_type', 'source_id'] if mod == 'le' else ['party_type', 'person_id', 'legal_id', 'estimate_id']
     data = {k: values.get(k) for k in fields if k in values}
+    if data.get('status') and data['status'] not in statuses(mod):
+        raise ValueError(f'Статус «{data["status"]}» в этом разделе недоступен')
+    if data.get('status_manual') and data['status_manual'] not in visual_keys(mod):
+        raise ValueError('Неизвестный визуальный статус')
     if mod == 'le' and not data.get('client_id'):
         raise ValueError('Выберите юрлицо')
     if mod != 'le':
@@ -911,7 +935,7 @@ def save_act(db, mod, values, aid=None):
 
 def set_visual_status(db, mod, cid, key):
     """Проставляет визуальный статус вручную; пустой ключ возвращает автоматический расчёт."""
-    if key and key not in VISUAL_KEYS:
+    if key and key not in visual_keys(mod):
         raise ValueError('Неизвестный статус')
     db.execute(f"UPDATE {cfg(mod)['contracts']} SET status_manual=? WHERE id=?", (key or '', cid))
 
@@ -997,6 +1021,6 @@ def check(db, mod, kind, ref_id):
     return out
 
 
-def status_titles():
+def status_titles(mod=None):
     """[(ключ, название)] визуальных статусов договора (для выбора «вручную» в веб-доступе)."""
-    return [(k, t) for k, t in STATUS_FILTERS if k and k != 'cancelled'] + [('cancelled', 'Расторгнут')]
+    return [(k, t) for k, t in status_filters(mod) if k and k != 'cancelled'] + [('cancelled', 'Расторгнут')]

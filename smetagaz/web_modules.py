@@ -385,7 +385,7 @@ def counterparty_module(mod, section, icon):
                     date.fromisoformat(data[k])
                 except ValueError:
                     raise ValueError('Даты вводятся в формате ГГГГ-ММ-ДД') from None
-        if data['status'] not in cc.STATUSES:
+        if data['status'] not in cc.statuses(mod):
             raise ValueError('Неизвестный статус договора')
         if legal_mode:
             data.update(client_id=int(values.get('legal_id') or 0) or None, direction=values.get('direction') or 'Монтажные работы')
@@ -429,9 +429,9 @@ def counterparty_module(mod, section, icon):
     fields += [Field('object_name', 'Объект', group=group), Field('object_address', 'Адрес объекта', group=group), Field('subject', 'Предмет договора', group=group),
                Field('start_date', 'Начало работ', 'date', group), Field('end_date', 'Окончание работ', 'date', group), Field('amount', 'Сумма договора, BYN', 'number', group),
                Field('vat_included', 'В сумму включён НДС', 'check', group), Field('vat_rate', 'Ставка НДС, %', 'number', group), Field('signed', 'Договор подписан', 'check', group),
-               Field('status', 'Статус', 'select', group, choices=lambda db: [(s, s) for s in cc.STATUSES])]
+               Field('status', 'Статус', 'select', group, choices=lambda db: [(s, s) for s in cc.statuses(mod)])]
     if vat:
-        fields += [Field('status_manual', 'Визуальный статус вручную', 'select', group, choices=lambda db: [('', 'Определять автоматически')] + [(k, t) for k, t in cc.status_titles()]),
+        fields += [Field('status_manual', 'Визуальный статус вручную', 'select', group, choices=lambda db: [('', 'Определять автоматически')] + [(k, t) for k, t in cc.status_titles(mod)]),
                    Field('annual', 'Годовой договор', 'check', group), Field('amount_from_acts', 'Сумма договора = сумма актов', 'check', group)]
     fields += [Field('note', 'Примечание', 'textarea', group)]
     act_fields = [Field('act_number', '№'), Field('act_date', 'Дата', 'date'), Field('amount', 'Сумма', 'number'), Field('description', 'Описание'), Field('signed', 'Подписан', 'check'),
