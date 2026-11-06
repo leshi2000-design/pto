@@ -113,7 +113,7 @@ def status_chip(key):
     return f'<span class="chip">{esc(key)}</span>' if key else ''
 
 
-def list_page(db, module, items, query, session, modules, message='', app_name='ПТО', can_create=False):
+def list_page(db, module, items, query, session, modules, message='', app_name='ПТО', can_create=False, sort=''):
     head = ''.join(f'<th>{esc(c)}</th>' for c in module.columns) + '<th></th>'
     rows = ''
     for it in items:
@@ -126,7 +126,20 @@ def list_page(db, module, items, query, session, modules, message='', app_name='
             extra += f' <a href="tel:{esc(re.sub(r"[^0-9+]", "", phone))}">{esc(phone)}</a>'
         rows += f'<tr>{cells}<td><a class="c" href="{link}">{extra}</a></td></tr>'
     new = f'<a class="btn" href="/m/{esc(module.key)}/new">+ Добавить</a>' if can_create else ''
-    body = (f'<h1>{esc(module.title)}</h1><form class="bar" method="get" action="/m/{esc(module.key)}"><input type="search" name="q" value="{esc(query)}" placeholder="Поиск…"><button class="btn">Найти</button>{new}</form>'
+    sort_bar = ''
+    if module.sortable:                                  # сортировка списка: номер / дата / статус; повторное нажатие меняет направление
+        from . import contracts_core as cc
+        mod = 'le' if module.key == 'le_other' else module.key
+        field, direction = cc.parse_sort(sort, None) or cc.parse_sort(db.get_setting(f'sort_contracts_{mod}', ''), ('number', 'desc'))
+        links = ''
+        for key, label in cc.SORT_FIELDS:
+            active = key == field
+            nxt = ('desc' if direction == 'asc' else 'asc') if active else 'asc'
+            arrow = (' ▲' if direction == 'asc' else ' ▼') if active else ''
+            href = f'/m/{esc(module.key)}?q={esc(query)}&amp;sort={key}:{nxt}'
+            links += f'<a class="btn {"" if active else "sec"} sm" href="{href}">{esc(label.replace("По ", "", 1))}{arrow}</a> '
+        sort_bar = f'<p class="muted">Сортировка: {links}</p>'
+    body = (f'<h1>{esc(module.title)}</h1><form class="bar" method="get" action="/m/{esc(module.key)}"><input type="search" name="q" value="{esc(query)}" placeholder="Поиск…"><button class="btn">Найти</button>{new}</form>{sort_bar}'
             + (f'<table><thead><tr>{head}</tr></thead><tbody>{rows}</tbody></table>' if items else '<p class="muted">Ничего не найдено.</p>') + f'<p class="muted">Показано: {len(items)}</p>')
     return layout(db, module.title, body, session, module.key, modules, message, app_name=app_name)
 

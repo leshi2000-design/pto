@@ -524,6 +524,37 @@ def _auto_status_condition(key, alias, today):
     return f'{active} AND NOT {overdue} AND NOT {annual}', [day]
 
 
+# --- СОРТИРОВКА РЕЕСТРА ----------------------------------------------------------------------
+
+SORT_FIELDS = (('number', 'По номеру договора'), ('date', 'По дате заключения'), ('status', 'По статусу'))
+STATUS_ORDER = ('preliminary', 'work', 'overdue', 'annual', 'done', 'cancelled')          # порядок статусов при сортировке «по статусу» (по возрастанию)
+DEFAULT_SORT = ('number', 'asc')
+
+
+def parse_sort(text, default=DEFAULT_SORT):
+    """'date:desc' -> ('date', 'desc'); неверное значение — порядок по умолчанию."""
+    field, _, direction = str(text or '').partition(':')
+    return (field, direction) if field in dict(SORT_FIELDS) and direction in ('asc', 'desc') else default
+
+
+def order_sql(mod, field='number', direction='asc', alias='c', today=None):
+    """(SQL «ORDER BY …» без слова ORDER BY, параметры). Номер — по году и порядковому номеру (а не по тексту: 02-05/26 раньше 10-05/26); дата — договоры без даты всегда в конце;
+    статус — по визуальному статусу (STATUS_ORDER), внутри статуса по номеру. direction: 'asc' | 'desc'."""
+    a = alias
+    d = 'DESC' if direction == 'desc' else 'ASC'
+    number = f"coalesce({a}.year_num,99) {d}, coalesce({a}.seq_num,0) {d}, {a}.contract_number {d}, {a}.id {d}"
+    if field == 'date':
+        return f"(coalesce({a}.contract_date,'')='') ASC, {a}.contract_date {d}, {number}", []
+    if field == 'status':
+        whens, params = [], []
+        for rank, key in enumerate(STATUS_ORDER):
+            cond, extra = status_condition(key, a, today)
+            whens.append(f'WHEN {cond} THEN {rank}')
+            params.extend(extra)
+        return f"CASE {' '.join(whens)} ELSE {len(STATUS_ORDER)} END {d}, {number}", params
+    return number, []
+
+
 # --- ПЕРЕНОС ДОГОВОРА МЕЖДУ РАЗДЕЛАМИ ЮРЛИЦ ---------------------------------------------------
 
 MOVABLE = ('smr', 'to', 'le')          # разделы, между которыми переносятся договоры с юрлицами

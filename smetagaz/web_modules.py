@@ -30,13 +30,15 @@ class Child:
 
 
 class Module:
+    sortable = False             # в списке можно выбирать сортировку (номер / дата / статус)
     owner = None                 # владелец в книге платежей (payments_domain.OWNERS); None — оплат нет
     dossier = None               # 'person' / 'legal': карточка — это клиент, у которого есть досье
 
-    def __init__(self, key, title, section, icon, columns, fields, search, load, save, blank=None, children=(), lock=None, copy=None, chips=None, can_create=True):
+    def __init__(self, key, title, section, icon, columns, fields, search, load, save, blank=None, children=(), lock=None, copy=None, chips=None, can_create=True, sortable=False):
         self.key, self.title, self.section, self.icon = key, title, section, icon
         self.columns, self.fields, self.search, self.load, self.save = columns, fields, search, load, save
         self.blank, self.children, self.lock, self.copy, self.chips, self.can_create = blank, children, lock, copy, chips, can_create
+        self.sortable = sortable
 
     def heading(self, values):
         return values.get('_title') or self.title
@@ -345,11 +347,16 @@ def counterparty_module(mod, section, icon):
             return "coalesce((SELECT name FROM le_clients WHERE id=c.client_id),'')"
         return "CASE WHEN c.party_type='legal' THEN coalesce((SELECT name FROM le_clients WHERE id=c.legal_id),'') ELSE coalesce((SELECT name FROM crm.clients WHERE id=c.person_id),'') END"
 
-    def search(db, q, limit=200):
+    def search(db, q, limit=200, sort=''):
         party = party_sql()
         clause, params = _like(q, 'c.contract_number', 'c.object_name', 'c.object_address', 'c.subject', party)
+        if mod in cc.LEGAL_MODS:                              # сортировка (та же, что в программе): запрос ?sort=поле:направление, иначе сохранённая в программе, иначе новые сверху
+            field, direction = cc.parse_sort(sort, None) or cc.parse_sort(db.get_setting(f'sort_contracts_{mod}', ''), ('number', 'desc'))
+            order, order_params = cc.order_sql(mod, field, direction)
+        else:
+            order, order_params = "coalesce(c.year_num,99) DESC, coalesce(c.seq_num,0) DESC, c.id DESC", []
         rows = db.fetchall(f"SELECT c.id,c.contract_number,c.contract_date,{party},coalesce(nullif(c.object_address,''),c.object_name,''),coalesce(c.amount,0),c.status,c.start_date,c.end_date,coalesce(c.annual,0),"
-                           f"coalesce(c.status_manual,''),coalesce(c.signed,0) FROM {table} c WHERE {clause} ORDER BY coalesce(c.year_num,99) DESC, coalesce(c.seq_num,0) DESC, c.id DESC LIMIT ?", (*params, limit))
+                           f"coalesce(c.status_manual,''),coalesce(c.signed,0) FROM {table} c WHERE {clause} ORDER BY {order} LIMIT ?", (*params, *order_params, limit))
         out = []
         for r in rows:
             key = cc.display_status(dict(status=r[6], start_date=r[7], end_date=r[8], annual=r[9], status_manual=r[10]))
@@ -437,7 +444,7 @@ def counterparty_module(mod, section, icon):
     act_fields = [Field('act_number', '№'), Field('act_date', 'Дата', 'date'), Field('amount', 'Сумма', 'number'), Field('description', 'Описание'), Field('signed', 'Подписан', 'check'),
                   Field('vat_included', 'НДС в сумме', 'check'), Field('vat_rate', 'Ставка НДС', 'number')]
     return Module(mod, c['title'], section, icon, ['№', 'Дата', 'Контрагент', 'Объект', 'Сумма'], fields, search, load, save, blank=blank,
-                  children=[Child('acts', 'Акты', act_fields, act_rows, lambda db, cid, rows_: _save_acts(db, cid, rows_))], lock=('lecontract' if mod == 'le' else f'cp:{mod}'), chips='status')
+                  children=[Child('acts', 'Акты', act_fields, act_rows, lambda db, cid, rows_: _save_acts(db, cid, rows_))], lock=('lecontract' if mod == 'le' else f'cp:{mod}'), chips='status', sortable=mod in cc.LEGAL_MODS)
 
 
 # --- СПРАВОЧНИК ЮРЛИЦ -------------------------------------------------------------------------------------

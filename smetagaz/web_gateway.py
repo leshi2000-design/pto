@@ -369,7 +369,9 @@ class WebGateway:
             if method != 'GET':
                 return self._notice(h, 405, 'Метод не поддерживается', session, nonce)
             q = (query.get('q') or [''])[0]
-            return self._send(h, 200, wp.list_page(self.db, module, module.search(self.db, q), q, session, self.modules, self._flash(query), app_name=name, can_create=module.can_create and session['role'] == 'editor'), nonce)
+            sort = (query.get('sort') or [''])[0]
+            items = module.search(self.db, q, sort=sort) if module.sortable else module.search(self.db, q)
+            return self._send(h, 200, wp.list_page(self.db, module, items, q, session, self.modules, self._flash(query), app_name=name, can_create=module.can_create and session['role'] == 'editor', sort=sort), nonce)
         if m.group(2) == 'new':
             if not module.can_create:
                 return self._notice(h, 404, 'В этом разделе новые записи создаются в программе', session, nonce)

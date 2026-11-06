@@ -1314,6 +1314,19 @@ class ContractsRegistry(QWidget):
         self.cmb_signed.addItem('Неподписанные', 0)
         self.cmb_signed.currentIndexChanged.connect(self.search_changed)
         bar.addWidget(self.cmb_signed)
+        self.sortable = mod in cc.LEGAL_MODS                          # сортировка настраивается у договоров с юрлицами
+        self.sort_field, self.sort_dir = cc.parse_sort(db.get_setting(f'sort_contracts_{mod}', ''))
+        self.cmb_sort = QComboBox()
+        self.btn_sort_dir = QPushButton()
+        if self.sortable:
+            for key, text in cc.SORT_FIELDS:
+                self.cmb_sort.addItem(text, key)
+            self.cmb_sort.setToolTip('Сортировка списка договоров: по номеру, дате заключения или статусу. Можно также щёлкнуть по заголовку колонки.')
+            self.btn_sort_dir.setToolTip('Направление сортировки: по возрастанию / по убыванию')
+            self.cmb_sort.currentIndexChanged.connect(self.sort_changed)
+            self.btn_sort_dir.clicked.connect(self.toggle_sort_direction)
+            bar.addWidget(self.cmb_sort)
+            bar.addWidget(self.btn_sort_dir)
         self.search = QLineEdit()
         self.search.setPlaceholderText('Номер, контрагент, объект, телефон, адрес…')
         self.search.textChanged.connect(self.search_changed)
@@ -1344,6 +1357,11 @@ class ContractsRegistry(QWidget):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.doubleClicked.connect(self.edit)
         self.tools = RegistryTools(db, 'contracts_' + self.mod, self.table, self.search, bar)
+        if self.sortable:
+            self.table.horizontalHeader().setSectionsClickable(True)
+            self.table.horizontalHeader().setSortIndicatorShown(True)
+            self.table.horizontalHeader().sectionClicked.connect(self.header_clicked)
+            self.refresh_sort_ui()
         layout.addWidget(self.table, 1)
         self.total = QLabel('')
         layout.addWidget(self.total)
@@ -1355,6 +1373,40 @@ class ContractsRegistry(QWidget):
     def search_changed(self, *_):
         self.pager.reset()
         self.load_data()
+
+    # --- сортировка списка (договоры с юрлицами)
+    SORT_COLUMNS = {0: 'number', 1: 'date', 8: 'status'}          # колонки таблицы, по заголовку которых можно сортировать
+
+    def refresh_sort_ui(self):
+        self.cmb_sort.blockSignals(True)
+        self.cmb_sort.setCurrentIndex(max(0, self.cmb_sort.findData(self.sort_field)))
+        self.cmb_sort.blockSignals(False)
+        self.btn_sort_dir.setText('▲ по возрастанию' if self.sort_dir == 'asc' else '▼ по убыванию')
+        column = next((c for c, f in self.SORT_COLUMNS.items() if f == self.sort_field), -1)
+        self.table.horizontalHeader().setSortIndicator(column, Qt.SortOrder.AscendingOrder if self.sort_dir == 'asc' else Qt.SortOrder.DescendingOrder)
+
+    def save_sort(self):
+        db.set_setting(f'sort_contracts_{self.mod}', f'{self.sort_field}:{self.sort_dir}')          # выбор запоминается для каждого раздела
+        self.refresh_sort_ui()
+        self.search_changed()
+
+    def sort_changed(self, *_):
+        self.sort_field = self.cmb_sort.currentData() or 'number'
+        self.save_sort()
+
+    def toggle_sort_direction(self):
+        self.sort_dir = 'desc' if self.sort_dir == 'asc' else 'asc'
+        self.save_sort()
+
+    def header_clicked(self, column):
+        field = self.SORT_COLUMNS.get(column)
+        if not field:
+            return
+        if field == self.sort_field:
+            self.sort_dir = 'desc' if self.sort_dir == 'asc' else 'asc'
+        else:
+            self.sort_field, self.sort_dir = field, 'asc'
+        self.save_sort()
 
     def load_data(self, *_):
         c = cc.cfg(self.mod)
@@ -1384,9 +1436,10 @@ class ContractsRegistry(QWidget):
         paid_sql = ("(SELECT coalesce(sum(p.amount),0) FROM payments p WHERE (c.estimate_id IS NOT NULL AND p.estimate_id=c.estimate_id) OR "
                     "(c.estimate_id IS NULL AND p.estimate_id IS NULL AND p.owner_type=? AND p.owner_id=c.id))") if cc.cfg(self.mod)['estimate'] else \
                    "(SELECT coalesce(sum(p.amount),0) FROM payments p WHERE p.estimate_id IS NULL AND p.owner_type=? AND p.owner_id=c.id)"
+        order, order_params = cc.order_sql(self.mod, self.sort_field, self.sort_dir) if self.sortable else cc.order_sql(self.mod)
         rows = db.fetchall(f"""SELECT c.id,c.contract_number,c.contract_date,{label},coalesce(nullif(c.object_address,''),c.object_name),c.amount,{paid_sql},
             (SELECT count(*) FROM {c['acts']} WHERE contract_id=c.id),coalesce(c.signed,0),c.status,c.start_date,c.end_date,coalesce(c.annual,0),coalesce(c.status_manual,'')
-            FROM {c['contracts']} c {join} WHERE {cond} ORDER BY coalesce(c.year_num,99) ASC, coalesce(c.seq_num,0) ASC, c.contract_number ASC, c.id ASC LIMIT ? OFFSET ?""", (c['contracts'], *params, self.pager.size, self.pager.offset))
+            FROM {c['contracts']} c {join} WHERE {cond} ORDER BY {order} LIMIT ? OFFSET ?""", (c['contracts'], *params, *order_params, self.pager.size, self.pager.offset))
         self.table.setRowCount(len(rows))
         for r, (rid, number, day, who, obj, amount_c, paid, n_acts, signed_c, status, start, end, annual, manual) in enumerate(rows):
             key = cc.display_status(dict(status=status, start_date=start, end_date=end, annual=annual, status_manual=manual)) if self.visual else ''
