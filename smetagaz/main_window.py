@@ -434,6 +434,12 @@ class MainWindow(QMainWindow):
             return
         from . import window_modes
         window_modes.save_geometry(self)
+        ctl = getattr(self, 'background', None)
+        if ctl is not None and not getattr(self, '_force_quit', False) and not getattr(self, '_exit_ready', False) and ctl.hide_on_close():
+            event.ignore()                      # работа в фоне: окно сворачивается в значок у часов, программа (веб-доступ, копии) продолжает работать
+            self.hide()
+            ctl.window_hidden()
+            return
         if getattr(self, '_exit_ready', False) or not self.backup_service.exit_backup_needed():
             from .services import arm_exit_watchdog
             arm_exit_watchdog(15)
@@ -442,6 +448,8 @@ class MainWindow(QMainWindow):
             from . import edit_locks
             edit_locks.release_all(db)          # открытые карточки не должны оставаться «занятыми»
             event.accept()
+            if not QApplication.quitOnLastWindowClosed():          # режим «в фоне»: приложение само не завершается при закрытии окна — завершаем явно
+                QTimer.singleShot(0, QApplication.quit)
             return
         event.ignore()
         self._closing = True
@@ -453,6 +461,11 @@ class MainWindow(QMainWindow):
         self._exit_timer = QTimer(self)
         self._exit_timer.timeout.connect(self._finish_exit)
         self._exit_timer.start(100)
+
+    def request_quit(self):
+        """Настоящий выход из программы (в отличие от крестика в режиме «в фоне», который только сворачивает окно)."""
+        self._force_quit = True
+        self.close()
 
     def _finish_exit(self):
         if not self._exit_future.done() and time.monotonic() - self._exit_started < 180:
@@ -531,6 +544,21 @@ def main():
             from PyQt6.QtGui import QIcon
             app.setWindowIcon(QIcon(str(icon_file)))
             break
+    from . import tray_service
+    holder = {}
+    background_launch = '--background' in sys.argv          # запуск вместе с Windows: окно не показывается, программа работает в значке у часов
+
+    def show_running():
+        ctl = holder.get('controller')
+        if ctl is not None:
+            ctl.show_window()
+        elif holder.get('window') is not None:
+            holder['window'].show()
+            holder['window'].raise_()
+            holder['window'].activateWindow()
+    instance = tray_service.SingleInstance(tray_service.instance_name(DATA_DIR), show_running, app)
+    if instance.activate_running():                         # программа уже работает (например, в фоне): открываем её окно, второй экземпляр не нужен
+        return
     lock = QLockFile(str(DATA_DIR / 'app.lock'))
     if not lock.tryLock(100):
         QMessageBox.warning(None, 'ПТО', 'Эта папка данных уже открыта другим экземпляром.');return
@@ -549,17 +577,28 @@ def main():
             db.side_by_side = True          # ПТО Сервер уже работает с этой базой: работаем рядом с ним (копии и восстановление отключены, карточки блокируются)
     db.init_db()
     from .security import login
-    if not login(db):return
+    silent = background_launch and db.get_setting(tray_service.SETTING, '0') == '1' and tray_service.BackgroundController.available()
+    if not silent and not login(db):return          # при тихом запуске в фоне пароль спрашивается при открытии окна из значка
+    instance.listen()
     from . import window_modes
     window_modes.install(app, str(DATA_DIR / 'window_geometry.ini'))
     window = MainWindow()
+    holder['window'] = window
     window_modes.attach(window)          # F11, размер и положение главного окна запоминаются
-    window.show()
+
+    def web_urls():
+        from . import web_gateway
+        return web_gateway.urls()
+    controller = tray_service.BackgroundController(app, window, db, authenticate=lambda: login(db, window), web_urls=web_urls)
+    controller.authenticated = not silent
+    holder['controller'] = controller
+    if not silent:
+        window.show()
     try:
         from . import web_gateway
         web_gateway.apply_settings(db, DATA_DIR)          # веб-доступ, если включён в настройках
     except Exception:
         logging.exception('Веб-доступ не запущен')
     if os.environ.get('PTO_EXIT_AFTER_MS'):          # для автоматических проверок запуска: программа сама закрывается через заданное время
-        QTimer.singleShot(int(os.environ['PTO_EXIT_AFTER_MS']), window.close)
+        QTimer.singleShot(int(os.environ['PTO_EXIT_AFTER_MS']), window.request_quit)
     sys.exit(app.exec())

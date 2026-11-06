@@ -115,6 +115,27 @@ class SettingsView(QWidget):
         pw.addWidget(btn_password)
         pw.addWidget(note(PASSWORD_NOTE))
         access.addWidget(pw_box)
+        # --- работа в фоне: значок у часов и запуск вместе с Windows (веб-доступ работает, пока включён компьютер)
+        from . import autostart, tray_service
+        bg_box, bg = group('Работа в фоне (чтобы веб-доступ работал всегда, пока включён компьютер)')
+        bg.addWidget(note('Закрытие окна не завершает программу, а сворачивает её в значок у часов: веб-доступ, автоматические копии и напоминания продолжают работать. '
+                          'Открыть программу — щелчок по значку; полностью выйти — правая кнопка по значку → «Выход». Программа работает, пока вы вошли в Windows и компьютер не спит '
+                          '(в настройках электропитания Windows отключите переход в спящий режим).'))
+        self.chk_background = QCheckBox('Закрытие окна сворачивает программу в значок у часов')
+        self.chk_autostart = QCheckBox('Запускать вместе с Windows (свёрнутой в значок, без окна)')
+        self.chk_background.setChecked(db.get_setting(tray_service.SETTING, '0') == '1')
+        self.chk_autostart.setChecked(autostart.is_enabled())
+        if not tray_service.BackgroundController.available():
+            self.chk_background.setEnabled(False)
+            self.chk_background.setToolTip('В этой системе нет области уведомлений (значка у часов)')
+        if not autostart.supported():
+            self.chk_autostart.setEnabled(False)
+            self.chk_autostart.setToolTip('Автозапуск настраивается только в Windows')
+        self.chk_background.toggled.connect(self.toggle_background)
+        self.chk_autostart.toggled.connect(self.toggle_autostart)
+        bg.addWidget(self.chk_background)
+        bg.addWidget(self.chk_autostart)
+        access.addWidget(bg_box)
         from .web_settings_ui import WebAccessBox
         access.addWidget(WebAccessBox())
         access.addStretch()
@@ -320,6 +341,27 @@ class SettingsView(QWidget):
                 label.setWordWrap(True)
         self.tabs.setCurrentIndex(int(db.get_setting('settings_tab', '0') or 0) % self.tabs.count())          # открывается на той вкладке, где работали в прошлый раз
         self.tabs.currentChanged.connect(lambda i: db.set_setting('settings_tab', str(i)))
+
+    def toggle_background(self, on):
+        db.set_setting('background_mode', '1' if on else '0')
+        ctl = getattr(self.main_window, 'background', None)
+        if ctl is not None:
+            ctl.apply()
+        if not on and self.chk_autostart.isChecked():               # без значка запуск «в фоне» не имеет смысла
+            self.chk_autostart.setChecked(False)
+
+    def toggle_autostart(self, on):
+        from . import autostart
+        try:
+            autostart.enable() if on else autostart.disable()
+        except OSError as e:
+            QMessageBox.warning(self, 'Автозапуск', f'Не удалось изменить автозапуск: {e}')
+            self.chk_autostart.blockSignals(True)
+            self.chk_autostart.setChecked(not on)
+            self.chk_autostart.blockSignals(False)
+            return
+        if on and not self.chk_background.isChecked():              # запуск свёрнутой работает только вместе с режимом «в фоне»
+            self.chk_background.setChecked(True)
 
     def load_tabs_config(self):
         tabs_json = db.get_setting("tabs_config", "[]")

@@ -161,6 +161,6 @@ class ZipUpdateDialog(QDialog):
         for w in QApplication.topLevelWidgets():
             if isinstance(w, QMainWindow):
                 self.reject()
-                w.close()
+                (w.request_quit if hasattr(w, 'request_quit') else w.close)()
                 return
         QApplication.quit()
