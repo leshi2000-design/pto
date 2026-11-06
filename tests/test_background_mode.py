@@ -2,7 +2,6 @@
 import os
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 import sys
-import types
 
 import pytest
 from PyQt6.QtCore import QEvent
@@ -112,46 +111,73 @@ def test_silent_start_asks_password_only_when_window_is_opened(db, app, monkeypa
 
 
 def test_second_launch_activates_running_program(app, tmp_path):
-    name = ts.instance_name(tmp_path)
-    assert name == ts.instance_name(tmp_path) and name != ts.instance_name(tmp_path / 'other')
+    path = tmp_path / 'instance.json'
     calls = []
-    first = ts.SingleInstance(name, lambda: calls.append('show'))
-    second = ts.SingleInstance(name, lambda: calls.append('second'))
-    assert second.activate_running() is False                                              # первого экземпляра ещё нет
-    assert first.listen()
+    first = ts.SingleInstance(path, lambda: calls.append('show'))
+    second = ts.SingleInstance(path, lambda: calls.append('second'))
+    assert second.activate_running() is False                                              # первого экземпляра ещё нет (и файла нет)
+    assert first.listen() and path.exists()
     assert second.activate_running() is True
     QTest.qWait(300)
     assert calls == ['show']                                                                # первый экземпляр получил просьбу показать окно
-    first.server.close()
+    # чужой процесс без ключа окно показать не может
+    import json
+    import socket
+    info = json.loads(path.read_text(encoding='utf-8'))
+    with socket.create_connection(('127.0.0.1', info['port']), timeout=2) as conn:
+        conn.sendall(b'wrong show\n')
+        conn.settimeout(1)
+        assert conn.recv(8) == b''
+    QTest.qWait(200)
+    assert calls == ['show']
+    first.stop()
+    assert not path.exists() and second.activate_running() is False                         # после выхода первого экземпляра запускается обычный запуск
 
 
-def test_autostart_registry_entry(monkeypatch):
-    store = {}
-    values = store
+def test_only_bundled_qt_modules_are_imported():
+    """Собранная программа содержит только QtCore, QtGui, QtWidgets, QtSvg, QtPrintSupport (см. smetagaz.spec), а обновление из ZIP набор модулей изменить не может:
+    импорт любого другого модуля Qt в коде программы ломает обновление (самопроверка его не пропустит). Тесты (QtTest) под запретом не подпадают."""
+    import re
+    from pathlib import Path
+    allowed = {'QtCore', 'QtGui', 'QtWidgets', 'QtSvg', 'QtPrintSupport', 'sip'}
+    bad = []
+    for path in Path(__file__).resolve().parent.parent.joinpath('smetagaz').glob('*.py'):
+        for line in path.read_text(encoding='utf-8').splitlines():
+            m = re.match(r'\s*(?:from PyQt6\.(\w+) import|import PyQt6\.(\w+)|from PyQt6 import (\w+))', line)
+            if m and (m.group(1) or m.group(2) or m.group(3)) not in allowed:
+                bad.append(f'{path.name}: {line.strip()}')
+    assert not bad, bad
+    for name in ('tray_service', 'autostart'):                               # и ни одного импорта QtNetwork / winreg в новых модулях
+        text = (Path(__file__).resolve().parent.parent / 'smetagaz' / f'{name}.py').read_text(encoding='utf-8')
+        assert not re.search(r'^\s*(from|import)\s+\S*(QtNetwork|winreg)', text, re.M)
 
-    class FakeKey:
-        def __enter__(self):
-            return self
 
-        def __exit__(self, *a):
-            return False
-    fake = types.SimpleNamespace(HKEY_CURRENT_USER='HKCU', KEY_READ=1, KEY_SET_VALUE=2, REG_SZ=1,
-                                 CreateKey=lambda root, path: (store.__setitem__('_path', path), FakeKey())[1],
-                                 OpenKey=lambda root, path, res, access: FakeKey(),
-                                 SetValueEx=lambda key, name, r, kind, value: store.__setitem__(name, value),
-                                 QueryValueEx=lambda key, name: (store[name], 1) if name in store else (_ for _ in ()).throw(FileNotFoundError()),
-                                 DeleteValue=lambda key, name: store.pop(name) if name in store else (_ for _ in ()).throw(FileNotFoundError()))
+def test_autostart_uses_reg_exe(monkeypatch):
+    calls, store = [], {}
+
+    def fake_reg(*args):
+        calls.append(args)
+        if args[0] == 'add':
+            store['PTO'] = args[args.index('/d') + 1]
+            return 0, ''
+        if args[0] == 'query':
+            return (0, '    PTO    REG_SZ    ' + store['PTO']) if 'PTO' in store else (1, 'ERROR')
+        if args[0] == 'delete':
+            return (0, '') if store.pop('PTO', None) else (1, 'ERROR')
     monkeypatch.setattr(autostart, 'supported', lambda: True)
-    monkeypatch.setattr(autostart, '_registry', lambda: fake)
+    monkeypatch.setattr(autostart, '_reg', fake_reg)
     assert not autostart.is_enabled()
     autostart.enable()
-    assert store['_path'] == r'Software\Microsoft\Windows\CurrentVersion\Run' and store['PTO'].endswith('--background') and autostart.is_enabled()
+    assert store['PTO'].endswith('--background') and autostart.is_enabled() and next(c for c in calls if c[0] == 'add')[:3] == ('add', autostart.RUN_KEY, '/v')
     autostart.disable()
     assert not autostart.is_enabled()
     autostart.disable()                                                                     # повторное отключение безвредно
     monkeypatch.setattr(sys, 'frozen', True, raising=False)
     monkeypatch.setattr(sys, 'executable', r'C:\Program Files\PTO\PTO.exe')
     assert autostart.command() == r'"C:\Program Files\PTO\PTO.exe" --background'
+    monkeypatch.setattr(autostart, '_reg', lambda *a: (1, 'Отказано в доступе'))
+    with pytest.raises(OSError, match='Отказано'):
+        autostart.enable()
     monkeypatch.setattr(autostart, 'supported', lambda: False)
     assert not autostart.is_enabled()
     with pytest.raises(OSError):

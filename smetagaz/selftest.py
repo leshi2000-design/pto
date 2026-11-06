@@ -21,7 +21,7 @@ def run():
     report, ok = [], True
     import smetagaz
     report.append(f'Версия: {smetagaz.__version__} · пакет: {os.path.dirname(smetagaz.__file__)}')
-    for name in ('PyQt6.QtCore', 'PyQt6.QtGui', 'PyQt6.QtWidgets', 'PyQt6.QtSvg', 'cryptography', 'openpyxl', 'docx', 'pypdf', 'pypdfium2', 'PIL', 'smetagaz.main_window', 'smetagaz.invoice_ui', 'smetagaz.material_groups_ui', 'smetagaz.section_codes_ui', 'smetagaz.edit_lock_ui', 'smetagaz.network_ui', 'smetagaz.staff_view', 'smetagaz.incoming_view') + (('smetagaz.server_app',) if _has_server() else ()):
+    for name in ('PyQt6.QtCore', 'PyQt6.QtGui', 'PyQt6.QtWidgets', 'PyQt6.QtSvg', 'cryptography', 'openpyxl', 'docx', 'pypdf', 'pypdfium2', 'PIL', 'smetagaz.main_window', 'smetagaz.tray_service', 'smetagaz.autostart', 'smetagaz.window_modes', 'smetagaz.web_gateway', 'smetagaz.web_tls', 'smetagaz.web_modules', 'smetagaz.invoice_ui', 'smetagaz.material_groups_ui', 'smetagaz.section_codes_ui', 'smetagaz.edit_lock_ui', 'smetagaz.network_ui', 'smetagaz.staff_view', 'smetagaz.incoming_view') + (('smetagaz.server_app',) if _has_server() else ()):
         try:
             importlib.import_module(name)
             report.append(f'OK    {name}')

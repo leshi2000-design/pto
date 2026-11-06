@@ -556,7 +556,7 @@ def main():
             holder['window'].show()
             holder['window'].raise_()
             holder['window'].activateWindow()
-    instance = tray_service.SingleInstance(tray_service.instance_name(DATA_DIR), show_running, app)
+    instance = tray_service.SingleInstance(DATA_DIR / 'instance.json', show_running, app)
     if instance.activate_running():                         # программа уже работает (например, в фоне): открываем её окно, второй экземпляр не нужен
         return
     lock = QLockFile(str(DATA_DIR / 'app.lock'))

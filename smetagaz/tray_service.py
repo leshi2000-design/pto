@@ -1,53 +1,87 @@
 """Работа в фоне: значок у часов, закрытие окна сворачивает программу (веб-доступ, автокопии и напоминания продолжают работать), повторный запуск ярлыка открывает уже работающую программу.
 
 Настройки (в базе): background_mode = 1 — «закрытие окна сворачивает в значок»; запуск вместе с Windows — см. autostart. Выход — только через значок («Выход») или завершение Windows."""
-import hashlib
+import json
 import logging
+import secrets
+import socket
+import threading
+from pathlib import Path
 
-from PyQt6.QtCore import QObject, Qt
+from PyQt6.QtCore import QObject, Qt, pyqtSignal
 from PyQt6.QtGui import QAction, QIcon, QPixmap
-from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 from PyQt6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 SETTING = 'background_mode'
 HINT_SETTING = 'background_hint_shown'
 
 
-def instance_name(data_dir):
-    """Имя локального канала программы с этой папкой данных (на каждую папку данных — свой экземпляр)."""
-    return 'pto-' + hashlib.sha1(str(data_dir).encode('utf-8')).hexdigest()[:12]
-
-
 class SingleInstance(QObject):
-    """Один экземпляр на папку данных: второй запуск просит первый показать окно и завершается."""
+    """Один экземпляр на папку данных: второй запуск просит первый показать окно и завершается.
+    Связь — обычный локальный сокет (только 127.0.0.1) на стандартных модулях Python: PyQt6.QtNetwork в собранную программу не входит, а обновление из ZIP менять набор модулей не может.
+    Порт и случайный ключ хранятся в файле в папке данных; чужой процесс без ключа окно показать не попросит."""
+    requested = pyqtSignal()
 
-    def __init__(self, name, on_show, parent=None):
+    def __init__(self, path, on_show, parent=None):
         super().__init__(parent)
-        self.name, self.on_show = name, on_show
-        self.server = None
+        self.path, self.on_show = Path(path), on_show
+        self.sock = None
+        self.token = ''
+        self.requested.connect(lambda: self.on_show())          # сигнал из потока приёма попадает в основной поток
 
     def activate_running(self):
         """True — программа уже запущена, ей отправлена просьба показать окно (этот процесс можно завершать)."""
-        sock = QLocalSocket()
-        sock.connectToServer(self.name)
-        if not sock.waitForConnected(300):
+        try:
+            info = json.loads(self.path.read_text(encoding='utf-8'))
+            with socket.create_connection(('127.0.0.1', int(info['port'])), timeout=0.5) as conn:
+                conn.sendall((str(info['token']) + ' show\n').encode('ascii'))
+                conn.settimeout(0.5)
+                return conn.recv(8) == b'ok\n'
+        except (OSError, ValueError, KeyError, TypeError):
             return False
-        sock.write(b'show\n')
-        sock.waitForBytesWritten(500)
-        sock.disconnectFromServer()
-        return True
 
     def listen(self):
-        QLocalServer.removeServer(self.name)                  # остаток от прерванной работы
-        self.server = QLocalServer(self)
-        self.server.newConnection.connect(self._connection)
-        return self.server.listen(self.name)
+        try:
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.sock.bind(('127.0.0.1', 0))
+            self.sock.listen(4)
+            self.token = secrets.token_hex(16)
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_text(json.dumps(dict(port=self.sock.getsockname()[1], token=self.token)), encoding='utf-8')
+        except OSError:
+            logging.exception('Связь между экземплярами программы не запущена')
+            return False
+        threading.Thread(target=self._accept_loop, daemon=True, name='pto-single-instance').start()
+        return True
 
-    def _connection(self):
-        while self.server.hasPendingConnections():
-            sock = self.server.nextPendingConnection()
-            sock.readyRead.connect(lambda s=sock: (s.readAll(), self.on_show()))
-            sock.disconnected.connect(sock.deleteLater)
+    def _accept_loop(self):
+        while self.sock is not None:
+            try:
+                conn, _addr = self.sock.accept()
+            except OSError:
+                return
+            try:
+                conn.settimeout(1.0)
+                line = conn.recv(128).decode('ascii', 'ignore').strip()
+                if secrets.compare_digest(line, self.token + ' show'):
+                    conn.sendall(b'ok\n')
+                    self.requested.emit()
+            except (OSError, ValueError):
+                pass
+            finally:
+                conn.close()
+
+    def stop(self):
+        sock, self.sock = self.sock, None
+        if sock is not None:
+            try:
+                sock.close()
+            except OSError:
+                pass
+        try:
+            self.path.unlink()
+        except OSError:
+            pass
 
 
 class BackgroundController(QObject):
